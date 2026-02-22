@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <circle cx="100" cy="100" r="96" fill="#1a0a0a" stroke="#c8102e" stroke-width="3"/>
+  <ellipse cx="100" cy="160" rx="38" ry="22" fill="#C08020" stroke="#222" stroke-width="2.5"/>
+  <path d="M68 150 Q76 156 84 150 Q92 156 100 150 Q108 156 116 150 Q124 156 132 150" fill="none" stroke="#A06818" stroke-width="1.5" opacity="0.7"/>
+  <path d="M72 157 Q80 163 88 157 Q96 163 104 157 Q112 163 120 157 Q128 163 132 157" fill="none" stroke="#A06818" stroke-width="1.5" opacity="0.6"/>
+  <path d="M76 164 Q84 170 92 164 Q100 170 108 164 Q116 170 124 164" fill="none" stroke="#A06818" stroke-width="1.5" opacity="0.5"/>
+  <ellipse cx="100" cy="162" rx="22" ry="12" fill="#E8C870"/>
+  <circle cx="92" cy="158" r="1.8" fill="#C8A850" opacity="0.5"/><circle cx="100" cy="156" r="1.8" fill="#C8A850" opacity="0.5"/><circle cx="108" cy="158" r="1.8" fill="#C8A850" opacity="0.5"/><circle cx="96" cy="164" r="1.8" fill="#C8A850" opacity="0.5"/><circle cx="104" cy="164" r="1.8" fill="#C8A850" opacity="0.5"/>
+  <path d="M62 150 Q50 152 46 160 Q42 166 46 170" fill="#C08020" stroke="#222" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M48 156 L40 160 L46 162" fill="#9A6814" stroke="#222" stroke-width="1.5"/><path d="M44 162 L36 166 L42 168" fill="#9A6814" stroke="#222" stroke-width="1.5"/>
+  <circle cx="40" cy="172" r="13" fill="#E87020" stroke="#222" stroke-width="2"/>
+  <path d="M27 172 Q40 166 53 172" fill="none" stroke="#222" stroke-width="1.2"/><line x1="40" y1="159" x2="40" y2="185" stroke="#222" stroke-width="1.2"/><path d="M31 163 Q40 172 31 181" fill="none" stroke="#222" stroke-width="1"/><path d="M49 163 Q40 172 49 181" fill="none" stroke="#222" stroke-width="1"/>
+  <circle cx="100" cy="95" r="52" fill="#C08020" stroke="#222" stroke-width="3"/>
+  <path d="M56 70 Q64 65 72 70 Q80 65 88 70" fill="none" stroke="#A06818" stroke-width="1.2" opacity="0.5"/><path d="M112 70 Q120 65 128 70 Q136 65 144 70" fill="none" stroke="#A06818" stroke-width="1.2" opacity="0.5"/><path d="M52 80 Q58 76 64 80" fill="none" stroke="#A06818" stroke-width="1" opacity="0.4"/><path d="M136 80 Q142 76 148 80" fill="none" stroke="#A06818" stroke-width="1" opacity="0.4"/>
+  <!-- HAIR - original B swoops -->
+  <path d="M88 46 Q94 36 108 34 Q114 33 118 36" fill="#DEB050" stroke="#222" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M92 44 Q98 32 112 30 Q116 29 118 32" fill="#C08020" stroke="#222" stroke-width="2" stroke-linecap="round"/>
+  <path d="M96 44 Q94 38 96 34 Q98 38 97 43" fill="#C08020" stroke="#222" stroke-width="1.5"/>
+  <circle cx="100" cy="100" r="40" fill="#DEB050"/>
+  <path d="M60 96 Q64 92 68 96 Q72 92 76 96" fill="none" stroke="#C8A040" stroke-width="1" opacity="0.6"/><path d="M124 96 Q128 92 132 96 Q136 92 140 96" fill="none" stroke="#C8A040" stroke-width="1" opacity="0.6"/><path d="M72 118 Q78 114 84 118 Q90 114 96 118 Q102 114 108 118 Q114 114 120 118 Q126 114 128 118" fill="none" stroke="#C8A040" stroke-width="1" opacity="0.5"/>
+  <polygon points="60,55 45,18 78,52" fill="#C08020" stroke="#222" stroke-width="2.5" stroke-linejoin="round"/><polygon points="140,55 155,18 122,52" fill="#C08020" stroke="#222" stroke-width="2.5" stroke-linejoin="round"/>
+  <line x1="55" y1="45" x2="52" y2="30" stroke="#A06818" stroke-width="1" opacity="0.5"/><line x1="62" y1="48" x2="56" y2="32" stroke="#A06818" stroke-width="1" opacity="0.4"/><line x1="138" y1="48" x2="144" y2="32" stroke="#A06818" stroke-width="1" opacity="0.4"/><line x1="145" y1="45" x2="148" y2="30" stroke="#A06818" stroke-width="1" opacity="0.5"/>
+  <ellipse cx="80" cy="92" rx="22" ry="25" fill="white" stroke="#222" stroke-width="2.5"/><ellipse cx="120" cy="92" rx="22" ry="25" fill="white" stroke="#222" stroke-width="2.5"/>
+  <circle cx="84" cy="90" r="12" fill="#111"/><circle cx="124" cy="90" r="12" fill="#111"/>
+  <circle cx="89" cy="84" r="5" fill="white"/><circle cx="129" cy="84" r="5" fill="white"/><circle cx="82" cy="92" r="2.5" fill="white"/><circle cx="122" cy="92" r="2.5" fill="white"/>
+  <path d="M58 82 Q80 72 102 86" fill="#C08020" stroke="#222" stroke-width="1.5"/><path d="M98 86 Q120 72 142 82" fill="#C08020" stroke="#222" stroke-width="1.5"/>
+  <path d="M93 116 L100 130 L107 116 Z" fill="#F0A020" stroke="#222" stroke-width="2.5" stroke-linejoin="round"/>
+  <!-- SMIRK - asymmetric, right side kicks up -->
+  <path d="M86 134 Q96 138 106 134 Q112 130 116 126" fill="none" stroke="#222" stroke-width="2.5" stroke-linecap="round"/>
+  <circle cx="80" cy="96" r="21" fill="none" stroke="#c8102e" stroke-width="3"/><circle cx="120" cy="96" r="21" fill="none" stroke="#c8102e" stroke-width="3"/><line x1="101" y1="96" x2="99" y2="96" stroke="#c8102e" stroke-width="3"/><line x1="59" y1="92" x2="52" y2="86" stroke="#c8102e" stroke-width="2.5" stroke-linecap="round"/><line x1="141" y1="92" x2="148" y2="86" stroke="#c8102e" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M82 176 L74 186 Q72 188 73 190" fill="none" stroke="#F0A020" stroke-width="2.5" stroke-linecap="round"/><path d="M82 176 L82 188 Q82 190 83 192" fill="none" stroke="#F0A020" stroke-width="2.5" stroke-linecap="round"/><path d="M82 176 L90 186 Q92 188 91 190" fill="none" stroke="#F0A020" stroke-width="2.5" stroke-linecap="round"/><circle cx="73" cy="190" r="1.5" fill="#222"/><circle cx="83" cy="192" r="1.5" fill="#222"/><circle cx="91" cy="190" r="1.5" fill="#222"/>
+  <path d="M118 176 L110 186 Q108 188 109 190" fill="none" stroke="#F0A020" stroke-width="2.5" stroke-linecap="round"/><path d="M118 176 L118 188 Q118 190 119 192" fill="none" stroke="#F0A020" stroke-width="2.5" stroke-linecap="round"/><path d="M118 176 L126 186 Q128 188 127 190" fill="none" stroke="#F0A020" stroke-width="2.5" stroke-linecap="round"/><circle cx="109" cy="190" r="1.5" fill="#222"/><circle cx="119" cy="192" r="1.5" fill="#222"/><circle cx="127" cy="190" r="1.5" fill="#222"/>
+  <text x="100" y="198" text-anchor="middle" font-family="'Inter',Arial,sans-serif" font-weight="800" font-size="13" fill="#c8102e" letter-spacing="2">LARRY</text>
+</svg>
