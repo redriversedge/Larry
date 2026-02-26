@@ -1,5 +1,5 @@
 // ============================================================
-// LARRY v2 -- CORE MODULE
+// LARRY v2.3 -- CORE MODULE
 // State management, setup flow, navigation, utilities
 // ============================================================
 
@@ -37,8 +37,12 @@ var LEAGUE_MENU = [
   { id: 'trades', label: 'Trade Center', icon: '\u{1F4E6}' },
   { id: 'teamAnalyzer', label: 'Team Analyzer', icon: '\u{1F50D}' },
   { id: 'statsTrends', label: 'Stats & Trends', icon: '\u{1F4C8}' },
+  { id: 'projectedStandings', label: 'Projected Standings', icon: '\u{1F3AF}' },
+  { id: 'projections', label: 'ROS Projections', icon: '\u{1F52E}' },
+  { id: 'opponentScout', label: 'Opponent Scout', icon: '\u{1F575}\u{FE0F}' },
   { id: 'news', label: 'News & Injuries', icon: '\u{1F4F0}' },
   { id: 'schedule', label: 'Schedule', icon: '\u{1F4C5}' },
+  { id: 'draftCenter', label: 'Draft Center', icon: '\u{1F3C6}' },
   { id: 'playoffs', label: 'Playoff Projector', icon: '\u{1F3C5}' },
   { id: 'timeline', label: 'Season Timeline', icon: '\u{23F3}' },
   { id: 'notifications', label: 'Notifications', icon: '\u{1F514}' },
@@ -48,7 +52,7 @@ var LEAGUE_MENU = [
 // --- INITIALIZATION ---
 function initState() {
   return {
-    version: '2.1.0',
+    version: '2.3.0',
     initialized: false,
     setupComplete: false,
     currentTab: 0,
@@ -89,12 +93,20 @@ function initState() {
     notifBadgeCount: 0,
     prefs: {
       defaultStatView: 'season', chartTheme: 'dark',
-      collapsedSections: {}, claudeApiKey: ''
+      collapsedSections: {}, claudeApiKey: '',
+      recencyWeight: 0.3 // 0 = season only, 1 = recent only
     },
     chatHistory: [],
     analysisCache: {
       zScores: null, projections: null, tradeTargets: null,
       puntAnalysis: null, lastComputed: null
+    },
+    draft: {
+      active: false,
+      picks: [],
+      myPicks: [],
+      draftedIds: [],
+      puntCats: []
     }
   };
 }
@@ -104,9 +116,8 @@ function loadState() {
     var raw = localStorage.getItem('larry_state');
     if (raw) {
       var loaded = JSON.parse(raw);
-      // Merge with defaults to ensure all keys exist
       S = mergeDeep(initState(), loaded);
-      S.version = '2.1.0';
+      S.version = '2.3.0';
     } else {
       S = initState();
     }
@@ -202,7 +213,6 @@ function updateNav() {
   btns.forEach(function(btn, i) {
     btn.classList.toggle('active', i === S.currentTab);
   });
-  // Update notification badge
   var badge = document.getElementById('notif-badge');
   if (badge) {
     var count = S.notifications.filter(function(n) { return !n.read; }).length;
@@ -220,8 +230,16 @@ function buildNav() {
     if (tab.id === 'league') {
       badge = '<span class="notif-badge" id="notif-badge" style="display:none">0</span>';
     }
-    html += '<button class="nav-tab' + (i === S.currentTab ? ' active' : '') + '" onclick="switchTab(' + i + ')">';
-    html += '<span class="nav-icon">' + tab.icon + '</span>';
+    var isLarry = tab.id === 'larry';
+    html += '<button class="nav-tab' + (i === S.currentTab ? ' active' : '') + (isLarry ? ' nav-larry' : '') + '" onclick="switchTab(' + i + ')">';
+    if (isLarry) {
+      html += '<span class="nav-icon larry-glow-wrap">';
+      html += '<span class="larry-glow"></span>';
+      html += '<img src="assets/larry-logo.svg" class="larry-nav-icon" width="28" height="28" alt="Larry">';
+      html += '</span>';
+    } else {
+      html += '<span class="nav-icon">' + tab.icon + '</span>';
+    }
     html += '<span class="nav-label">' + tab.label + '</span>';
     html += badge;
     html += '</button>';
@@ -242,6 +260,9 @@ function initKeyboard() {
     } else if (e.key === '?' || (e.shiftKey && e.key === '/')) {
       e.preventDefault();
       toggleHelp();
+    } else if (e.key === 'Escape') {
+      closeSearch();
+      closePlayerPopup();
     }
   });
 }
@@ -251,24 +272,20 @@ function render() {
   var container = document.getElementById('tab-content');
   if (!container) return;
 
-  // Step 1: Setup flow (ESPN credentials)
   if (!S.setupComplete) {
     renderSetup(container);
     return;
   }
 
-  // Step 2: Team selector (if connected but no team chosen)
   if (needsTeamSelection()) {
     renderTeamSelector(container);
     return;
   }
 
-  // Step 3: Normal tab rendering
   safeRender(container);
 }
 
 function needsTeamSelection() {
-  // Show team selector if we have league data but no team selected
   return S.espn.connected && S.teams.length > 0 && S.myTeam.teamId === 0;
 }
 
@@ -328,7 +345,6 @@ function renderTeamSelector(container) {
 
 function selectMyTeam(teamId) {
   if (ESPNSync.selectTeam(teamId)) {
-    // Team selected successfully -- parse matchup with this team context
     if (ESPNSync._lastLeagueData) {
       ESPNSync.parseMatchup(ESPNSync._lastLeagueData);
     }
@@ -343,7 +359,6 @@ function selectMyTeam(teamId) {
 }
 
 function changeTeam() {
-  // Reset team selection to trigger the team picker
   S.myTeam.teamId = 0;
   S.myTeam.name = '';
   S.myTeam.players = [];
@@ -393,7 +408,6 @@ function renderSetup(container) {
     html += '<div class="loading">Testing connection...</div>';
     html += '</div>';
   } else if (step === 3) {
-    // Connected - show confirmation before team selection
     html += '<div class="setup-card">';
     html += '<div class="success-badge">\u2705</div>';
     html += '<h2>Connected!</h2>';
@@ -436,21 +450,14 @@ async function testConnection() {
   try {
     var data = await ESPNSync.fetchLeague();
     if (data) {
-      // Store for later re-parsing
       ESPNSync._lastLeagueData = data;
-
       ESPNSync.parseLeagueSettings(data);
       ESPNSync.parseTeams(data);
-
-      // Only parse matchup if we have a team identified
       if (S.myTeam.teamId > 0) {
         ESPNSync.parseMatchup(data);
       }
-
       S.espn.connected = true;
       S.espn.lastSync = new Date().toISOString();
-
-      // Diagnostic info
       var diagMsg = 'Connected. ' + S.teams.length + ' teams, ' + S.allPlayers.length + ' players.';
       if (S.myTeam.teamId > 0) {
         diagMsg += ' Auto-detected: ' + S.myTeam.name;
@@ -477,7 +484,6 @@ function completeSetup() {
   buildNav();
   render();
   updateNav();
-  // Start auto-sync
   startAutoSync();
   showToast('Welcome to Larry! Your command center is ready.', 'success');
 }
@@ -608,9 +614,10 @@ function handleGlobalSearch(query) {
   var html = '<div style="padding:8px;max-height:300px;overflow-y:auto">';
   matches.slice(0, 15).forEach(function(p) {
     var onRoster = p.onTeamId === S.myTeam.teamId;
-    html += '<div class="search-result-item" onclick="closeSearch();viewPlayer(' + p.id + ')">';
-    html += '<strong>' + esc(p.name) + '</strong>' + (onRoster ? ' \u2B50' : '') + '<br>';
-    html += '<span class="search-result-meta">' + p.positions.join('/') + ' | ' + p.nbaTeam + '</span>';
+    html += '<div class="search-result-item" onclick="closeSearch();openPlayerPopup(' + p.id + ')">';
+    html += '<div class="search-result-headshot">' + playerHeadshot(p, 28) + '</div>';
+    html += '<div><strong>' + esc(p.name) + '</strong>' + (onRoster ? ' \u2B50' : '') + '<br>';
+    html += '<span class="search-result-meta">' + p.positions.join('/') + ' | ' + p.nbaTeam + '</span></div>';
     html += '</div>';
   });
   html += '</div>';
@@ -618,12 +625,7 @@ function handleGlobalSearch(query) {
 }
 
 function viewPlayer(playerId) {
-  // Navigate to Players tab with this player selected
-  S.currentTab = 2;
-  S.selectedPlayerId = playerId;
-  autosave();
-  render();
-  updateNav();
+  openPlayerPopup(playerId);
 }
 
 // --- LARRY AVATAR ---
@@ -633,7 +635,7 @@ function getLarryAvatar(size) {
 }
 
 // --- SORTING ---
-var sortState = {}; // {tableKey: {col: 'name', dir: 'asc'}}
+var sortState = {};
 
 function sortTable(tableKey, col, data, accessor) {
   if (!sortState[tableKey]) sortState[tableKey] = { col: col, dir: 'desc' };
@@ -685,7 +687,6 @@ function initApp() {
     startAutoSync();
     updateSyncIndicator();
   }
-  // Register service worker
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').catch(function(e) {
       console.warn('SW registration failed:', e);
@@ -715,3 +716,313 @@ function timeSince(dateStr) {
 
 // --- BOOT ---
 document.addEventListener('DOMContentLoaded', initApp);
+
+// --- ESPN TEAM COLORS (for headshot fallback initials) ---
+var ESPN_TEAM_COLORS = {
+  ATL:'#E03A3E',BOS:'#007A33',NOP:'#0C2340',CHI:'#CE1141',CLE:'#860038',
+  DAL:'#00538C',DEN:'#0E2240',DET:'#C8102E',GSW:'#1D428A',HOU:'#CE1141',
+  IND:'#002D62',LAC:'#C8102E',LAL:'#552583',MIA:'#98002E',MIL:'#00471B',
+  MIN:'#0C2340',BKN:'#000000',NYK:'#006BB6',ORL:'#0077C0',PHI:'#006BB6',
+  PHX:'#1D1160',POR:'#E03A3E',SAC:'#5A2D81',SAS:'#C4CED4',OKC:'#007AC1',
+  UTA:'#002B5C',WAS:'#002B5C',TOR:'#CE1141',MEM:'#5D76A9',CHA:'#1D1160'
+};
+
+// --- PLAYER HEADSHOTS ---
+function playerHeadshot(player, size) {
+  size = size || 32;
+  if (!player || !player.id) return playerInitials(player, size);
+  var url = 'https://a.espncdn.com/combiner/i?img=/i/headshots/nba/players/full/' + player.id + '.png&w=' + (size * 2) + '&h=' + Math.round(size * 1.46) + '&cb=1';
+  var teamColor = ESPN_TEAM_COLORS[player.nbaTeam] || '#666';
+  return '<img src="' + url + '" width="' + size + '" height="' + size + '" ' +
+    'class="player-headshot" alt="" loading="lazy" ' +
+    'onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'">' +
+    '<span class="player-initials" style="display:none;width:' + size + 'px;height:' + size + 'px;background:' + teamColor + '">' +
+    getInitials(player.name) + '</span>';
+}
+
+function playerInitials(player, size) {
+  size = size || 32;
+  var teamColor = (player && player.nbaTeam) ? (ESPN_TEAM_COLORS[player.nbaTeam] || '#666') : '#666';
+  return '<span class="player-initials" style="width:' + size + 'px;height:' + size + 'px;background:' + teamColor + '">' + getInitials(player ? player.name : '') + '</span>';
+}
+
+function getInitials(name) {
+  if (!name) return '?';
+  var parts = name.split(' ');
+  if (parts.length >= 2) return parts[0].charAt(0) + parts[parts.length - 1].charAt(0);
+  return name.charAt(0);
+}
+
+// --- PLAYER POPUP (5 TABS: Stats, Game Log, News, Schedule, Analysis) ---
+var _popupPlayerId = null;
+var _popupTab = 'stats';
+
+function openPlayerPopup(playerId) {
+  _popupPlayerId = playerId;
+  _popupTab = 'stats';
+  renderPlayerPopup();
+  var overlay = document.getElementById('player-popup-overlay');
+  if (overlay) { overlay.classList.add('active'); document.body.style.overflow = 'hidden'; }
+}
+
+function closePlayerPopup() {
+  _popupPlayerId = null;
+  var overlay = document.getElementById('player-popup-overlay');
+  if (overlay) { overlay.classList.remove('active'); document.body.style.overflow = ''; }
+}
+
+function switchPopupTab(tab) {
+  _popupTab = tab;
+  renderPlayerPopup();
+}
+
+function renderPlayerPopup() {
+  var container = document.getElementById('player-popup-content');
+  if (!container || !_popupPlayerId) return;
+  var p = S.allPlayers.find(function(pl) { return pl.id === _popupPlayerId; });
+  if (!p) { container.innerHTML = '<p class="muted">Player not found.</p>'; return; }
+  if (S.allPlayers.length) Engines.computeAllZScores(S.allPlayers, 'season');
+  var cats = S.league.categories;
+  var onWatch = S.watchlist.includes(p.id);
+  var streak = Engines.detectStreaks(p);
+
+  var html = '<div class="popup-header">';
+  html += '<div class="popup-headshot">' + playerHeadshot(p, 56) + '</div>';
+  html += '<div class="popup-info">';
+  html += '<h3>' + esc(p.name) + ' ' + statusBadge(p.status) + '</h3>';
+  html += '<p class="popup-meta">' + p.positions.join('/') + ' | ' + p.nbaTeam + ' | Own: ' + fmt(p.ownership, 0) + '%</p>';
+  if (p.injuryStatus && p.injuryStatus !== 'ACTIVE') html += '<p class="popup-injury">' + esc(p.injuryStatus) + '</p>';
+  html += '</div></div>';
+
+  // Quick stats
+  html += '<div class="popup-quick-stats">';
+  cats.forEach(function(cat) {
+    var val = p.stats.season ? p.stats.season[cat.abbr] : null;
+    html += '<div class="quick-stat"><span class="qs-label" style="color:' + cat.color + '">' + cat.abbr + '</span>';
+    html += '<span class="qs-val">' + (val !== null ? (cat.isPercent ? pct(val) : fmt(val, 1)) : '-') + '</span></div>';
+  });
+  html += '</div>';
+
+  if (streak.trend !== 'stable') {
+    html += '<div class="popup-streak ' + streak.trend + '">' + (streak.trend === 'hot' ? '\u{1F525}' : '\u{1F9CA}') + ' ' + streak.label + '</div>';
+  }
+
+  // 5 Tabs
+  html += '<div class="popup-tabs">';
+  ['stats','gameLog','news','schedule','analysis'].forEach(function(tab) {
+    var label = { stats: 'Stats', gameLog: 'Log', news: 'News', schedule: 'Schedule', analysis: 'Analysis' }[tab];
+    html += '<button class="popup-tab' + (_popupTab === tab ? ' active' : '') + '" onclick="switchPopupTab(\'' + tab + '\')">' + label + '</button>';
+  });
+  html += '</div><div class="popup-body">';
+
+  if (_popupTab === 'stats') {
+    html += renderPopupStats(p, cats);
+  } else if (_popupTab === 'gameLog') {
+    html += renderPopupGameLog(p, cats);
+  } else if (_popupTab === 'news') {
+    html += renderPopupNews(p);
+  } else if (_popupTab === 'schedule') {
+    html += renderPopupSchedule(p);
+  } else if (_popupTab === 'analysis') {
+    html += renderPopupAnalysis(p, cats);
+  }
+
+  html += '</div>';
+  // Actions
+  html += '<div class="popup-actions">';
+  html += '<button class="btn btn-sm ' + (onWatch ? 'btn-warning' : 'btn-secondary') + '" onclick="toggleWatchlist(' + p.id + ');renderPlayerPopup()">' + (onWatch ? '\u2B50 Watching' : '\u2606 Watch') + '</button>';
+  html += '<a href="https://fantasy.espn.com/basketball/player?playerId=' + p.id + '" target="_blank" class="btn btn-sm btn-secondary">ESPN</a>';
+  // Injury impact button
+  if (p.status !== 'ACTIVE' && p.status !== 'HEALTHY') {
+    html += '<button class="btn btn-sm btn-secondary" onclick="showInjuryImpact(' + p.id + ')">Impact</button>';
+  }
+  html += '</div>';
+
+  container.innerHTML = html;
+}
+
+function renderPopupStats(p, cats) {
+  var html = '<table class="popup-stats-table"><thead><tr><th>Period</th>';
+  cats.forEach(function(cat) { html += '<th style="color:' + cat.color + '">' + cat.abbr + '</th>'; });
+  html += '</tr></thead><tbody>';
+  ['season','last30','last15','last7'].forEach(function(period) {
+    var labels = { season: 'Season', last30: 'L30', last15: 'L15', last7: 'L7' };
+    if (!p.stats[period]) return;
+    html += '<tr><td><strong>' + labels[period] + '</strong></td>';
+    cats.forEach(function(cat) {
+      var val = p.stats[period] ? p.stats[period][cat.abbr] : null;
+      html += '<td>' + (val !== null ? (cat.isPercent ? pct(val) : fmt(val, 1)) : '-') + '</td>';
+    });
+    html += '</tr>';
+  });
+  html += '<tr class="z-row"><td><strong>Z</strong></td>';
+  cats.forEach(function(cat) {
+    var z = p.zScores ? p.zScores[cat.abbr] : 0;
+    html += '<td class="' + (z > 0.5 ? 'stat-positive' : (z < -0.5 ? 'stat-negative' : '')) + '">' + (z >= 0 ? '+' : '') + fmt(z, 2) + '</td>';
+  });
+  html += '</tr></tbody></table>';
+  // Totals view
+  if (p.gamesPlayed > 0) {
+    html += '<h4 class="popup-section-title">Season Totals</h4>';
+    html += '<div class="popup-quick-stats">';
+    cats.forEach(function(cat) {
+      if (cat.isPercent) return;
+      var avg = p.stats.season ? p.stats.season[cat.abbr] : 0;
+      var total = (avg || 0) * (p.gamesPlayed || 0);
+      html += '<div class="quick-stat"><span class="qs-label" style="color:' + cat.color + '">' + cat.abbr + '</span>';
+      html += '<span class="qs-val">' + fmt(total, 0) + '</span></div>';
+    });
+    html += '</div>';
+  }
+  html += '<div class="popup-extra-stats"><span>GP: ' + (p.gamesPlayed || 0) + '</span><span>MPG: ' + fmt(p.minutesPerGame, 1) + '</span>';
+  html += '<span>Z: ' + fmt(p.zScores ? p.zScores.total : 0, 2) + '</span></div>';
+  return html;
+}
+
+function renderPopupGameLog(p, cats) {
+  // Game log from ESPN data (use available stat splits as proxy)
+  var html = '<p class="muted">Recent performance by period. Full game-by-game log requires ESPN game log API.</p>';
+  html += '<table class="popup-stats-table"><thead><tr><th>Period</th>';
+  cats.forEach(function(cat) { html += '<th style="color:' + cat.color + '">' + cat.abbr + '</th>'; });
+  html += '</tr></thead><tbody>';
+
+  var periods = ['last7','last15','last30','season'];
+  var labels = { last7: 'Last 7 Days', last15: 'Last 15 Days', last30: 'Last 30 Days', season: 'Full Season' };
+  periods.forEach(function(period) {
+    if (!p.stats[period]) return;
+    var hasDiff = false;
+    html += '<tr><td>' + labels[period] + '</td>';
+    cats.forEach(function(cat) {
+      var val = p.stats[period][cat.abbr];
+      var seasonVal = p.stats.season ? p.stats.season[cat.abbr] : null;
+      var diff = (val !== null && seasonVal !== null && period !== 'season') ? val - seasonVal : 0;
+      var cls = '';
+      if (period !== 'season' && Math.abs(diff) > 0.1) {
+        cls = diff > 0 && !cat.isNegative ? 'stat-positive' : (diff < 0 && !cat.isNegative ? 'stat-negative' : '');
+        if (cat.isNegative) cls = diff < 0 ? 'stat-positive' : (diff > 0 ? 'stat-negative' : '');
+        hasDiff = true;
+      }
+      html += '<td class="' + cls + '">' + (val !== null ? (cat.isPercent ? pct(val) : fmt(val, 1)) : '-') + '</td>';
+    });
+    html += '</tr>';
+  });
+  html += '</tbody></table>';
+
+  // Trend analysis
+  var streak = Engines.detectStreaks(p);
+  if (streak.trend !== 'stable') {
+    html += '<div class="game-log-trend ' + streak.trend + '">';
+    html += (streak.trend === 'hot' ? '\u{1F525} Trending Up' : '\u{1F9CA} Trending Down');
+    html += ': ' + streak.label;
+    html += '</div>';
+  }
+
+  return html;
+}
+
+function renderPopupNews(p) {
+  var html = '';
+  // Injury info
+  if (p.injuryStatus && p.injuryStatus !== 'ACTIVE') {
+    html += '<div class="news-item injury-news">';
+    html += '<div class="news-badge">' + statusBadge(p.status) + ' ' + esc(p.injuryStatus) + '</div>';
+    if (p.injuryNote) html += '<p>' + esc(p.injuryNote) + '</p>';
+    html += '</div>';
+
+    // Show injury impact
+    var impact = Engines.injuryImpact(p);
+    if (impact.length) {
+      html += '<h4 class="popup-section-title">Who Benefits?</h4>';
+      impact.slice(0, 5).forEach(function(b) {
+        html += '<div class="news-item impact-item">';
+        html += '<strong>' + esc(b.player.name) + '</strong>';
+        html += ' <span class="muted">' + b.player.nbaTeam + ' ' + b.player.positions.join('/') + '</span>';
+        if (b.onWaivers) html += ' <span class="add-badge">Available</span>';
+        html += '<div class="muted">+' + fmt(b.minsBoost, 1) + ' min projected boost';
+        if (b.samePosition) html += ' (same position)';
+        html += '</div></div>';
+      });
+    }
+  } else {
+    html += '<p class="muted">No injury news for ' + esc(p.name) + '.</p>';
+  }
+
+  // Ownership trend
+  html += '<div class="news-item">';
+  html += '<strong>Ownership:</strong> ' + fmt(p.ownership, 1) + '%';
+  html += '</div>';
+
+  // Fantasy notes
+  if (p.notes) {
+    html += '<div class="news-item"><p>' + esc(p.notes) + '</p></div>';
+  }
+
+  return html;
+}
+
+function renderPopupSchedule(p) {
+  var html = '';
+  if (p.schedule && p.schedule.length) {
+    html += '<div class="popup-schedule">';
+    p.schedule.slice(0, 14).forEach(function(g) {
+      html += '<div class="sched-game-row">';
+      html += '<span class="sched-date">' + g.date + '</span>';
+      html += '<span class="sched-opp">' + (g.home ? 'vs' : '@') + ' ' + esc(g.opponent || '?') + '</span>';
+      html += '</div>';
+    });
+    html += '</div>';
+  } else {
+    html += '<p class="muted">No schedule data. Try syncing.</p>';
+  }
+  html += '<p class="muted" style="margin-top:8px">Games remaining this matchup: ' + (p.gamesRemaining || '?') + '</p>';
+  html += '<p class="muted">Games remaining ROS: ' + (p.gamesRemainingROS || '?') + '</p>';
+  return html;
+}
+
+function renderPopupAnalysis(p, cats) {
+  var html = '<div class="analysis-values">';
+  html += '<div class="analysis-val"><span class="av-num">' + fmt(p.zScores ? p.zScores.total : 0, 2) + '</span><span class="av-label">Z-Score</span></div>';
+  html += '<div class="analysis-val"><span class="av-num">' + fmt(p.zScores ? p.zScores.durant : 0, 2) + '</span><span class="av-label">DURANT</span></div>';
+  if (p.zScores && p.zScores.durantH2H !== undefined) {
+    html += '<div class="analysis-val"><span class="av-num">' + fmt(p.zScores.durantH2H, 2) + '</span><span class="av-label">H2H Value</span></div>';
+  }
+  html += '<div class="analysis-val"><span class="av-num">' + fmt(p.frustrationValue || 0, 1) + '</span><span class="av-label">Frustration</span></div>';
+  html += '</div>';
+
+  // Z-score bars
+  html += '<h4 class="popup-section-title">Category Z-Scores</h4><div class="z-bars">';
+  cats.forEach(function(cat) {
+    var z = p.zScores ? p.zScores[cat.abbr] : 0;
+    var width = Math.min(Math.abs(z) * 20, 100);
+    var isPos = z >= 0;
+    html += '<div class="z-bar-row"><span class="z-bar-label" style="color:' + cat.color + '">' + cat.abbr + '</span>';
+    html += '<div class="z-bar-track"><span class="z-bar-center"></span><div class="z-bar-fill ' + (isPos ? 'positive' : 'negative') + '" style="width:' + width + '%"></div></div>';
+    html += '<span class="z-bar-value ' + (isPos ? 'positive' : 'negative') + '">' + (isPos ? '+' : '') + fmt(z, 2) + '</span></div>';
+  });
+  html += '</div>';
+
+  // Per-36 stats
+  var mins = p.minutesPerGame || 0;
+  if (mins > 0) {
+    html += '<h4 class="popup-section-title">Per-36 Minutes</h4>';
+    html += '<div class="popup-quick-stats">';
+    cats.forEach(function(cat) {
+      if (cat.isPercent) return;
+      var raw = p.stats.season ? p.stats.season[cat.abbr] : null;
+      var per36 = raw !== null && raw !== undefined ? (raw / mins) * 36 : null;
+      html += '<div class="quick-stat"><span class="qs-label" style="color:' + cat.color + '">' + cat.abbr + '</span>';
+      html += '<span class="qs-val">' + (per36 !== null ? fmt(per36, 1) : '-') + '</span></div>';
+    });
+    html += '</div>';
+  }
+
+  return html;
+}
+
+// Show injury impact in a toast/alert
+function showInjuryImpact(playerId) {
+  var p = S.allPlayers.find(function(pl) { return pl.id === playerId; });
+  if (!p) return;
+  _popupTab = 'news';
+  renderPlayerPopup();
+}
