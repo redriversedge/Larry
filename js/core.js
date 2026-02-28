@@ -311,7 +311,7 @@ function needsTeamSelection() {
 
 function safeRender(container) {
   try {
-    var renderers = [renderRoster, renderMatchup, renderPlayers, renderLarry, renderLeague];
+    var renderers = [renderRoster, renderMatchup, renderPlayers, renderChat, renderLeague];
     if (S.currentTab >= 0 && S.currentTab < renderers.length) {
       renderers[S.currentTab](container);
     }
