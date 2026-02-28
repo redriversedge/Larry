@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#0a0a1a">
+  <title>Larry - Fantasy Basketball</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="apple-touch-icon" href="/assets/icon-192.png">
+  <link rel="stylesheet" href="/css/larry.css">
+</head>
+<body>
+  <div id="app">
+    <!-- HEADER -->
+    <header id="app-header">
+      <div class="header-left">
+        <span id="header-avatar"></span>
+        <span class="header-title">Larry</span>
+      </div>
+      <div class="header-right">
+        <span id="sync-status" class="sync-indicator"></span>
+        <button class="header-btn" onclick="openStatsKey()" title="Stats Key">?</button>
+        <button class="header-btn" onclick="openSearch()" title="Search">&#x1F50D;</button>
+      </div>
+    </header>
+
+    <!-- TAB CONTENT -->
+    <main id="tab-content"></main>
+
+    <!-- BOTTOM NAV -->
+    <nav id="bottom-nav"></nav>
+  </div>
+
+  <!-- SEARCH OVERLAY -->
+  <div id="search-overlay" onclick="if(event.target===this)closeSearch()">
+    <div class="search-input-wrap">
+      <span>&#x1F50D;</span>
+      <input type="text" id="global-search" placeholder="Search players..." oninput="handleGlobalSearch(this.value)" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+      <button class="header-btn" onclick="closeSearch()">&times;</button>
+    </div>
+    <div id="search-results"></div>
+  </div>
+
+  <!-- HELP OVERLAY -->
+  <div id="help-overlay" onclick="if(event.target===this)toggleHelp()">
+    <div class="help-card">
+      <h3>Keyboard Shortcuts</h3>
+      <div style="margin-top:12px;display:flex;flex-direction:column;gap:8px;font-size:0.85rem">
+        <div><kbd>1-5</kbd> Switch tabs</div>
+        <div><kbd>/</kbd> Search</div>
+        <div><kbd>?</kbd> This help</div>
+      </div>
+      <button class="btn btn-secondary btn-full" onclick="toggleHelp()" style="margin-top:16px;">Close</button>
+    </div>
+  </div>
+
+  <!-- STATS KEY OVERLAY -->
+  <div id="stats-key-overlay" onclick="if(event.target===this)closeStatsKey()">
+    <div class="stats-key-card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <h3 style="margin:0">Stats Key</h3>
+        <button class="header-btn" onclick="closeStatsKey()" style="font-size:1.5rem">&times;</button>
+      </div>
+      <div class="stats-key-item">
+        <h4>Z-Score</h4>
+        <p>How many standard deviations a player's stat is above or below the league average. Higher = better.</p>
+        <div class="example">A z-score of +1.5 in AST means this player averages 1.5 standard deviations more assists than the average fantasy-relevant player.</div>
+      </div>
+      <div class="stats-key-item">
+        <h4>DURANT Ranking</h4>
+        <p>Custom composite ranking that factors in: z-score value, category scarcity (rare stats weighted higher), and consistency penalty (volatile players discounted). Named after Kevin Durant. The primary player ranking throughout Larry.</p>
+        <div class="example">A player with +2.0 DURANT is an elite contributor. +1.0 is above average. Below 0 means they hurt more categories than they help.</div>
+      </div>
+      <div class="stats-key-item">
+        <h4>DURANT H2H</h4>
+        <p>DURANT value with your worst category dropped -- simulates a punt strategy. In H2H Each Category leagues, you only need to win the majority of categories, not all of them.</p>
+      </div>
+      <div class="stats-key-item">
+        <h4>Category Scarcity</h4>
+        <p>Some stats are harder to find on the waiver wire (STL, BLK). Larry weights scarce categories higher in rankings because losing a source of rare stats is harder to replace.</p>
+      </div>
+      <div class="stats-key-item">
+        <h4>Trend Arrows</h4>
+        <p>&#9650; = last 7 days significantly above season average (hot streak). &#9660; = last 7 days significantly below (cold streak). Threshold: 15%+ change.</p>
+      </div>
+      <div class="stats-key-item">
+        <h4>ROS Projections</h4>
+        <p>Rest-of-season projections. Per-game averages multiplied by estimated remaining games. Accounts for team schedule density.</p>
+      </div>
+      <div class="stats-key-item">
+        <h4>Games Remaining</h4>
+        <p>Number of games a player's NBA team has left in the current fantasy matchup period. Critical for H2H -- raw averages mean nothing without context on how many games a player actually gets to play.</p>
+      </div>
+      <div class="stats-key-item">
+        <h4>Win Probability (Monte Carlo)</h4>
+        <p>Simulates the rest of the matchup 5,000 times using player averages + realistic variance. Shows probability of winning each category.</p>
+      </div>
+      <div class="stats-key-item">
+        <h4>Schedule Advantage</h4>
+        <p>Compares total remaining games between your team and your opponent for the matchup period. More games = more counting stats.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- PLAYER POPUP OVERLAY -->
+  <div id="player-popup-overlay" onclick="if(event.target===this)closePlayerPopup()">
+    <div class="player-popup">
+      <button class="popup-close" onclick="closePlayerPopup()">&times;</button>
+      <div id="player-popup-content"></div>
+    </div>
+  </div>
+
+  <!-- JS MODULES (order matters) -->
+  <script src="/js/core.js"></script>
+  <script src="/js/espn.js"></script>
+  <script src="/js/engines.js"></script>
+  <script src="/js/tabs.js"></script>
+  <script src="/js/chat.js"></script>
+
+  <!-- TOAST -->
+  <div id="toast" class="toast"></div>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      var avatarEl = document.getElementById('header-avatar');
+      if (avatarEl && typeof getLarryAvatar === 'function') {
+        avatarEl.innerHTML = getLarryAvatar(28);
+      }
+    });
+  </script>
+</body>
+</html>
