@@ -1,16 +1,11 @@
 // ============================================================
-// LARRY v2 -- ESPN SYNC MODULE
+// LARRY v3.0 -- ESPN SYNC MODULE
 // API integration, data parsing, auto-detection
 // ============================================================
 
 var ESPNSync = (function() {
 
-  var BASE_URL = 'https://lm-api-reads.fantasy.espn.com/apis/v3/games/fba/seasons/{SEASON}/segments/0/leagues/{LEAGUE}';
   var PROXY_URL = '/.netlify/functions/espn-proxy';
-
-  function getApiUrl() {
-    return BASE_URL.replace('{SEASON}', S.league.seasonId).replace('{LEAGUE}', S.espn.leagueId);
-  }
 
   // --- FETCH THROUGH PROXY ---
   async function fetchESPN(views, extraParams) {
@@ -26,24 +21,9 @@ var ESPNSync = (function() {
       'x-espn-season': String(S.league.seasonId)
     };
 
-    try {
-      var resp = await fetch(url, { headers: headers });
-      if (!resp.ok) throw new Error('ESPN API returned ' + resp.status);
-      return await resp.json();
-    } catch (e) {
-      console.error('ESPN fetch failed:', e);
-      // Fallback: try direct API (will fail with CORS in browser, but works with extension)
-      try {
-        var directUrl = getApiUrl() + '?' + params.toString();
-        var directResp = await fetch(directUrl, {
-          headers: {
-            'Cookie': 'espn_s2=' + S.espn.espnS2 + '; SWID=' + S.espn.swid
-          }
-        });
-        if (directResp.ok) return await directResp.json();
-      } catch (e2) { /* direct failed too */ }
-      throw e;
-    }
+    var resp = await fetch(url, { headers: headers });
+    if (!resp.ok) throw new Error('ESPN API returned ' + resp.status);
+    return await resp.json();
   }
 
   // --- MAIN FETCH: LEAGUE DATA ---
@@ -54,19 +34,10 @@ var ESPNSync = (function() {
     ]);
   }
 
-  // --- FETCH PLAYERS (FREE AGENTS + ALL) ---
+  // --- FETCH PLAYERS (FREE AGENTS) ---
   async function fetchPlayers(status) {
-    var filter = {
-      players: {
-        filterStatus: { value: status === 'freeagent' ? ['FREEAGENT'] : ['FREEAGENT', 'WAIVERS', 'ONTEAM'] },
-        filterSlotIds: { value: [0,1,2,3,4,5,6,7,8,9,10,11] },
-        sortPercOwned: { sortPriority: 1, sortAsc: false },
-        limit: 300,
-        offset: 0
-      }
-    };
     return await fetchESPN(['kona_player_info'], {
-      'scoringPeriodId': S.league.currentScoringPeriodId || 0
+      'scoringPeriodId': String(S.league.currentScoringPeriodId || 0)
     });
   }
 
@@ -74,61 +45,50 @@ var ESPNSync = (function() {
   function parseLeagueSettings(data) {
     if (!data || !data.settings) return;
     var settings = data.settings;
-
     S.league.name = settings.name || '';
     S.league.teamCount = data.teams ? data.teams.length : 0;
 
     // Scoring type
-    var scoringTypeId = settings.scoringSettings ? settings.scoringSettings.scoringType : '';
-    var typeMap = { 'H2H_CATEGORY': 'H2H Each Category', 'H2H_MOST_CATEGORIES': 'H2H Most Categories', 'H2H_POINTS': 'H2H Points', 'TOTAL_SEASON_POINTS': 'Roto' };
-    S.league.scoringType = typeMap[scoringTypeId] || scoringTypeId || 'H2H Each Category';
+    var scoringTypeId = settings.scoringSettings ? settings.scoringSettings.scoringType : null;
+    S.league.scoringType = scoringTypeId === 0 ? 'H2H Each Category' :
+                           scoringTypeId === 1 ? 'H2H Total Points' :
+                           scoringTypeId === 2 ? 'Rotisserie' : 'H2H Each Category';
 
     // Categories
-    S.league.categories = [];
     if (settings.scoringSettings && settings.scoringSettings.scoringItems) {
+      S.league.categories = [];
       settings.scoringSettings.scoringItems.forEach(function(item) {
         var abbr = ESPN_STAT_MAP[item.statId];
-        if (abbr && item.isReverseItem !== true) {
-          S.league.categories.push({
-            id: item.statId,
-            abbr: abbr,
-            name: abbr,
-            color: DEFAULT_CAT_COLORS[abbr] || '#94a3b8',
-            isPercent: abbr === 'FG%' || abbr === 'FT%',
-            isNegative: abbr === 'TO' // turnovers = lower is better
-          });
-        }
-      });
-    }
-    // If no categories parsed, default to common 9-cat
-    if (S.league.categories.length === 0) {
-      ['PTS','REB','AST','STL','BLK','3PM','FG%','FT%','TO'].forEach(function(abbr) {
+        if (!abbr) return;
+        var isPercent = abbr === 'FG%' || abbr === 'FT%';
+        var isNegative = abbr === 'TO';
         S.league.categories.push({
-          id: ESPN_STAT_REVERSE[abbr] || 0, abbr: abbr, name: abbr,
-          color: DEFAULT_CAT_COLORS[abbr] || '#94a3b8',
-          isPercent: abbr === 'FG%' || abbr === 'FT%',
-          isNegative: abbr === 'TO'
+          id: item.statId,
+          abbr: abbr,
+          isPercent: isPercent,
+          isNegative: isNegative,
+          color: DEFAULT_CAT_COLORS[abbr] || '#94a3b8'
         });
       });
     }
 
     // Roster slots
-    S.league.rosterSlots = [];
-    S.league.startingSlots = 0;
-    S.league.benchSlots = 0;
-    S.league.irSlots = 0;
     if (settings.rosterSettings && settings.rosterSettings.lineupSlotCounts) {
+      S.league.rosterSlots = [];
       var counts = settings.rosterSettings.lineupSlotCounts;
+      var totalStarting = 0, benchCount = 0, irCount = 0;
       Object.keys(counts).forEach(function(slotId) {
-        var ct = counts[slotId];
-        if (ct > 0) {
-          var name = ESPN_SLOT_MAP[slotId] || 'UNK';
-          S.league.rosterSlots.push({ slotId: parseInt(slotId), name: name, count: ct });
-          if (parseInt(slotId) === 12) S.league.benchSlots = ct;
-          else if (parseInt(slotId) === 13) S.league.irSlots = ct;
-          else S.league.startingSlots += ct;
-        }
+        var count = counts[slotId];
+        if (count <= 0) return;
+        var name = ESPN_SLOT_MAP[parseInt(slotId)] || 'UNK';
+        S.league.rosterSlots.push({ slotId: parseInt(slotId), name: name, count: count });
+        if (parseInt(slotId) === 12) benchCount = count;
+        else if (parseInt(slotId) === 13) irCount = count;
+        else totalStarting += count;
       });
+      S.league.startingSlots = totalStarting;
+      S.league.benchSlots = benchCount;
+      S.league.irSlots = irCount;
     }
 
     // Acquisition limit
@@ -147,18 +107,12 @@ var ESPNSync = (function() {
       var sched = settings.scheduleSettings;
       S.league.playoffTeams = sched.playoffTeamCount || 0;
       S.league.matchupPeriodLength = sched.matchupPeriodLength || 7;
-      if (sched.playoffMatchupPeriodLength) {
-        // Find playoff start
-        var periods = sched.matchupPeriods || {};
-        S.league.playoffStartMatchup = Object.keys(periods).length - (sched.playoffMatchupPeriodLength || 3) + 1;
-      }
     }
   }
 
-  // --- NORMALIZE SWID FOR MATCHING ---
+  // --- NORMALIZE SWID ---
   function normalizeSWID(swid) {
     if (!swid) return '';
-    // Strip braces and lowercase for comparison
     return swid.replace(/[{}]/g, '').toLowerCase().trim();
   }
 
@@ -178,99 +132,68 @@ var ESPNSync = (function() {
           if (isMe) return;
           var normalizedMemberId = normalizeSWID(m.id);
           if (normalizedMemberId === normalizedSwid) {
-            // Found the member, check if they own this team
             if (team.owners && team.owners.some(function(oid) {
               return normalizeSWID(oid) === normalizedMemberId;
-            })) {
-              isMe = true;
-            }
+            })) { isMe = true; }
           }
         });
       }
-
-      // Method 2: Direct owner ID match against SWID
+      // Method 2: Direct owner ID match
       if (!isMe && team.owners && normalizedSwid) {
         isMe = team.owners.some(function(oid) {
           return normalizeSWID(oid) === normalizedSwid;
         });
       }
-
-      // Method 3: primaryOwner field
+      // Method 3: primaryOwner
       if (!isMe && team.primaryOwner && normalizedSwid) {
         isMe = normalizeSWID(team.primaryOwner) === normalizedSwid;
       }
 
-      var teamObj = {
-        teamId: team.id,
-        name: (team.name || ((team.location || '') + ' ' + (team.nickname || '')).trim()).trim(),
-        abbrev: team.abbrev || '',
-        owner: '', // will set below
-        record: { wins: 0, losses: 0, ties: 0 },
-        pointsFor: 0,
-        pointsAgainst: 0,
-        playoffSeed: team.playoffSeed || 0,
-        waiverRank: team.waiverRank || 0,
-        players: [],
-        catTotals: {} // season category totals for league comparison
-      };
+      if (isMe) detectedTeamId = team.id;
 
-      if (team.record && team.record.overall) {
-        teamObj.record.wins = team.record.overall.wins || 0;
-        teamObj.record.losses = team.record.overall.losses || 0;
-        teamObj.record.ties = team.record.overall.ties || 0;
-        teamObj.pointsFor = team.record.overall.pointsFor || 0;
-        teamObj.pointsAgainst = team.record.overall.pointsAgainst || 0;
-      }
-
-      // Parse roster
+      // Parse team players
+      var players = [];
       if (team.roster && team.roster.entries) {
         team.roster.entries.forEach(function(entry) {
-          var player = parsePlayer(entry);
-          if (player) {
-            player.onTeamId = team.id;
-            teamObj.players.push(player);
-          }
+          var p = parsePlayer(entry);
+          if (p) { p.onTeamId = team.id; players.push(p); }
         });
       }
 
-      S.teams.push(teamObj);
-      if (isMe) {
-        detectedTeamId = team.id;
+      var record = team.record && team.record.overall ? team.record.overall : { wins: 0, losses: 0, ties: 0 };
+      var ownerName = '';
+      if (data.members && team.owners) {
+        var ownerMember = data.members.find(function(m) {
+          return team.owners.some(function(oid) { return normalizeSWID(oid) === normalizeSWID(m.id); });
+        });
+        if (ownerMember) ownerName = (ownerMember.firstName || '') + ' ' + (ownerMember.lastName || '');
       }
+
+      S.teams.push({
+        teamId: team.id,
+        name: (team.name || team.location + ' ' + (team.nickname || '')).trim(),
+        abbrev: team.abbrev || '',
+        owner: ownerName.trim(),
+        record: { wins: record.wins || 0, losses: record.losses || 0, ties: record.ties || 0 },
+        pointsFor: record.pointsFor || team.points || 0,
+        pointsAgainst: record.pointsAgainst || 0,
+        playoffSeed: team.playoffSeed || 0,
+        waiverRank: team.waiverRank || 0,
+        players: players,
+        isMyTeam: isMe
+      });
     });
 
-    // Set owner names
-    if (data.members) {
-      data.members.forEach(function(m) {
-        S.teams.forEach(function(t) {
-          var rawTeam = data.teams.find(function(dt) { return dt.id === t.teamId; });
-          if (rawTeam && rawTeam.owners && rawTeam.owners.some(function(oid) {
-            return normalizeSWID(oid) === normalizeSWID(m.id);
-          })) {
-            t.owner = (m.displayName || ((m.firstName || '') + ' ' + (m.lastName || '')).trim()).trim();
-          }
-        });
-      });
-    }
-
-    // Determine which team is ours:
-    // Priority 1: Previously manually selected team
-    // Priority 2: Auto-detected from SWID
-    // Priority 3: 0 (will trigger team selector)
+    // Apply team detection
     var finalTeamId = 0;
     if (S.myTeam.teamId > 0 && S.teams.some(function(t) { return t.teamId === S.myTeam.teamId; })) {
-      // User previously selected a team and it still exists in the league
       finalTeamId = S.myTeam.teamId;
     } else if (detectedTeamId > 0) {
       finalTeamId = detectedTeamId;
     }
+    if (finalTeamId > 0) applyMyTeam(finalTeamId);
 
-    if (finalTeamId > 0) {
-      applyMyTeam(finalTeamId);
-    }
-    // If finalTeamId is 0, caller will check S.myTeam.teamId and show team selector
-
-    // Build allPlayers from all teams
+    // Build allPlayers
     S.allPlayers = [];
     S.teams.forEach(function(t) {
       t.players.forEach(function(p) { S.allPlayers.push(p); });
@@ -281,7 +204,6 @@ var ESPNSync = (function() {
   function applyMyTeam(teamId) {
     var teamObj = S.teams.find(function(t) { return t.teamId === teamId; });
     if (!teamObj) return false;
-
     S.myTeam.teamId = teamObj.teamId;
     S.myTeam.name = teamObj.name;
     S.myTeam.abbrev = teamObj.abbrev;
@@ -295,24 +217,32 @@ var ESPNSync = (function() {
     return true;
   }
 
-  // --- SELECT TEAM (called from UI team picker) ---
   function selectTeam(teamId) {
     if (applyMyTeam(teamId)) {
-      // Re-parse matchup with the new team context
-      if (ESPNSync._lastLeagueData) {
-        parseMatchup(ESPNSync._lastLeagueData);
-      }
+      if (ESPNSync._lastLeagueData) parseMatchup(ESPNSync._lastLeagueData);
       autosave();
       return true;
     }
     return false;
   }
 
+  // --- STAT SPLIT IDENTIFIER ---
+  function identifyStatSplit(statSet) {
+    var src = statSet.statSourceId;
+    var split = statSet.statSplitTypeId;
+    if (src === 0 && split === 0) return 'season';
+    if (src === 0 && split === 1) return 'last7';
+    if (src === 0 && split === 2) return 'last15';
+    if (src === 0 && split === 3) return 'last30';
+    if (src === 1) return 'projectedSeason';
+    if (src === 2) return 'projectedMatchup';
+    return null;
+  }
+
   // --- PARSE SINGLE PLAYER ---
   function parsePlayer(entry) {
     if (!entry || !entry.playerPoolEntry || !entry.playerPoolEntry.player) return null;
     var raw = entry.playerPoolEntry.player;
-    var info = raw;
 
     var player = {
       id: raw.id,
@@ -320,14 +250,12 @@ var ESPNSync = (function() {
       firstName: raw.firstName || '',
       lastName: raw.lastName || '',
       positions: [],
-      eligibleSlots: (raw.eligibleSlots || []).map(function(s) { return s; }),
+      eligibleSlots: (raw.eligibleSlots || []).slice(),
       defaultPositionId: raw.defaultPositionId || 0,
       nbaTeamId: raw.proTeamId || 0,
       nbaTeam: ESPN_TEAM_MAP[raw.proTeamId] || '???',
-      nbaTeamName: '',
       status: 'ACTIVE',
       injuryStatus: raw.injuryStatus || 'ACTIVE',
-      injuryNote: '',
       slot: ESPN_SLOT_MAP[entry.lineupSlotId] || 'BE',
       slotId: entry.lineupSlotId || 12,
       onTeamId: 0,
@@ -337,7 +265,6 @@ var ESPNSync = (function() {
       minutesPerGame: 0,
       schedule: [],
       gamesRemaining: 0,
-      gamesRemainingROS: 0,
       gamesToday: false,
       gameToday: null,
       zScores: {},
@@ -349,90 +276,66 @@ var ESPNSync = (function() {
     if (raw.eligibleSlots) {
       raw.eligibleSlots.forEach(function(sid) {
         var pos = ESPN_SLOT_MAP[sid];
-        if (pos && !['BE','IR','UTIL','G','F','G/F','PF/C','SG/SF','F/C'].includes(pos) && !player.positions.includes(pos)) {
+        if (pos && pos !== 'BE' && pos !== 'IR' && pos !== 'UTIL' && player.positions.indexOf(pos) === -1) {
           player.positions.push(pos);
         }
       });
     }
-    if (player.positions.length === 0 && raw.defaultPositionId) {
+    if (!player.positions.length && raw.defaultPositionId) {
       var defPos = ESPN_POS_MAP[raw.defaultPositionId];
       if (defPos) player.positions.push(defPos);
     }
 
-    // Injury status
-    if (raw.injuryStatus) {
-      player.status = raw.injuryStatus;
-      player.injuryStatus = raw.injuryStatus;
-    }
-    if (raw.injured) player.status = player.injuryStatus || 'OUT';
-
-    // Parse stats from different splits
+    // Parse stats
     if (raw.stats) {
       raw.stats.forEach(function(statSet) {
-        var splitType = detectSplit(statSet);
-        if (splitType && statSet.stats) {
-          var parsed = {};
-          S.league.categories.forEach(function(cat) {
-            var val = statSet.stats[String(cat.id)];
-            if (val !== undefined) {
-              // Per-game averages
-              if (statSet.stats['42'] && statSet.stats['42'] > 0 && !cat.isPercent) {
-                parsed[cat.abbr] = val / statSet.stats['42']; // stat / games played
-              } else {
-                parsed[cat.abbr] = val;
-              }
-            }
-          });
-          // Games played
-          if (statSet.stats['42']) {
-            if (splitType === 'season') player.gamesPlayed = statSet.stats['42'];
-          }
-          // Minutes
-          if (statSet.stats['40']) {
-            if (splitType === 'season' && statSet.stats['42'] > 0) {
-              player.minutesPerGame = statSet.stats['40'] / statSet.stats['42'];
-            }
-          }
-          player.stats[splitType] = parsed;
+        var splitName = identifyStatSplit(statSet);
+        if (!splitName || !statSet.stats) return;
+        var mapped = {};
+        Object.keys(statSet.stats).forEach(function(espnId) {
+          var abbr = ESPN_STAT_MAP[parseInt(espnId)];
+          if (abbr) mapped[abbr] = statSet.stats[espnId];
+        });
+        player.stats[splitName] = mapped;
+
+        // GP and MPG from season
+        if (splitName === 'season') {
+          player.gamesPlayed = statSet.stats['42'] || statSet.stats['40'] || mapped['GP'] || 0;
+          if (player.gamesPlayed === 0 && statSet.appliedTotal) player.gamesPlayed = Math.round(statSet.appliedTotal / 20) || 0;
+          player.minutesPerGame = statSet.stats['28'] || mapped['MPG'] || 0;
         }
       });
     }
 
-    // Determine trend
-    if (player.stats.last7 && player.stats.season) {
-      var upCats = 0, downCats = 0;
-      S.league.categories.forEach(function(cat) {
-        var recent = player.stats.last7[cat.abbr];
-        var season = player.stats.season[cat.abbr];
-        if (recent && season && season !== 0) {
-          var pctChange = (recent - season) / Math.abs(season);
-          if (cat.isNegative) pctChange = -pctChange;
-          if (pctChange > 0.15) upCats++;
-          if (pctChange < -0.15) downCats++;
-        }
-      });
-      if (upCats >= 3) player.trend = 'hot';
-      else if (downCats >= 3) player.trend = 'cold';
+    // Injury status
+    if (raw.injuryStatus && raw.injuryStatus !== 'ACTIVE') {
+      player.status = raw.injuryStatus;
+    }
+
+    // Today's game - check proTeamId schedule
+    player.gamesToday = false;
+    player.gameToday = null;
+    if (raw.proTeamId) {
+      // ESPN schedule data comes from mScoreboard
+      // We mark this in the enrichment phase after full data is loaded
     }
 
     return player;
   }
 
-  function detectSplit(statSet) {
-    // ESPN uses statSourceId + statSplitTypeId
-    // 0/0 = season actual, 0/1 = last 7, 0/2 = last 15, 0/3 = last 30
-    // 1/0 = projected season, 2/0 = projected matchup
-    var src = statSet.statSourceId;
-    var split = statSet.statSplitTypeId;
-    if (src === 0 && split === 0) return 'season';
-    if (src === 0 && split === 1) return 'last7';
-    if (src === 0 && split === 2) return 'last15';
-    if (src === 0 && split === 3) return 'last30';
-    if (src === 1) return 'projectedSeason';
-    if (src === 2) return 'projectedMatchup';
-    // Fallback: check appliedTotal
-    if (statSet.id && statSet.id.includes && statSet.id.includes('last')) return 'last30';
-    return null;
+  function parsePlayerDirect(raw) {
+    if (!raw || !raw.player) return null;
+    var entry = { playerPoolEntry: { player: raw.player }, lineupSlotId: raw.lineupSlotId || 12 };
+    var result = parsePlayer(entry);
+    if (!result && raw.player.id) {
+      result = {
+        id: raw.player.id, name: raw.player.fullName || '',
+        positions: [], nbaTeam: ESPN_TEAM_MAP[raw.player.proTeamId] || '???',
+        stats: { season: {}, last30: {}, last7: {} }, onTeamId: 0,
+        ownership: raw.player.ownership ? raw.player.ownership.percentOwned || 0 : 0
+      };
+    }
+    return result;
   }
 
   // --- PARSE MATCHUP ---
@@ -473,7 +376,6 @@ var ESPNSync = (function() {
           S.matchup.myScores[cat.abbr] = myVal;
           S.matchup.oppScores[cat.abbr] = oppVal;
 
-          // Determine winner (handle TO where lower is better)
           if (cat.isNegative) {
             if (myVal < oppVal) myWins++;
             else if (myVal > oppVal) myLosses++;
@@ -485,17 +387,16 @@ var ESPNSync = (function() {
           }
         });
       }
-
       S.matchup.myRecord = { wins: myWins, losses: myLosses, ties: myTies };
       S.matchup.myTeamId = S.myTeam.teamId;
     }
 
-    // Parse full schedule for league overview
+    // Full schedule
     S.league.schedule = data.schedule.map(function(m) {
       return {
         matchupPeriodId: m.matchupPeriodId,
-        home: m.home ? { teamId: m.home.teamId, wins: (m.home.totalPoints || 0) } : null,
-        away: m.away ? { teamId: m.away.teamId, wins: (m.away.totalPoints || 0) } : null
+        home: m.home ? { teamId: m.home.teamId, wins: m.home.totalPoints || 0 } : null,
+        away: m.away ? { teamId: m.away.teamId, wins: m.away.totalPoints || 0 } : null
       };
     });
   }
@@ -509,7 +410,6 @@ var ESPNSync = (function() {
       if (player) {
         player.onTeamId = 0;
         S.freeAgents.push(player);
-        // Add to allPlayers if not already there
         if (!S.allPlayers.find(function(p) { return p.id === player.id; })) {
           S.allPlayers.push(player);
         }
@@ -517,63 +417,31 @@ var ESPNSync = (function() {
     });
   }
 
-  function parsePlayerDirect(raw) {
-    if (!raw || !raw.player) return null;
-    var p = raw.player;
-    // Similar to parsePlayer but different structure (no playerPoolEntry wrapper)
-    var entry = { playerPoolEntry: { player: p }, lineupSlotId: raw.lineupSlotId || 12 };
-    // Reuse parsePlayer with adapted structure
-    var result = parsePlayer(entry);
-    if (!result && p.id) {
-      // Minimal fallback
-      result = {
-        id: p.id,
-        name: p.fullName || '',
-        positions: [],
-        nbaTeam: ESPN_TEAM_MAP[p.proTeamId] || '???',
-        stats: { season: {}, last30: {}, last7: {} },
-        onTeamId: 0,
-        ownership: p.ownership ? p.ownership.percentOwned || 0 : 0
-      };
-    }
-    return result;
-  }
-
   // --- FULL SYNC ---
   async function syncAll() {
     try {
-      updateSyncIndicator();
+      updateSyncIndicator('syncing');
       var data = await fetchLeague();
       if (data) {
-        // Store raw data for re-parsing after team selection
         ESPNSync._lastLeagueData = data;
-
         parseLeagueSettings(data);
         parseTeams(data);
-
-        // If no team detected, don't parse matchup yet (need team selection first)
-        if (S.myTeam.teamId > 0) {
-          parseMatchup(data);
-        }
-
+        if (S.myTeam.teamId > 0) parseMatchup(data);
         S.espn.lastSync = new Date().toISOString();
         S.espn.connected = true;
-        addSyncLog('success', 'Synced ' + S.teams.length + ' teams, ' + S.allPlayers.length + ' players' + (S.myTeam.teamId > 0 ? '' : ' (team selection needed)'));
-
-        // Invalidate analysis cache
+        addSyncLog('success', 'Synced ' + S.teams.length + ' teams, ' + S.allPlayers.length + ' players');
         S.analysisCache.lastComputed = null;
-
         autosave();
-        updateSyncIndicator();
+        updateSyncIndicator('connected');
         render();
       }
     } catch (e) {
       addSyncLog('error', e.message);
+      updateSyncIndicator('error');
       console.error('Sync failed:', e);
     }
   }
 
-  // Store last raw ESPN response for re-parsing
   var _lastLeagueData = null;
 
   return {
@@ -586,6 +454,7 @@ var ESPNSync = (function() {
     syncAll: syncAll,
     selectTeam: selectTeam,
     applyMyTeam: applyMyTeam,
-    _lastLeagueData: _lastLeagueData
+    _lastLeagueData: _lastLeagueData,
+    parsePlayer: parsePlayer
   };
 })();
