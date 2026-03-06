@@ -683,6 +683,7 @@ function renderStandings() {
 
 function renderTradeCenter() {
   var html = '';
+  if (S.allPlayers.length) Engines.computeDURANT(S.allPlayers);
   // Trade Finder with 50%+ acceptance filter (v3)
   html += '<div class="card"><div class="card-header">Trade Finder</div>';
   var trades = Engines.findTrades({ minAcceptance: 50 });
