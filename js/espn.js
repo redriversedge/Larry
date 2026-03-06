@@ -437,6 +437,7 @@ var ESPNSync = (function() {
         }
 
         enrichGamesRemaining();
+        Engines.rosProjections(S.allPlayers);
 
         S.espn.lastSync = new Date().toISOString();
         S.espn.connected = true;

@@ -40,8 +40,8 @@ function renderRoster(container) {
   // Stat view dropdown (v3: dropdown not buttons)
   html += '<div class="stat-view-bar">';
   html += '<select class="stat-view-select" onchange="_rosterStatView=this.value;render()">';
-  ['season','last30','last15','last7'].forEach(function(v) {
-    var labels = {season:'Season Avg',last30:'Last 30',last15:'Last 15',last7:'Last 7'};
+  ['season','last30','last15','last7','ros'].forEach(function(v) {
+    var labels = {season:'Season Avg',last30:'Last 30',last15:'Last 15',last7:'Last 7',ros:'ROS Projected'};
     html += '<option value="' + v + '"' + (_rosterStatView === v ? ' selected' : '') + '>' + labels[v] + '</option>';
   });
   html += '</select>';
@@ -187,7 +187,13 @@ function renderRosterTable(players, cats) {
 
     var period = _rosterStatView;
     cats.forEach(function(cat) {
-      var val = p.stats && p.stats[period] ? p.stats[period][cat.abbr] : null;
+      var val;
+      if (period === 'ros') {
+        if (!p.rosProjection) Engines.rosProjections([p]);
+        val = p.rosProjection ? p.rosProjection[cat.abbr] : null;
+      } else {
+        val = p.stats && p.stats[period] ? p.stats[period][cat.abbr] : null;
+      }
       var cls = '';
       if (p.zScores && p.zScores[cat.abbr]) {
         cls = p.zScores[cat.abbr] > 0.5 ? 'stat-positive' : (p.zScores[cat.abbr] < -0.5 ? 'stat-negative' : '');
@@ -445,8 +451,8 @@ function renderPlayers(container) {
 
   // Stat view dropdown
   html += '<select class="filter-select" onchange="_playersStatView=this.value;renderPlayersList()">';
-  ['season','last30','last15','last7'].forEach(function(v) {
-    var labels = {season:'Season',last30:'Last 30',last15:'Last 15',last7:'Last 7'};
+  ['season','last30','last15','last7','ros'].forEach(function(v) {
+    var labels = {season:'Season',last30:'Last 30',last15:'Last 15',last7:'Last 7',ros:'ROS Proj'};
     html += '<option value="' + v + '"' + (_playersStatView === v ? ' selected' : '') + '>' + labels[v] + '</option>';
   });
   html += '</select>';
@@ -556,7 +562,13 @@ function renderPlayersList() {
 
     var period = _playersStatView;
     cats.forEach(function(cat) {
-      var val = p.stats && p.stats[period] ? p.stats[period][cat.abbr] : null;
+      var val;
+      if (period === 'ros') {
+        if (!p.rosProjection) Engines.rosProjections([p]);
+        val = p.rosProjection ? p.rosProjection[cat.abbr] : null;
+      } else {
+        val = p.stats && p.stats[period] ? p.stats[period][cat.abbr] : null;
+      }
       var cls = '';
       if (p.zScores && p.zScores[cat.abbr]) {
         cls = p.zScores[cat.abbr] > 0.5 ? 'stat-positive' : (p.zScores[cat.abbr] < -0.5 ? 'stat-negative' : '');
