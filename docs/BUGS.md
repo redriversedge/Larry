@@ -6,7 +6,7 @@ Work through these in order. Each phase unblocks the next.
 
 - [x] **Scroll lockout** — Multiple pages can't scroll (Settings, Draft Center rankings, others). Audit ALL pages and sub-pages. Every content container needs `overflow-y: auto` and proper height constraints. This is likely a CSS issue with flex containers or fixed positioning eating available height.
 - [x] **Auto-refresh** — App should sync ESPN data on initial load and every 2 minutes. Show subtle refresh indicator. Don't interrupt user's current view or scroll position.
-- [ ] **Stat column order** — Change to REB, AST, STL, BLK, PTS everywhere stats appear (Roster, Matchup Score/Projections/Recap, Players). Single global constant for column order.
+- [x] **Stat column order** — Change to REB, AST, STL, BLK, PTS everywhere stats appear (Roster, Matchup Score/Projections/Recap, Players). Single global constant for column order.
 
 ## Phase 2: Critical UX (these make core features unusable)
 
