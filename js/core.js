@@ -821,6 +821,22 @@ function daysUntil(dateStr) {
   return Math.ceil((target - now) / (1000 * 60 * 60 * 24));
 }
 
+function getMatchupDates() {
+  // Estimate current matchup period dates
+  // ESPN matchup periods are typically Mon-Sun (7 days)
+  var now = new Date();
+  var dayOfWeek = now.getDay(); // 0=Sun, 1=Mon
+  // Matchup starts Monday
+  var startOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+  var start = new Date(now);
+  start.setDate(start.getDate() + startOffset);
+  start.setHours(0,0,0,0);
+  var end = new Date(start);
+  end.setDate(end.getDate() + 6);
+  end.setHours(23,59,59,999);
+  return { start: start, end: end, daysLeft: Math.max(0, Math.ceil((end - now) / (1000*60*60*24))) };
+}
+
 function ordinal(n) {
   var s = ['th','st','nd','rd'];
   var v = n % 100;

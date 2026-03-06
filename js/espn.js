@@ -436,6 +436,8 @@ var ESPNSync = (function() {
           console.warn('Free agent fetch failed:', faErr.message);
         }
 
+        enrichGamesRemaining();
+
         S.espn.lastSync = new Date().toISOString();
         S.espn.connected = true;
         addSyncLog('success', 'Synced ' + S.teams.length + ' teams, ' + S.allPlayers.length + ' players');
@@ -451,6 +453,41 @@ var ESPNSync = (function() {
     }
   }
 
+  function enrichGamesRemaining() {
+    // NBA teams play ~3.5 games per week on average
+    // Estimate games remaining in matchup period per player
+    var matchupDates = getMatchupDates();
+    var daysLeft = matchupDates.daysLeft;
+    var gamesPerDay = 3.5 / 7; // ~0.5 games per day per team
+
+    S.allPlayers.forEach(function(p) {
+      // Estimate: daysLeft * gamesPerDay, rounded
+      var est = Math.round(daysLeft * gamesPerDay);
+      // If player has a known schedule array, use that instead
+      if (p.schedule && p.schedule.length) {
+        var remaining = p.schedule.filter(function(g) {
+          var gDate = new Date(g.date);
+          return gDate >= new Date() && gDate <= matchupDates.end;
+        }).length;
+        if (remaining > 0) est = remaining;
+      }
+      p.gamesRemaining = est;
+    });
+
+    // Update matchup games remaining totals
+    var myPlayers = S.myTeam.players || [];
+    var myGames = 0;
+    myPlayers.forEach(function(p) { if (p.slotId < 12) myGames += (p.gamesRemaining || 0); });
+    S.matchup.myGamesRemaining = myGames;
+
+    var oppTeam = S.teams.find(function(t) { return t.teamId === S.matchup.opponentTeamId; });
+    var oppGames = 0;
+    if (oppTeam && oppTeam.players) {
+      oppTeam.players.forEach(function(p) { if (p.slotId < 12) oppGames += (p.gamesRemaining || 0); });
+    }
+    S.matchup.oppGamesRemaining = oppGames;
+  }
+
   var _lastLeagueData = null;
 
   return {
@@ -461,6 +498,7 @@ var ESPNSync = (function() {
     parseMatchup: parseMatchup,
     parseFreeAgents: parseFreeAgents,
     syncAll: syncAll,
+    enrichGamesRemaining: enrichGamesRemaining,
     selectTeam: selectTeam,
     applyMyTeam: applyMyTeam,
     _lastLeagueData: _lastLeagueData,
