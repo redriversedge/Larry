@@ -279,7 +279,9 @@ var Engines = (function() {
             type: 'pickup',
             priority: improvement > 5 ? 'high' : 'medium',
             action: 'Add ' + pickup.name + ', Drop ' + dropCandidate.name,
-            detail: 'DURANT +' + fmt(improvement, 1) + '. ' + (catImpact.length ? catImpact.join(', ') : 'Similar production.'),
+            detail: 'DURANT: ' + fmt(pickup.durantScore || 0, 1) + ' vs ' + fmt(dropCandidate.durantScore || 0, 1) + ' (+' + fmt(improvement, 1) + '). ' +
+              'Z-Total: ' + fmt(pickup.zScores ? pickup.zScores.total : 0, 2) + ' vs ' + fmt(dropCandidate.zScores ? dropCandidate.zScores.total : 0, 2) + '. ' +
+              (catImpact.length ? catImpact.join(', ') + '.' : 'Similar category profile.'),
             player: pickup,
             dropPlayer: dropCandidate,
             improvement: improvement
