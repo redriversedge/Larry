@@ -15,7 +15,7 @@ Work through these in order. Each phase unblocks the next.
 - [x] **Player name click → popup not working** — Tapping player name should open detail popup (game log, trends, z-scores, DURANT rank). Was built in v2.2 Phase 1 but appears broken. Debug and fix.
 - [x] **Stats filter → dropdown** — Both Roster and Players tabs: change stat view from clickable buttons to `<select>` dropdown.
 - [x] **Playing On filter → dropdown** — Players tab: change from text input to date-picker dropdown (next 10 days).
-- [ ] **Player column header left-align** — Left-align the header text for the player name column.
+- [x] **Player column header left-align** — Left-align the header text for the player name column.
 
 ## Phase 3: Engine Fixes (these produce wrong/missing data)
 
