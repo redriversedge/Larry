@@ -427,6 +427,15 @@ var ESPNSync = (function() {
         parseLeagueSettings(data);
         parseTeams(data);
         if (S.myTeam.teamId > 0) parseMatchup(data);
+
+        // Fetch free agents to populate allPlayers for search/rankings
+        try {
+          var faData = await fetchPlayers();
+          if (faData) parseFreeAgents(faData);
+        } catch (faErr) {
+          console.warn('Free agent fetch failed:', faErr.message);
+        }
+
         S.espn.lastSync = new Date().toISOString();
         S.espn.connected = true;
         addSyncLog('success', 'Synced ' + S.teams.length + ' teams, ' + S.allPlayers.length + ' players');

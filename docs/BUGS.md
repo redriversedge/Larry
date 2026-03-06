@@ -10,8 +10,8 @@ Work through these in order. Each phase unblocks the next.
 
 ## Phase 2: Critical UX (these make core features unusable)
 
-- [ ] **Players tab keyboard dismissal** — Keyboard disappears after each letter typed. The input element is re-rendering on every keystroke. Fix: debounce search with `oninput`, don't re-render the input element itself, only re-render the results list below it.
-- [ ] **Players tab search broken** — Search returns no results. Debug the filter logic.
+- [x] **Players tab keyboard dismissal** — Keyboard disappears after each letter typed. The input element is re-rendering on every keystroke. Fix: debounce search with `oninput`, don't re-render the input element itself, only re-render the results list below it.
+- [x] **Players tab search broken** — Search returns no results. Debug the filter logic.
 - [ ] **Player name click → popup not working** — Tapping player name should open detail popup (game log, trends, z-scores, DURANT rank). Was built in v2.2 Phase 1 but appears broken. Debug and fix.
 - [ ] **Stats filter → dropdown** — Both Roster and Players tabs: change stat view from clickable buttons to `<select>` dropdown.
 - [ ] **Playing On filter → dropdown** — Players tab: change from text input to date-picker dropdown (next 10 days).
