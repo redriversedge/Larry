@@ -19,24 +19,24 @@ Work through these in order. Each phase unblocks the next.
 
 ## Phase 3: Engine Fixes (these produce wrong/missing data)
 
-- [ ] **Decision Hub recommendations broken** — Suggesting dropping KAT (elite player). The drop candidate logic must respect player value. Only suggest dropping players in the bottom 40% of roster by DURANT rank. All recommendations need specific reasoning with numbers.
-- [ ] **Monte Carlo / win probability broken** — Showing exactly 100% or 0% with no variance. Must project FORWARD using remaining games × per-game averages for both teams, then run Monte Carlo with realistic variance. If lineup isn't set for full matchup period, flag it. Should update when roster changes.
-- [ ] **Schedule Advantage section not working** — Matchup tab Score section. Should show games remaining for both teams, per-day breakdown, flag significant advantages.
-- [ ] **Schedule grid shows nothing** — League sub-page. Heat map and game density calendar are empty. NBA schedule data not flowing.
-- [ ] **ROS projections show 0 across the board** — Rest-of-season projections need to calculate (per-game avg × remaining games). Move ROS to Roster and Players tabs as a stat filter option alongside Season/L30/L15/L7.
-- [ ] **Biggest risers/fallers percentages over 100%** — Cap or fix the percentage calculation in Stats & Trends.
+- [x] **Decision Hub recommendations broken** — Suggesting dropping KAT (elite player). The drop candidate logic must respect player value. Only suggest dropping players in the bottom 40% of roster by DURANT rank. All recommendations need specific reasoning with numbers.
+- [x] **Monte Carlo / win probability broken** — Showing exactly 100% or 0% with no variance. Must project FORWARD using remaining games × per-game averages for both teams, then run Monte Carlo with realistic variance. If lineup isn't set for full matchup period, flag it. Should update when roster changes.
+- [x] **Schedule Advantage section not working** — Matchup tab Score section. Should show games remaining for both teams, per-day breakdown, flag significant advantages.
+- [x] **Schedule grid shows nothing** — League sub-page. Heat map and game density calendar are empty. NBA schedule data not flowing.
+- [x] **ROS projections show 0 across the board** — Rest-of-season projections need to calculate (per-game avg × remaining games). Move ROS to Roster and Players tabs as a stat filter option alongside Season/L30/L15/L7.
+- [x] **Biggest risers/fallers percentages over 100%** — Cap or fix the percentage calculation in Stats & Trends.
 
 ## Phase 4: New Features
 
-- [ ] **Date-scrollable roster view (ESPN-style)** — Major feature. Add date navigation with left/right arrows. Default: today. Past dates show historical lineup + actual stats. Future dates show current lineup + projections. This is the core roster experience.
-- [ ] **Move Dashboard to Roster tab** — Dashboard becomes first section on Roster (before Lineup and Decisions). Remove from League menu.
-- [ ] **Stats Key / Glossary** — Accessible help section explaining z-score, DURANT, and all custom metrics. Include examples using real player context. Place as a (?) icon in header that opens a modal.
-- [ ] **Trade Center targets empty** — Trade targets board shows nothing. Fix data flow.
-- [ ] **Trade Finder improvements** — Default: show trades 50%+ acceptance probability. Add: search for specific player to see trade options (any acceptance %). Keep pre-populated suggestions.
-- [ ] **Players tab defaults** — Default view: all unrostered (available) players sorted by DURANT ranking.
-- [ ] **Team of the Week → Matchup tab** — Move from Season Timeline to Matchup tab Score section, below Schedule Advantage. Rolling tracker of best-performing team during current matchup period.
-- [ ] **Draft Center filters** — Add tier filter and projected draft round filter. Fix scroll.
+- [x] **Date-scrollable roster view (ESPN-style)** — Major feature. Add date navigation with left/right arrows. Default: today. Past dates show historical lineup + actual stats. Future dates show current lineup + projections. This is the core roster experience.
+- [x] **Move Dashboard to Roster tab** — Dashboard becomes first section on Roster (before Lineup and Decisions). Remove from League menu.
+- [x] **Stats Key / Glossary** — Accessible help section explaining z-score, DURANT, and all custom metrics. Include examples using real player context. Place as a (?) icon in header that opens a modal.
+- [x] **Trade Center targets empty** — Trade targets board shows nothing. Fix data flow.
+- [x] **Trade Finder improvements** — Default: show trades 50%+ acceptance probability. Add: search for specific player to see trade options (any acceptance %). Keep pre-populated suggestions.
+- [x] **Players tab defaults** — Default view: all unrostered (available) players sorted by DURANT ranking.
+- [x] **Team of the Week → Matchup tab** — Move from Season Timeline to Matchup tab Score section, below Schedule Advantage. Rolling tracker of best-performing team during current matchup period.
+- [x] **Draft Center filters** — Add tier filter and projected draft round filter. Fix scroll.
 
 ## Phase 5: Larry Chat
 
-- [ ] **Larry API error** — Shows "ANTHROPIC_API_KEY not configured." Verify `netlify/functions/larry-chat.js` has correct function signature, env var reference (`process.env.ANTHROPIC_API_KEY`), and request/response handling. Cliff will fix the Netlify env var.
+- [x] **Larry API error** — Shows "ANTHROPIC_API_KEY not configured." Verify `netlify/functions/larry-chat.js` has correct function signature, env var reference (`process.env.ANTHROPIC_API_KEY`), and request/response handling. Cliff will fix the Netlify env var.
