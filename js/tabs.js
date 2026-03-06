@@ -37,6 +37,15 @@ function renderRoster(container) {
   // Date navigation (v3 new)
   html += renderDateNav();
 
+  if (_rosterDateOffset !== 0) {
+    var viewDate = new Date();
+    viewDate.setDate(viewDate.getDate() + _rosterDateOffset);
+    var isPast = _rosterDateOffset < 0;
+    html += '<div class="alert alert-info" style="font-size:0.8rem;padding:8px 12px;margin:0 0 8px">';
+    html += (isPast ? 'Viewing ' : 'Projected lineup for ') + viewDate.toLocaleDateString('en-US', {weekday:'long', month:'short', day:'numeric'});
+    html += '</div>';
+  }
+
   // Stat view dropdown (v3: dropdown not buttons)
   html += '<div class="stat-view-bar">';
   html += '<select class="stat-view-select" onchange="_rosterStatView=this.value;render()">';
@@ -159,7 +168,8 @@ function renderRosterTable(players, cats) {
   html += '<thead><tr>';
   html += '<th style="text-align:left;min-width:40px">Slot</th>';
   html += '<th style="text-align:left;min-width:120px">Player</th>';
-  html += '<th class="game-cell">Today</th>';
+  var dateLabel = _rosterDateOffset === 0 ? 'Today' : (_rosterDateOffset < 0 ? 'Game' : 'Game');
+  html += '<th class="game-cell">' + dateLabel + '</th>';
   cats.forEach(function(cat) {
     html += '<th class="stat-col" style="color:' + cat.color + '">' + cat.abbr + '</th>';
   });
