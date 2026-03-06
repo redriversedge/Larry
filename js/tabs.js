@@ -282,7 +282,6 @@ function renderMatchupScore(cats) {
 }
 
 function renderScheduleAdvantage() {
-  // Count games remaining this matchup period for each team
   var myGames = 0, oppGames = 0;
   var myPlayers = S.myTeam.players || [];
   myPlayers.forEach(function(p) { if (p.slotId < 12) myGames += (p.gamesRemaining || 0); });
@@ -293,11 +292,22 @@ function renderScheduleAdvantage() {
   }
 
   var diff = myGames - oppGames;
+  var matchupDates = getMatchupDates();
   var html = '<div class="card"><div class="card-header">Schedule Advantage</div>';
   html += '<div class="sched-adv">';
   html += '<div class="sched-adv-team"><div class="adv-count">' + myGames + '</div><div class="adv-label">Your Games</div></div>';
   html += '<div class="sched-adv-diff ' + (diff > 0 ? 'positive' : (diff < 0 ? 'negative' : '')) + '">' + (diff > 0 ? '+' : '') + diff + '</div>';
   html += '<div class="sched-adv-team"><div class="adv-count">' + oppGames + '</div><div class="adv-label">Opp Games</div></div>';
+  html += '</div>';
+
+  // Days remaining callout
+  html += '<div style="text-align:center;padding:8px;font-size:0.8rem;color:var(--text-secondary)">';
+  html += matchupDates.daysLeft + ' days remaining in matchup period';
+  if (Math.abs(diff) >= 3) {
+    html += '<div style="color:' + (diff > 0 ? 'var(--accent-green)' : 'var(--accent-red)') + ';font-weight:700;margin-top:4px">';
+    html += (diff > 0 ? 'Significant schedule advantage!' : 'Schedule disadvantage - consider streaming.');
+    html += '</div>';
+  }
   html += '</div></div>';
   return html;
 }
