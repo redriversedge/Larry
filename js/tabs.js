@@ -897,7 +897,7 @@ function renderPlayerPopup() {
 
   var cats = getOrderedCategories();
   var streak = Engines.detectStreaks(p);
-  var onWatch = S.prefs.watchlist && S.prefs.watchlist.indexOf(p.id) >= 0;
+  var onWatch = S.watchlist && S.watchlist.indexOf(p.id) >= 0;
 
   var html = '';
 
@@ -1037,10 +1037,10 @@ function renderPopupAnalysis(p, cats) {
 }
 
 function toggleWatchlist(playerId) {
-  if (!S.prefs.watchlist) S.prefs.watchlist = [];
-  var idx = S.prefs.watchlist.indexOf(playerId);
-  if (idx >= 0) S.prefs.watchlist.splice(idx, 1);
-  else S.prefs.watchlist.push(playerId);
+  if (!S.watchlist) S.watchlist = [];
+  var idx = S.watchlist.indexOf(playerId);
+  if (idx >= 0) S.watchlist.splice(idx, 1);
+  else S.watchlist.push(playerId);
   autosave();
 }
 
