@@ -13,6 +13,7 @@ var _playersSearchTimer = null;
 var _playersStatView = 'season';
 var _playersPositionFilter = 'ALL';
 var _playersAvailFilter = 'all';
+var _playersDateFilter = '';
 var _playersSortCol = 'durantScore';
 var _playersSortDir = -1;
 
@@ -440,6 +441,18 @@ function renderPlayers(container) {
   });
   html += '</select>';
 
+  // Playing On date filter dropdown
+  html += '<select class="filter-select" onchange="_playersDateFilter=this.value;renderPlayersList()">';
+  html += '<option value=""' + (!_playersDateFilter ? ' selected' : '') + '>Any Day</option>';
+  for (var di = 0; di < 10; di++) {
+    var dd = new Date();
+    dd.setDate(dd.getDate() + di);
+    var dateVal = localDateStr(dd);
+    var dateLabel = di === 0 ? 'Today' : (di === 1 ? 'Tomorrow' : dd.toLocaleDateString('en-US', {weekday:'short', month:'short', day:'numeric'}));
+    html += '<option value="' + dateVal + '"' + (_playersDateFilter === dateVal ? ' selected' : '') + '>' + dateLabel + '</option>';
+  }
+  html += '</select>';
+
   html += '</div></div>';
 
   // Player list container
@@ -487,6 +500,18 @@ function renderPlayersList() {
     }
     if (_playersAvailFilter === 'available' && p.onTeamId > 0) return false;
     if (_playersAvailFilter === 'roster' && p.onTeamId !== S.myTeam.teamId) return false;
+    if (_playersDateFilter) {
+      // Filter by game on specific date: check gamesToday for today, or schedule array
+      var today = localDateStr();
+      if (_playersDateFilter === today) {
+        if (!p.gamesToday) return false;
+      } else if (p.schedule && p.schedule.length) {
+        var hasGame = p.schedule.some(function(g) { return g.date === _playersDateFilter; });
+        if (!hasGame) return false;
+      } else {
+        return false;
+      }
+    }
     return true;
   });
 
