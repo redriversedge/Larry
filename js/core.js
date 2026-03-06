@@ -782,7 +782,6 @@ function startAutoRefresh() {
   // Then every 2 minutes
   AUTO_REFRESH_TIMER = setInterval(function() {
     ESPNSync.syncAll();
-    updateSyncIndicator();
   }, 2 * 60 * 1000);
 }
 
@@ -919,15 +918,21 @@ function closeStatsKey() {
 }
 
 // --- SYNC INDICATOR ---
-function updateSyncIndicator() {
+function updateSyncIndicator(status) {
   var el = document.getElementById('sync-status');
   if (!el) return;
-  if (S.espn.connected && S.espn.lastSync) {
+  if (status === 'syncing') {
+    el.className = 'sync-indicator syncing';
+    el.innerHTML = 'Syncing...';
+  } else if (status === 'error') {
+    el.className = 'sync-indicator error';
+    el.innerHTML = 'Sync error';
+  } else if (S.espn.connected && S.espn.lastSync) {
     el.className = 'sync-indicator connected';
-    el.innerHTML = '<span class="sync-pulse"></span>' + timeSince(S.espn.lastSync);
+    el.innerHTML = timeSince(S.espn.lastSync);
   } else {
     el.className = 'sync-indicator';
-    el.innerHTML = '\u26AA Not connected';
+    el.innerHTML = 'Not connected';
   }
 }
 
