@@ -789,9 +789,8 @@ function renderROSProjections() {
 
 function renderSchedulePage() {
   var html = '<div class="card"><div class="card-header">Team Schedule Grid</div>';
-  html += '<p class="muted text-sm">Game counts by day for this matchup period.</p>';
+  html += '<p class="muted text-sm">Estimated game schedule for this matchup period. Based on ~3.5 games/week per NBA team.</p>';
 
-  // Build schedule grid
   var myPlayers = (S.myTeam.players || []).filter(function(p) { return p.slotId < 12; });
   if (!myPlayers.length) { html += '<p class="muted">No roster data.</p></div>'; return html; }
 
@@ -810,12 +809,34 @@ function renderSchedulePage() {
   html += '<th>Total</th></tr></thead><tbody>';
 
   var dailyTotals = new Array(7).fill(0);
+
   myPlayers.forEach(function(p) {
     html += '<tr><td style="text-align:left">' + esc(p.name) + '</td>';
     var total = 0;
+
     days.forEach(function(day, di) {
-      var hasGame = p.gamesToday && di === 0; // Simplified: we only know today
-      html += '<td class="sched-cell ' + (hasGame ? 'has-game' : '') + '">' + (hasGame ? p.nbaTeam : '-') + '</td>';
+      var hasGame = false;
+
+      // Check real schedule data first
+      if (p.schedule && p.schedule.length) {
+        hasGame = p.schedule.some(function(g) { return g.date === day.dateStr; });
+      } else if (di === 0 && p.gamesToday) {
+        hasGame = true;
+      } else {
+        // Estimate: NBA teams play ~3-4 games/week, roughly every other day
+        // Use a simple hash to distribute games across the week per team
+        var teamHash = 0;
+        var team = p.nbaTeam || '';
+        for (var c = 0; c < team.length; c++) teamHash += team.charCodeAt(c);
+        // Each team gets ~3-4 game days per week
+        var gameDays = [(teamHash % 7), ((teamHash + 2) % 7), ((teamHash + 4) % 7)];
+        if (teamHash % 3 === 0) gameDays.push((teamHash + 5) % 7);
+        hasGame = gameDays.indexOf(di) >= 0;
+      }
+
+      var cellContent = hasGame ? p.nbaTeam : '-';
+      var cellCls = hasGame ? 'has-game' : '';
+      html += '<td class="sched-cell ' + cellCls + '">' + cellContent + '</td>';
       if (hasGame) { total++; dailyTotals[di]++; }
     });
     html += '<td><strong>' + total + '</strong></td></tr>';
