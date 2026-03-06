@@ -20,7 +20,7 @@ exports.handler = async function(event) {
 
   try {
     const body = JSON.parse(event.body);
-    const { messages, context } = body;
+    const { messages, system: clientSystem, context } = body;
 
     if (!messages || !Array.isArray(messages)) {
       return { statusCode: 400, headers, body: JSON.stringify({ error: 'Messages array required' }) };
@@ -31,7 +31,8 @@ exports.handler = async function(event) {
       return { statusCode: 500, headers, body: JSON.stringify({ error: 'ANTHROPIC_API_KEY not configured. Add it in Netlify site settings > Environment variables.' }) };
     }
 
-    const systemPrompt = buildSystemPrompt(context || {});
+    // Use client-provided system prompt if available, otherwise build from context
+    const systemPrompt = clientSystem || buildSystemPrompt(context || {});
 
     const payload = JSON.stringify({
       model: 'claude-sonnet-4-20250514',
@@ -50,7 +51,7 @@ exports.handler = async function(event) {
       });
     }
 
-    return { statusCode: 200, headers, body: JSON.stringify({ response: responseText }) };
+    return { statusCode: 200, headers, body: JSON.stringify({ content: responseText }) };
 
   } catch (error) {
     console.error('Larry chat error:', error.message);
