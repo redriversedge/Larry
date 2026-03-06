@@ -336,7 +336,7 @@ function renderMatchupProjections(cats) {
 
   // Build games remaining map
   var gamesMap = {};
-  myPlayers.concat(oppPlayers).forEach(function(p) { gamesMap[p.id] = p.gamesRemaining || 2; });
+  myPlayers.concat(oppPlayers).forEach(function(p) { gamesMap[p.id] = p.gamesRemaining || 0; });
 
   var probs = Engines.monteCarloMatchup(myPlayers, oppPlayers, gamesMap, 3000);
 

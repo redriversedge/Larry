@@ -101,6 +101,21 @@ var Engines = (function() {
   function monteCarloMatchup(myPlayers, oppPlayers, gamesRemainingMap, simulations) {
     simulations = simulations || 5000;
     var cats = getOrderedCategories();
+
+    // If no games remaining data at all, use a reasonable default
+    var hasAnyGames = false;
+    if (gamesRemainingMap) {
+      Object.keys(gamesRemainingMap).forEach(function(k) {
+        if (gamesRemainingMap[k] > 0) hasAnyGames = true;
+      });
+    }
+    if (!hasAnyGames) {
+      // Fallback: estimate 2 games remaining per player
+      myPlayers.concat(oppPlayers).forEach(function(p) {
+        if (!gamesRemainingMap) gamesRemainingMap = {};
+        gamesRemainingMap[p.id] = 2;
+      });
+    }
     var results = {};
     cats.forEach(function(cat) { results[cat.abbr] = { wins: 0, losses: 0, ties: 0 }; });
 
