@@ -66,6 +66,8 @@ body {
 .header-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
 .sync-indicator { font-size: 0.72rem; color: var(--text-muted); white-space: nowrap; }
 .sync-indicator.connected { color: var(--accent-green); }
+.sync-indicator.syncing { color: var(--accent-blue); }
+.sync-indicator.error { color: var(--accent-red); }
 
 /* --- MAIN CONTENT (GLOBAL SCROLL FIX) --- */
 #tab-content {

@@ -802,8 +802,7 @@ function renderDraftCenter() {
   players.sort(function(a,b) { return (b.durantScore || 0) - (a.durantScore || 0); });
 
   var html = '<div class="card">';
-  // v3 FIX: Scrollable container
-  html += '<div class="table-scroll" style="max-height:60vh;overflow-y:auto">';
+  html += '<div class="table-scroll">';
   html += '<table class="data-table compact">';
   html += '<thead><tr><th>#</th><th style="text-align:left">Player</th><th>DURANT</th><th>Z-Total</th>';
   cats.slice(0,5).forEach(function(cat) { html += '<th style="color:' + cat.color + '">' + cat.abbr + '</th>'; });
@@ -826,8 +825,7 @@ function renderDraftCenter() {
 }
 
 function renderSettingsPage() {
-  // v3 FIX: Scrollable container
-  var html = '<div style="max-height:70vh;overflow-y:auto;-webkit-overflow-scrolling:touch">';
+  var html = '';
 
   // Theme picker
   html += '<div class="card"><div class="card-header">Theme</div>';
@@ -864,7 +862,6 @@ function renderSettingsPage() {
   html += '<button class="btn btn-danger btn-full" onclick="if(confirm(\'Reset all data?\'))resetSetup()">Reset All Data</button>';
   html += '</div>';
 
-  html += '</div>';
   return html;
 }
 
