@@ -27,6 +27,10 @@ var _matchupSubTab = 'score';
 // --- TRADE STATE ---
 var _tradeSearchTerm = '';
 
+// --- DRAFT STATE ---
+var _draftTierFilter = 'all';
+var _draftRoundFilter = 'all';
+
 
 // ========== ROSTER TAB ==========
 
@@ -911,17 +915,57 @@ function renderDraftCenter() {
   Engines.computeDURANT(players);
   players.sort(function(a,b) { return (b.durantScore || 0) - (a.durantScore || 0); });
 
-  var html = '<div class="card">';
-  html += '<div class="table-scroll">';
-  html += '<table class="data-table compact">';
-  html += '<thead><tr><th>#</th><th style="text-align:left">Player</th><th>DURANT</th><th>Z-Total</th>';
+  // Assign tiers and projected rounds
+  players.forEach(function(p, i) {
+    var rank = i + 1;
+    if (rank <= Math.ceil(players.length * 0.05)) p.tier = 'Elite';
+    else if (rank <= Math.ceil(players.length * 0.15)) p.tier = 'Great';
+    else if (rank <= Math.ceil(players.length * 0.35)) p.tier = 'Good';
+    else if (rank <= Math.ceil(players.length * 0.60)) p.tier = 'Average';
+    else p.tier = 'Below Avg';
+
+    p.projectedRound = Math.ceil(rank / S.league.teamCount) || 1;
+  });
+
+  var maxRound = Math.ceil(players.length / Math.max(S.league.teamCount, 1));
+
+  // Filters
+  var html = '<div class="filter-bar"><div class="filter-row">';
+  html += '<select class="filter-select" onchange="_draftTierFilter=this.value;openLeagueSub(\'draftCenter\')">';
+  html += '<option value="all"' + (_draftTierFilter === 'all' ? ' selected' : '') + '>All Tiers</option>';
+  ['Elite','Great','Good','Average','Below Avg'].forEach(function(tier) {
+    html += '<option value="' + tier + '"' + (_draftTierFilter === tier ? ' selected' : '') + '>' + tier + '</option>';
+  });
+  html += '</select>';
+
+  html += '<select class="filter-select" onchange="_draftRoundFilter=this.value;openLeagueSub(\'draftCenter\')">';
+  html += '<option value="all"' + (_draftRoundFilter === 'all' ? ' selected' : '') + '>All Rounds</option>';
+  for (var r = 1; r <= Math.min(maxRound, 15); r++) {
+    html += '<option value="' + r + '"' + (_draftRoundFilter === String(r) ? ' selected' : '') + '>Round ' + r + '</option>';
+  }
+  html += '</select>';
+  html += '</div></div>';
+
+  // Apply filters
+  var filtered = players.filter(function(p) {
+    if (_draftTierFilter !== 'all' && p.tier !== _draftTierFilter) return false;
+    if (_draftRoundFilter !== 'all' && String(p.projectedRound) !== _draftRoundFilter) return false;
+    return true;
+  });
+
+  html += '<div class="text-xs muted" style="margin-bottom:6px">' + filtered.length + ' players</div>';
+  html += '<div class="card"><div class="table-scroll"><table class="data-table compact">';
+  html += '<thead><tr><th>#</th><th style="text-align:left">Player</th><th>Tier</th><th>Rd</th><th>DURANT</th><th>Z-Total</th>';
   cats.slice(0,5).forEach(function(cat) { html += '<th style="color:' + cat.color + '">' + cat.abbr + '</th>'; });
   html += '</tr></thead><tbody>';
 
-  players.slice(0, 150).forEach(function(p, i) {
+  var tierColors = {Elite:'var(--accent-gold)',Great:'var(--accent-green)',Good:'var(--accent-blue)',Average:'var(--text-secondary)','Below Avg':'var(--accent-red)'};
+  filtered.slice(0, 150).forEach(function(p, i) {
     html += '<tr class="' + (p.onTeamId === S.myTeam.teamId ? 'my-team-row' : '') + '">';
-    html += '<td>' + (i+1) + '</td>';
+    html += '<td>' + (p.durantRank || i+1) + '</td>';
     html += '<td style="text-align:left;cursor:pointer" onclick="openPlayerPopup(' + p.id + ')">' + esc(p.name) + '</td>';
+    html += '<td style="color:' + (tierColors[p.tier] || 'inherit') + ';font-size:0.7rem">' + p.tier + '</td>';
+    html += '<td>' + p.projectedRound + '</td>';
     html += '<td><strong>' + fmt(p.durantScore || 0, 1) + '</strong></td>';
     html += '<td>' + fmt(p.zScores ? p.zScores.total : 0, 2) + '</td>';
     cats.slice(0,5).forEach(function(cat) {
