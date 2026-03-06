@@ -24,6 +24,9 @@ var _rosterStatView = 'season';
 // --- MATCHUP STATE ---
 var _matchupSubTab = 'score';
 
+// --- TRADE STATE ---
+var _tradeSearchTerm = '';
+
 
 // ========== ROSTER TAB ==========
 
@@ -648,6 +651,7 @@ function renderLeagueSubPage(container) {
   }
 
   container.innerHTML = html;
+  if (page === 'trades') setTimeout(renderTradeResults, 0);
 }
 
 
@@ -684,33 +688,60 @@ function renderStandings() {
 function renderTradeCenter() {
   var html = '';
   if (S.allPlayers.length) Engines.computeDURANT(S.allPlayers);
-  // Trade Finder with 50%+ acceptance filter (v3)
+
+  // Search for specific player trades
   html += '<div class="card"><div class="card-header">Trade Finder</div>';
-  var trades = Engines.findTrades({ minAcceptance: 50 });
-  if (!trades.length) {
-    html += '<div class="empty-state"><p>No strong trade matches found with 50%+ acceptance likelihood.</p></div>';
-  } else {
-    trades.slice(0, 10).forEach(function(t) {
-      html += '<div class="decision-item" style="cursor:pointer" onclick="openPlayerPopup(' + t.get.id + ')">';
-      html += '<div class="decision-content">';
-      html += '<div class="decision-player">';
-      html += '<span class="stat-negative">Give: ' + esc(t.give.name) + '</span> \u{2194}\u{FE0F} ';
-      html += '<span class="stat-positive">Get: ' + esc(t.get.name) + '</span>';
-      html += '</div>';
-      html += '<div class="decision-replacement">';
-      html += esc(t.team.name) + ' | Acceptance: ' + t.acceptanceLikelihood + '% | ';
-      html += 'Helps us: ' + (t.helpsUs.length ? t.helpsUs.join(', ') : 'even') + ' | ';
-      html += 'Helps them: ' + (t.helpsThem.length ? t.helpsThem.join(', ') : 'even');
-      html += '</div></div></div>';
-    });
-  }
-  html += '</div>';
+  html += '<input type="text" class="filter-search" placeholder="Search for a player to see trade options..." ';
+  html += 'value="' + esc(_tradeSearchTerm) + '" oninput="_tradeSearchTerm=this.value;renderTradeResults()">';
+  html += '<div id="trade-results"></div></div>';
 
   // Trade Analyzer
   html += '<div class="card"><div class="card-header">Trade Analyzer</div>';
   html += '<p class="muted text-sm">Select players in popups to analyze trades. Coming in next update.</p>';
   html += '</div>';
   return html;
+}
+
+function renderTradeResults() {
+  var container = document.getElementById('trade-results');
+  if (!container) return;
+
+  var trades;
+  if (_tradeSearchTerm && _tradeSearchTerm.length >= 2) {
+    // Search mode: find all trades involving this player name, any acceptance %
+    var allTrades = Engines.findTrades({ minAcceptance: 0 });
+    var term = _tradeSearchTerm.toLowerCase();
+    trades = allTrades.filter(function(t) {
+      return (t.give.name || '').toLowerCase().indexOf(term) >= 0 ||
+             (t.get.name || '').toLowerCase().indexOf(term) >= 0;
+    });
+  } else {
+    // Default: 50%+ acceptance
+    trades = Engines.findTrades({ minAcceptance: 50 });
+  }
+
+  if (!trades.length) {
+    container.innerHTML = '<div class="empty-state"><p>' +
+      (_tradeSearchTerm ? 'No trade matches for "' + esc(_tradeSearchTerm) + '".' : 'No strong trade matches found with 50%+ acceptance likelihood.') +
+      '</p></div>';
+    return;
+  }
+
+  var html = '<div class="text-xs muted" style="margin:8px 0">' + trades.length + ' trade' + (trades.length !== 1 ? 's' : '') + ' found</div>';
+  trades.slice(0, 15).forEach(function(t) {
+    html += '<div class="decision-item" style="cursor:pointer" onclick="openPlayerPopup(' + t.get.id + ')">';
+    html += '<div class="decision-content">';
+    html += '<div class="decision-player">';
+    html += '<span class="stat-negative">Give: ' + esc(t.give.name) + '</span> ';
+    html += '<span class="stat-positive">Get: ' + esc(t.get.name) + '</span>';
+    html += '</div>';
+    html += '<div class="decision-replacement">';
+    html += esc(t.team.name) + ' | Acceptance: ' + t.acceptanceLikelihood + '% | ';
+    html += 'Helps us: ' + (t.helpsUs.length ? t.helpsUs.join(', ') : 'even') + ' | ';
+    html += 'Helps them: ' + (t.helpsThem.length ? t.helpsThem.join(', ') : 'even');
+    html += '</div></div></div>';
+  });
+  container.innerHTML = html;
 }
 
 function renderTeamAnalyzer() {
