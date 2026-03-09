@@ -4,12 +4,12 @@
 // ============================================================
 
 var FIREBASE_CONFIG = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT.firebaseapp.com",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_PROJECT.appspot.com",
-  messagingSenderId: "YOUR_SENDER_ID",
-  appId: "YOUR_APP_ID"
+  apiKey: "AIzaSyApE1xcCN_5xEnsaj7Q2SugX0CGdzpVE",
+  authDomain: "lilac-d0caf.firebaseapp.com",
+  projectId: "lilac-d0caf",
+  storageBucket: "lilac-d0caf.firebasestorage.app",
+  messagingSenderId: "8272372665",
+  appId: "1:8272372665:web:ba17e54fbe6169111d8c68"
 };
 
 // Initialize Firebase

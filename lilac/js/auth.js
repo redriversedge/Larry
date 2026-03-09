@@ -4,8 +4,8 @@
 
 // Default users - can be customized
 var LILAC_USERS = [
-  { name: 'User 1', initial: 'U' },
-  { name: 'User 2', initial: 'U' }
+  { name: 'Clifford', initial: 'C' },
+  { name: 'Michelle', initial: 'M' }
 ];
 
 function getCurrentUser() {
