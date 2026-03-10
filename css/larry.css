@@ -348,18 +348,20 @@ body {
 /* --- MATCHUP --- */
 .matchup-header {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 12px 0; margin-bottom: 12px;
+  padding: 16px 12px; margin-bottom: 12px;
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
 }
 .matchup-team { text-align: center; flex: 1; }
-.matchup-team .team-name { font-weight: 700; font-size: 0.88rem; display: block; }
+.matchup-team .team-name { font-weight: 700; font-size: 0.85rem; display: block; line-height: 1.3; }
 .matchup-team .team-record { font-size: 0.72rem; color: var(--text-muted); }
 .matchup-vs { text-align: center; padding: 0 12px; }
 .matchup-record { font-size: 1.3rem; font-weight: 800; color: var(--accent-blue); }
-.cat-scores { display: flex; flex-direction: column; gap: 4px; }
+.cat-scores { display: flex; flex-direction: column; gap: 3px; }
 .cat-bar {
-  display: flex; align-items: center; padding: 6px 8px;
+  display: flex; align-items: center; padding: 7px 8px;
   background: var(--bg-surface); border-radius: var(--radius-sm);
-  font-size: 0.82rem;
+  font-size: 0.82rem; transition: background 0.15s;
 }
 .cat-bar .cat-name { min-width: 36px; font-weight: 600; font-size: 0.72rem; }
 .cat-bar .cat-val { font-weight: 600; min-width: 48px; text-align: center; }
@@ -378,17 +380,22 @@ body {
 .no-game { opacity: 0.7; }
 
 /* --- LEAGUE MENU --- */
-.league-menu { display: flex; flex-direction: column; gap: 2px; }
+.league-menu { display: flex; flex-direction: column; gap: 3px; }
 .menu-item {
   display: flex; align-items: center; gap: 12px; padding: 14px;
   background: var(--bg-card); border: 1px solid var(--border);
   border-radius: var(--radius); cursor: pointer; transition: var(--transition);
   -webkit-tap-highlight-color: transparent; width: 100%; text-align: left;
 }
-.menu-item:hover { background: var(--bg-hover); }
+.menu-item:hover { background: var(--bg-hover); border-color: var(--accent-blue); }
+.menu-item:active { transform: scale(0.99); }
 .menu-icon { font-size: 1.3rem; width: 28px; text-align: center; }
 .menu-label { font-size: 0.88rem; font-weight: 600; color: var(--text-primary); flex: 1; }
 .menu-arrow { color: var(--text-muted); font-size: 1.2rem; }
+.menu-section-label {
+  font-size: 0.65rem; font-weight: 700; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.8px; padding: 10px 4px 4px;
+}
 .menu-badge {
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 18px; height: 18px; border-radius: 9px;
@@ -400,13 +407,15 @@ body {
 .sub-page-header h2 { font-size: 1.15rem; font-weight: 700; }
 
 /* --- DASHBOARD QUICK CARDS --- */
-.quick-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
+.quick-cards { display: flex; gap: 6px; margin-bottom: 12px; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+.quick-cards::-webkit-scrollbar { display: none; }
 .quick-card {
   background: var(--bg-card); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: 12px; text-align: center;
+  border-radius: var(--radius); padding: 10px 12px; text-align: center;
+  flex: 1; min-width: 68px;
 }
-.quick-card .qc-value { font-size: 1.3rem; font-weight: 800; }
-.quick-card .qc-label { font-size: 0.68rem; color: var(--text-muted); margin-top: 2px; text-transform: uppercase; letter-spacing: 0.5px; }
+.quick-card .qc-value { font-size: 1.15rem; font-weight: 800; white-space: nowrap; }
+.quick-card .qc-label { font-size: 0.62rem; color: var(--text-muted); margin-top: 2px; text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap; }
 
 /* --- DECISION ITEMS --- */
 .decision-list { display: flex; flex-direction: column; gap: 8px; }
@@ -715,7 +724,7 @@ body {
 /* --- RESPONSIVE --- */
 @media (min-width: 768px) {
   #tab-content { max-width: 720px; margin: 0 auto; padding: 16px; padding-bottom: calc(var(--nav-height) + 16px); }
-  .quick-cards { grid-template-columns: repeat(4, 1fr); }
+  .quick-cards { flex-wrap: nowrap; }
   .trade-setup { flex-direction: row; }
   .player-popup { border-radius: 16px; max-height: 80vh; }
   #player-popup-overlay { align-items: center; }
@@ -936,3 +945,58 @@ body {
 
 /* --- ERROR ICON --- */
 .error-icon { text-align: center; font-size: 3rem; margin-bottom: 8px; }
+
+/* --- DASHBOARD ENHANCEMENTS --- */
+.dashboard-alert {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 10px 12px; margin-bottom: 10px;
+  background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.25);
+  border-radius: var(--radius-sm); font-size: 0.8rem;
+  line-height: 1.4; color: var(--accent-red);
+}
+.dashboard-alert-icon { flex-shrink: 0; font-size: 1rem; }
+.injured-name {
+  cursor: pointer; text-decoration: underline;
+  text-decoration-style: dotted; text-underline-offset: 2px;
+}
+.injured-name:hover { color: var(--text-primary); }
+.playoff-mini {
+  text-align: center; padding: 6px 0 2px;
+  font-size: 0.78rem; font-weight: 700;
+}
+
+/* --- MATCHUP OPPONENT INSIGHT --- */
+.opponent-insight {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+  padding: 8px 0;
+}
+.insight-group { font-size: 0.78rem; }
+.insight-group-title {
+  font-weight: 700; font-size: 0.7rem;
+  text-transform: uppercase; letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+.insight-cat {
+  display: inline-block; padding: 2px 6px; margin: 1px 2px;
+  border-radius: 4px; font-size: 0.72rem; font-weight: 600;
+}
+.insight-cat.strong { background: rgba(34,197,94,0.15); color: var(--accent-green); }
+.insight-cat.weak { background: rgba(239,68,68,0.15); color: var(--accent-red); }
+
+/* --- OPPONENT INJURY MINI --- */
+.opp-injury-mini {
+  font-size: 0.78rem; padding: 6px 0;
+  color: var(--text-secondary);
+}
+.opp-injury-mini .injury-count {
+  font-weight: 700; color: var(--accent-gold);
+}
+
+/* --- PLAYER TREND BADGE --- */
+.trend-badge {
+  display: inline-block; font-size: 0.6rem; font-weight: 700;
+  padding: 1px 4px; border-radius: 3px; margin-left: 4px;
+  vertical-align: middle; line-height: 1.3;
+}
+.trend-badge.hot { background: rgba(34,197,94,0.2); color: var(--accent-green); }
+.trend-badge.cold { background: rgba(239,68,68,0.2); color: var(--accent-red); }

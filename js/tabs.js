@@ -117,6 +117,21 @@ function renderDashboardInline() {
   html += '<div class="card-header" onclick="this.nextElementSibling.classList.toggle(\'hidden\')">Dashboard <span class="text-xs muted">\u25BC</span></div>';
   html += '<div>';
 
+  // Injury alert banner (from News & Injuries)
+  var myPlayers = S.myTeam.players || [];
+  var injuredStarters = myPlayers.filter(function(p) {
+    return p.slotId < 12 && p.injuryStatus && p.injuryStatus !== 'ACTIVE' && p.injuryStatus !== 'HEALTHY';
+  });
+  if (injuredStarters.length) {
+    html += '<div class="dashboard-alert">';
+    html += '<span class="dashboard-alert-icon">\u{26A0}\u{FE0F}</span>';
+    html += '<span>' + injuredStarters.length + ' injured starter' + (injuredStarters.length > 1 ? 's' : '') + ': ';
+    html += injuredStarters.map(function(p) {
+      return '<span class="injured-name" onclick="openPlayerPopup(' + p.id + ')">' + statusBadge(p.injuryStatus) + ' ' + esc(p.name) + '</span>';
+    }).join(', ');
+    html += '</span></div>';
+  }
+
   // Quick cards
   html += '<div class="quick-cards">';
   var rec = S.myTeam.record || {wins:0,losses:0,ties:0};
@@ -126,8 +141,16 @@ function renderDashboardInline() {
   var mr = S.matchup.myRecord || {wins:0,losses:0,ties:0};
   html += '<div class="quick-card"><div class="qc-value">' + mr.wins + '-' + mr.losses + '-' + mr.ties + '</div><div class="qc-label">Matchup</div></div>';
 
-  // Playoff seed
-  html += '<div class="quick-card"><div class="qc-value">#' + (S.myTeam.playoffSeed || '-') + '</div><div class="qc-label">Seed</div></div>';
+  // Playoff seed with status color
+  var playoffSeed = S.myTeam.playoffSeed || 0;
+  var playoffTeams = S.league.playoffTeams || Math.ceil(S.teams.length / 2);
+  var inPlayoffs = playoffSeed > 0 && playoffSeed <= playoffTeams;
+  html += '<div class="quick-card"><div class="qc-value' + (inPlayoffs ? ' stat-positive' : (playoffSeed > 0 ? ' stat-negative' : '')) + '">#' + (playoffSeed || '-') + '</div><div class="qc-label">Seed</div></div>';
+
+  // Games today count (from Schedule)
+  var startersPlaying = myPlayers.filter(function(p) { return p.slotId < 12 && p.gamesToday; }).length;
+  var totalStarters = myPlayers.filter(function(p) { return p.slotId < 12; }).length;
+  html += '<div class="quick-card"><div class="qc-value">' + startersPlaying + '/' + totalStarters + '</div><div class="qc-label">Playing Today</div></div>';
 
   // Waiver rank
   html += '<div class="quick-card"><div class="qc-value">#' + (S.myTeam.waiverRank || '-') + '</div><div class="qc-label">Waiver</div></div>';
@@ -146,6 +169,25 @@ function renderDashboardInline() {
     });
     html += '</div>';
   }
+
+  // Playoff position mini-bar (from Playoff Projector)
+  if (S.teams.length > 0 && playoffSeed > 0) {
+    var sorted = S.teams.slice().sort(function(a,b) {
+      var aw = a.record ? a.record.wins : 0; var bw = b.record ? b.record.wins : 0;
+      return bw !== aw ? bw - aw : (b.pointsFor || 0) - (a.pointsFor || 0);
+    });
+    var myIdx = sorted.findIndex(function(t) { return t.teamId === S.myTeam.teamId; });
+    if (myIdx >= 0) {
+      var pos = myIdx + 1;
+      var statusText = pos <= playoffTeams ? 'In playoff position' : (pos - playoffTeams) + ' spot' + (pos - playoffTeams > 1 ? 's' : '') + ' out';
+      var statusColor = pos <= playoffTeams ? 'var(--accent-green)' : 'var(--accent-red)';
+      html += '<div class="playoff-mini" style="color:' + statusColor + '">';
+      html += '<span class="playoff-mini-label">' + statusText + '</span>';
+      html += ' <span class="text-xs muted">(' + playoffTeams + ' make playoffs)</span>';
+      html += '</div>';
+    }
+  }
+
   html += '</div></div>';
   return html;
 }
@@ -232,7 +274,11 @@ function renderPlayerCell(p) {
   html += '<span class="player-initials" style="width:24px;height:18px;font-size:0.55rem;background:' + color + ';display:none;border-radius:4px">' + initials + '</span>';
   html += '</div>';
   html += '<div class="player-cell-info">';
-  html += '<span class="player-name">' + statusBadge(p.injuryStatus) + ' ' + esc(p.name) + '</span>';
+  html += '<span class="player-name">' + statusBadge(p.injuryStatus) + ' ' + esc(p.name);
+  // Trend badge (from Stats & Trends)
+  if (p.trend === 'hot') html += '<span class="trend-badge hot">\u2191 HOT</span>';
+  else if (p.trend === 'cold') html += '<span class="trend-badge cold">\u2193 COLD</span>';
+  html += '</span>';
   html += '<span class="player-meta">' + p.positions.join('/') + ' - ' + p.nbaTeam + '</span>';
   html += '</div></div>';
   return html;
@@ -301,6 +347,9 @@ function renderMatchupScore(cats) {
   // Team of the Week (v3: moved to matchup)
   html += renderTeamOfWeek(cats);
 
+  // Opponent Insight (from Opponent Scout + News & Injuries)
+  html += renderOpponentInsight(cats);
+
   return html;
 }
 
@@ -357,6 +406,56 @@ function renderTeamOfWeek(cats) {
     }
   });
   html += '</div></div></div>';
+  return html;
+}
+
+function renderOpponentInsight(cats) {
+  var oppTeam = S.teams.find(function(t) { return t.teamId === S.matchup.opponentTeamId; });
+  if (!oppTeam || !oppTeam.players) return '';
+
+  // Strengths & weaknesses from z-scores
+  var oppCatTotals = [];
+  cats.forEach(function(cat) {
+    var sum = 0;
+    (oppTeam.players || []).forEach(function(p) {
+      if (p.slotId < 12) sum += (p.zScores ? p.zScores[cat.abbr] || 0 : 0);
+    });
+    oppCatTotals.push({ cat: cat, z: sum });
+  });
+  oppCatTotals.sort(function(a, b) { return b.z - a.z; });
+
+  var html = '<div class="card"><div class="card-header" onclick="this.nextElementSibling.classList.toggle(\'hidden\')">Opponent Insight <span class="text-xs muted">\u25BC</span></div>';
+  html += '<div class="hidden">';
+
+  // Strengths & weaknesses
+  html += '<div class="opponent-insight">';
+  html += '<div class="insight-group"><div class="insight-group-title" style="color:var(--accent-green)">Their strengths</div>';
+  oppCatTotals.slice(0, 3).forEach(function(ct) {
+    html += '<span class="insight-cat strong" style="border-left:2px solid ' + ct.cat.color + '">' + ct.cat.abbr + ' (' + fmt(ct.z, 1) + ')</span>';
+  });
+  html += '</div>';
+  html += '<div class="insight-group"><div class="insight-group-title" style="color:var(--accent-red)">Their weaknesses</div>';
+  oppCatTotals.slice(-3).reverse().forEach(function(ct) {
+    html += '<span class="insight-cat weak" style="border-left:2px solid ' + ct.cat.color + '">' + ct.cat.abbr + ' (' + fmt(ct.z, 1) + ')</span>';
+  });
+  html += '</div></div>';
+
+  // Opponent injuries
+  var oppInjured = (oppTeam.players || []).filter(function(p) {
+    return p.injuryStatus && p.injuryStatus !== 'ACTIVE' && p.injuryStatus !== 'HEALTHY';
+  });
+  if (oppInjured.length) {
+    var oppOut = oppInjured.filter(function(p) {
+      return p.injuryStatus === 'OUT' || p.injuryStatus === 'IR' || p.injuryStatus === 'INJURED_RESERVE' || p.injuryStatus === 'SUSPENSION';
+    });
+    html += '<div class="opp-injury-mini">';
+    html += '<span class="injury-count">' + oppInjured.length + '</span> opponent player' + (oppInjured.length > 1 ? 's' : '') + ' injured';
+    if (oppOut.length) html += ' (<span style="color:var(--accent-red)">' + oppOut.length + ' OUT</span>)';
+    html += '</div>';
+  }
+
+  html += '<div style="padding:4px 0"><a style="font-size:0.75rem;color:var(--accent-blue);cursor:pointer;text-decoration:none" onclick="openLeagueSub(\'opponentScout\')">Full opponent scouting report \u276F</a></div>';
+  html += '</div></div>';
   return html;
 }
 
@@ -617,12 +716,26 @@ function renderLeague(container) {
 
   var html = '<div class="tab-header"><h2>League</h2></div>';
   html += '<div class="league-menu">';
-  LEAGUE_MENU.forEach(function(item) {
-    html += '<button class="menu-item" onclick="S.leagueSubPage=\'' + item.id + '\';render()">';
-    html += '<span class="menu-icon">' + item.icon + '</span>';
-    html += '<span class="menu-label">' + item.label + '</span>';
-    html += '<span class="menu-arrow">\u276F</span>';
-    html += '</button>';
+
+  // Group menu items with section headers
+  var sections = {
+    'Overview': ['standings', 'projectedStandings', 'playoffs', 'timeline'],
+    'Analysis': ['trades', 'teamAnalyzer', 'statsTrends', 'projections', 'opponentScout'],
+    'Info': ['news', 'schedule', 'draftCenter'],
+    'System': ['notifications', 'settings']
+  };
+  var sectionKeys = ['Overview', 'Analysis', 'Info', 'System'];
+  sectionKeys.forEach(function(section) {
+    html += '<div class="menu-section-label">' + section + '</div>';
+    sections[section].forEach(function(id) {
+      var item = LEAGUE_MENU.find(function(m) { return m.id === id; });
+      if (!item) return;
+      html += '<button class="menu-item" onclick="S.leagueSubPage=\'' + item.id + '\';render()">';
+      html += '<span class="menu-icon">' + item.icon + '</span>';
+      html += '<span class="menu-label">' + item.label + '</span>';
+      html += '<span class="menu-arrow">\u276F</span>';
+      html += '</button>';
+    });
   });
   html += '</div>';
   container.innerHTML = html;
@@ -1121,8 +1234,8 @@ function renderOpponentScout() {
   html += '<thead><tr><th>Category</th><th>You</th><th>Them</th><th>Diff</th><th>Status</th></tr></thead><tbody>';
 
   cats.forEach(function(cat) {
-    var myVal = S.matchup.myScores[cat.abbr] || 0;
-    var oppVal = S.matchup.oppScores[cat.abbr] || 0;
+    var myVal = S.matchup.myScores ? S.matchup.myScores[cat.abbr] || 0 : 0;
+    var oppVal = S.matchup.oppScores ? S.matchup.oppScores[cat.abbr] || 0 : 0;
     var diff = myVal - oppVal;
     var winning = cat.isNegative ? (diff < 0) : (diff > 0);
     var losing = cat.isNegative ? (diff > 0) : (diff < 0);

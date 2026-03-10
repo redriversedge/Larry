@@ -57,6 +57,7 @@ var TABS = [
 ];
 
 var LEAGUE_MENU = [
+  { id: 'standings', label: 'Standings', icon: '\u{1F3C6}' },
   { id: 'trades', label: 'Trade Center', icon: '\u{1F4E6}' },
   { id: 'teamAnalyzer', label: 'Team Analyzer', icon: '\u{1F50D}' },
   { id: 'statsTrends', label: 'Stats & Trends', icon: '\u{1F4C8}' },

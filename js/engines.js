@@ -397,7 +397,7 @@ var Engines = (function() {
     if (!S.teams.length) return 0;
     var teamTotals = S.teams.map(function(t) {
       var sum = 0;
-      t.players.forEach(function(p) {
+      (t.players || []).forEach(function(p) {
         if (p.slotId < 12 && p.stats && p.stats.season) sum += p.stats.season[catAbbr] || 0;
       });
       return { teamId: t.teamId, total: sum };
@@ -558,6 +558,7 @@ var Engines = (function() {
     // For each other team, find mutually beneficial trades
     S.teams.forEach(function(team) {
       if (team.teamId === S.myTeam.teamId) return;
+      if (!team.players || !team.players.length) return;
 
       // What are they weak in?
       var theirWeakCats = [];
@@ -579,7 +580,7 @@ var Engines = (function() {
           myStrengthForThem += myP.zScores ? myP.zScores[cat] || 0 : 0;
         });
 
-        team.players.forEach(function(theirP) {
+        (team.players || []).forEach(function(theirP) {
           if (theirP.slotId === 13) return;
           var theirStrengthForUs = 0;
           weakCats.forEach(function(cat) {
