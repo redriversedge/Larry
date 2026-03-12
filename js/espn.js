@@ -620,6 +620,63 @@ var ESPNSync = (function() {
     S.matchup.oppGamesRemaining = oppGames;
   }
 
+  // --- PER-GAME STAT HELPER ---
+  function getPerGameStats(player, period) {
+    // period: 'season' | 'last7' | 'last15' | 'last30'
+    var stats = player.stats && player.stats[period] ? player.stats[period] : {};
+    var gp = player.stats && player.stats[period + 'GP'] ? player.stats[period + 'GP'] : (player.gamesPlayed || 0);
+    if (!gp || gp === 0) return null; // blank, not zero
+    var perGame = {};
+    Object.keys(stats).forEach(function(cat) {
+      if (stats[cat] != null && stats[cat] !== 0) {
+        perGame[cat] = parseFloat((stats[cat] / gp).toFixed(1));
+      }
+    });
+    return perGame;
+  }
+
+  // --- FETCH STATS FOR A SINGLE SCORING PERIOD (DAY) ---
+  function fetchScoringPeriodStats(scoringPeriodId) {
+    var url = PROXY_URL + '?view=kona_player_info&scoringPeriodId=' + scoringPeriodId;
+    var headers = {
+      'x-espn-league-id': S.espn.leagueId,
+      'x-espn-s2': S.espn.espnS2,
+      'x-espn-swid': S.espn.swid,
+      'x-espn-season': String(S.league.seasonId)
+    };
+    return fetch(url, { headers: headers })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        var statsMap = {};
+        // Parse kona_player_info response - same structure as the free agents fetch
+        // playerPoolEntries contains player objects with stats
+        var entries = data && data.playerPoolEntries ? data.playerPoolEntries : [];
+        entries.forEach(function(entry) {
+          var id = entry.playerId || (entry.playerPoolEntry && entry.playerPoolEntry.player && entry.playerPoolEntry.player.id);
+          var rawStats = entry.playerPoolEntry && entry.playerPoolEntry.player && entry.playerPoolEntry.player.stats;
+          if (id && rawStats) {
+            // Find stats for this specific scoring period
+            var periodStats = null;
+            (rawStats || []).forEach(function(s) {
+              if (s.scoringPeriodId === scoringPeriodId && s.statSourceId === 0) {
+                periodStats = s.stats;
+              }
+            });
+            if (periodStats) {
+              // Map ESPN stat IDs to abbreviations
+              var mapped = {};
+              Object.keys(periodStats).forEach(function(espnId) {
+                var abbr = ESPN_STAT_MAP[parseInt(espnId)];
+                if (abbr) mapped[abbr] = periodStats[espnId];
+              });
+              statsMap[id] = mapped;
+            }
+          }
+        });
+        return statsMap;
+      });
+  }
+
   var _lastLeagueData = null;
 
   return {
@@ -634,6 +691,8 @@ var ESPNSync = (function() {
     selectTeam: selectTeam,
     applyMyTeam: applyMyTeam,
     _lastLeagueData: _lastLeagueData,
-    parsePlayer: parsePlayer
+    parsePlayer: parsePlayer,
+    getPerGameStats: getPerGameStats,
+    fetchScoringPeriodStats: fetchScoringPeriodStats
   };
 })();
