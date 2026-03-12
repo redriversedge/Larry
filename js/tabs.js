@@ -434,6 +434,17 @@ function renderMatchupScore(cats) {
   // Schedule Advantage (v3 fix)
   html += renderScheduleAdvantage();
 
+  // 7-Day Schedule Grids (my team + opponent)
+  var mySchedPlayers = (S.myTeam.players || []).filter(function(p) { return p.slotId < 12; });
+  var oppSchedTeam = S.teams.find(function(t) { return t.teamId === S.matchup.opponentTeamId; });
+  var oppSchedPlayers = oppSchedTeam ? (oppSchedTeam.players || []).filter(function(p) { return p.slotId < 12; }).map(function(stub) {
+    return S.allPlayers.find(function(ap) { return ap.id === stub.id; }) || stub;
+  }) : [];
+  html += renderScheduleGrid(mySchedPlayers, 'My Team - Next 7 Days');
+  if (oppSchedPlayers.length) {
+    html += renderScheduleGrid(oppSchedPlayers, esc(S.matchup.opponentName || 'Opponent') + ' - Next 7 Days');
+  }
+
   // Team of the Week (v3: moved to matchup)
   html += renderTeamOfWeek(cats);
 
@@ -1238,12 +1249,9 @@ function renderROSProjections() {
   return html;
 }
 
-function renderSchedulePage() {
-  var html = '<div class="card"><div class="card-header">Team Schedule Grid</div>';
-  html += '<p class="muted text-sm">Estimated game schedule for this matchup period. Based on ~3.5 games/week per NBA team.</p>';
-
-  var myPlayers = (S.myTeam.players || []).filter(function(p) { return p.slotId < 12; });
-  if (!myPlayers.length) { html += '<p class="muted">No roster data.</p></div>'; return html; }
+function renderScheduleGrid(players, label) {
+  var html = '<div class="card"><div class="card-header">' + esc(label) + '</div>';
+  if (!players || !players.length) { html += '<p class="muted text-sm" style="padding:8px">No players.</p></div>'; return html; }
 
   var days = [];
   for (var d = 0; d < 7; d++) {
@@ -1261,25 +1269,21 @@ function renderSchedulePage() {
 
   var dailyTotals = new Array(7).fill(0);
 
-  myPlayers.forEach(function(p) {
+  players.forEach(function(p) {
     html += '<tr><td style="text-align:left">' + esc(p.name) + '</td>';
     var total = 0;
 
     days.forEach(function(day, di) {
       var hasGame = false;
 
-      // Check real schedule data first
       if (p.schedule && p.schedule.length) {
         hasGame = p.schedule.some(function(g) { return g.date === day.dateStr; });
       } else if (di === 0 && p.gamesToday) {
         hasGame = true;
       } else {
-        // Estimate: NBA teams play ~3-4 games/week, roughly every other day
-        // Use a simple hash to distribute games across the week per team
         var teamHash = 0;
         var team = p.nbaTeam || '';
         for (var c = 0; c < team.length; c++) teamHash += team.charCodeAt(c);
-        // Each team gets ~3-4 game days per week
         var gameDays = [(teamHash % 7), ((teamHash + 2) % 7), ((teamHash + 4) % 7)];
         if (teamHash % 3 === 0) gameDays.push((teamHash + 5) % 7);
         hasGame = gameDays.indexOf(di) >= 0;
@@ -1295,8 +1299,15 @@ function renderSchedulePage() {
 
   html += '<tr class="totals-row"><td><strong>Total</strong></td>';
   dailyTotals.forEach(function(t) { html += '<td><strong>' + t + '</strong></td>'; });
-  html += '<td><strong>' + dailyTotals.reduce(function(a,b){return a+b;},0) + '</strong></td></tr>';
+  html += '<td><strong>' + dailyTotals.reduce(function(a, b) { return a + b; }, 0) + '</strong></td></tr>';
   html += '</tbody></table></div></div>';
+  return html;
+}
+
+function renderSchedulePage() {
+  var html = '<p class="muted text-sm" style="padding:0 0 8px">Estimated game schedule for the next 7 days. Based on real schedule data where available.</p>';
+  var myPlayers = (S.myTeam.players || []).filter(function(p) { return p.slotId < 12; });
+  html += renderScheduleGrid(myPlayers, 'My Team - 7-Day Schedule');
   return html;
 }
 
