@@ -373,6 +373,18 @@ function renderPlayerCell(p) {
 }
 
 
+// ========== MATCHUP HELPERS ==========
+
+function renderScoreRow(cat, myVal, oppVal) {
+  var myWin = myVal > oppVal;
+  var oppWin = oppVal > myVal;
+  return '<div class="score-row">' +
+    '<div class="my-score ' + (myWin ? 'winning' : oppWin ? 'losing' : '') + '">' + fmt(myVal, 1) + '</div>' +
+    '<div class="cat-name">' + cat + '</div>' +
+    '<div class="opp-score ' + (oppWin ? 'winning' : myWin ? 'losing' : '') + '">' + fmt(oppVal, 1) + '</div>' +
+  '</div>';
+}
+
 // ========== MATCHUP TAB ==========
 
 function renderMatchup(container) {
@@ -381,8 +393,8 @@ function renderMatchup(container) {
 
   // Sub-tabs
   html += '<div class="sub-tab-bar">';
-  ['score','projections','recap'].forEach(function(st) {
-    var labels = {score:'Score',projections:'Projections',recap:'Recap'};
+  ['score','projections'].forEach(function(st) {
+    var labels = {score:'Score',projections:'Projections'};
     html += '<button class="sub-tab' + (_matchupSubTab === st ? ' active' : '') + '" onclick="_matchupSubTab=\'' + st + '\';render()">' + labels[st] + '</button>';
   });
   html += '</div>';
@@ -391,8 +403,6 @@ function renderMatchup(container) {
     html += renderMatchupScore(cats);
   } else if (_matchupSubTab === 'projections') {
     html += renderMatchupProjections(cats);
-  } else if (_matchupSubTab === 'recap') {
-    html += renderMatchupRecap(cats);
   }
 
   container.innerHTML = html;
@@ -409,25 +419,17 @@ function renderMatchupScore(cats) {
   html += '<div class="matchup-team"><span class="team-name">' + esc(S.matchup.opponentName || 'Opponent') + '</span></div>';
   html += '</div>';
 
-  // Category bars
-  html += '<div class="cat-scores">';
+  // Category scores - category in middle format
+  html += '<div class="card"><div class="cat-scores">';
   cats.forEach(function(cat) {
     var my = S.matchup.myScores ? S.matchup.myScores[cat.abbr] || 0 : 0;
     var opp = S.matchup.oppScores ? S.matchup.oppScores[cat.abbr] || 0 : 0;
-    var winning = cat.isNegative ? (my < opp) : (my > opp);
-    var losing = cat.isNegative ? (my > opp) : (my < opp);
-    var cls = winning ? 'winning' : (losing ? 'losing' : 'tied');
-    var total = my + opp || 1;
-    var myPct = cat.isNegative ? ((opp / total) * 100) : ((my / total) * 100);
-
-    html += '<div class="cat-bar ' + cls + '">';
-    html += '<span class="cat-val" style="color:' + (winning ? 'var(--accent-green)' : (losing ? 'var(--accent-red)' : 'var(--text-secondary)')) + '">' + (cat.isPercent ? pct(my) : fmt(my, 1)) + '</span>';
-    html += '<span class="cat-name" style="color:' + cat.color + '">' + cat.abbr + '</span>';
-    html += '<div class="cat-meter"><div class="cat-fill" style="width:' + myPct + '%;background:' + cat.color + '"></div></div>';
-    html += '<span class="cat-val">' + (cat.isPercent ? pct(opp) : fmt(opp, 1)) + '</span>';
-    html += '</div>';
+    // For negative cats (TO), winning = lower is better, so swap win/loss for display
+    var myDisplay = cat.isNegative ? opp : my;
+    var oppDisplay = cat.isNegative ? my : opp;
+    html += renderScoreRow(cat.abbr, myDisplay, oppDisplay);
   });
-  html += '</div>';
+  html += '</div></div>';
 
   // Schedule Advantage (v3 fix)
   html += renderScheduleAdvantage();
