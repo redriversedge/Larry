@@ -883,11 +883,12 @@ function renderPlayersList() {
   // Render table
   var html = trendingHtml;
   html += '<div class="text-xs muted" style="margin-bottom:6px">' + filtered.length + ' players</div>';
+  html += '<p class="sort-label">Sorted by Availability Score</p>';
   html += '<div class="table-scroll"><table class="data-table compact">';
   html += '<thead><tr>';
   html += '<th style="text-align:left;min-width:28px">#</th>';
-  html += '<th style="text-align:left;min-width:120px" onclick="sortPlayers(\'name\')">Player<span class="sort-label">Sorted by Availability Score</span></th>';
   html += '<th class="stat-col">Today</th>';
+  html += '<th style="text-align:left;min-width:120px" onclick="sortPlayers(\'name\')">Player</th>';
   cats.forEach(function(cat) {
     html += '<th class="stat-col" style="color:' + cat.color + '" onclick="sortPlayers(\'' + cat.abbr + '\')">' + cat.abbr + '</th>';
   });
@@ -897,8 +898,8 @@ function renderPlayersList() {
     var isMyTeam = p.onTeamId === S.myTeam.teamId;
     html += '<tr class="' + (isMyTeam ? 'my-team-row' : '') + '">';
     html += '<td class="text-xs muted">' + (p.durantRank || idx + 1) + '</td>';
-    html += '<td style="cursor:pointer" onclick="openPlayerPopup(' + p.id + ')">' + renderPlayerCell(p) + '</td>';
     html += '<td class="stat-col game-cell" style="font-size:0.72rem;white-space:nowrap">' + formatGameCell(getGameForDate(p, todayStr)) + '</td>';
+    html += '<td style="cursor:pointer" onclick="openPlayerPopup(' + p.id + ')">' + renderPlayerCell(p) + '</td>';
 
     var period = _playersStatView;
     cats.forEach(function(cat) {
