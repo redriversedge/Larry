@@ -54,11 +54,66 @@ function formatPositions(eligibleSlots) {
 }
 
 
+// ========== ROSTER TAB HELPERS ==========
+
+function renderInjuryBanner(myPlayers) {
+  if (sessionStorage.getItem('injuryBannerDismissed')) return '';
+  var injured = (myPlayers || []).filter(function(p) {
+    var s = p.injuryStatus || 'ACTIVE';
+    return s !== 'ACTIVE' && s !== 'HEALTHY';
+  });
+  if (!injured.length) return '';
+  var names = injured.map(function(p) {
+    return (p.fullName || p.name || '') + ' (' + p.injuryStatus + ')';
+  }).join(', ');
+  return '<div class="injury-banner" id="injury-banner">' +
+    '<span>Injury alert: ' + names + '</span>' +
+    '<button class="banner-dismiss" onclick="sessionStorage.setItem(\'injuryBannerDismissed\',\'1\');var b=document.getElementById(\'injury-banner\');if(b)b.remove();">x</button>' +
+  '</div>';
+}
+
+function renderAddDropTiles(recommendations) {
+  if (!recommendations || recommendations.length === 0) {
+    return '<p class="empty-state">No add/drop suggestions right now.</p>';
+  }
+  var tiles = recommendations.slice(0, 5).map(function(rec) {
+    var p = rec.player;
+    var drop = rec.dropPlayer;
+    var headshotUrl = 'https://a.espncdn.com/i/headshots/nba/players/full/' + p.id + '.png';
+    var reason = rec.detail ? rec.detail.split('.')[0] : 'Better fit';
+    return '<div class="addrop-tile">' +
+      '<img class="player-headshot" src="' + headshotUrl + '" onerror="this.style.background=\'var(--bg-surface)\';this.src=\'\'" alt="' + (p.fullName || '') + '">' +
+      '<div class="tile-name">' + (p.fullName || '') + '</div>' +
+      '<div class="tile-pos">' + formatPositions(p.eligibleSlots) + '</div>' +
+      '<div class="tile-drop">Drop: ' + (drop ? drop.fullName : '--') + '</div>' +
+      '<div class="tile-reason">' + reason + '</div>' +
+    '</div>';
+  }).join('');
+  return '<div class="addrop-scroll">' + tiles + '</div>';
+}
+
+function getGameForDate(player, dateStr) {
+  if (!player.schedule || !player.schedule.length) return null;
+  return player.schedule.find(function(g) {
+    return g.date && g.date.startsWith(dateStr);
+  }) || null;
+}
+
+function formatGameCell(game) {
+  if (!game) return '';
+  var prefix = game.isHome ? 'vs' : '@';
+  var time = game.time ? ' ' + game.time : '';
+  return prefix + ' ' + (game.opponent || '?') + time;
+}
+
 // ========== ROSTER TAB ==========
 
 function renderRoster(container) {
   var cats = getOrderedCategories();
   var html = '';
+
+  // Injury alert banner (dismissible, shown at top)
+  html += renderInjuryBanner(S.myTeam.players || []);
 
   // Dashboard section (moved here from League in v3)
   html += renderDashboardInline();
@@ -124,24 +179,14 @@ function renderRoster(container) {
     html += '</div>';
   }
 
-  // Decision Hub (v3 fix: smarter recs)
+  // Decision Hub (v3: horizontal add/drop tile row)
   if (S.allPlayers.length) {
     Engines.computeDURANT(S.allPlayers);
     var recs = Engines.generateRecommendations(myPlayers, S.allPlayers);
-    if (recs.length) {
-      html += '<div class="card">';
-      html += '<div class="card-header">Decision Hub</div>';
-      html += '<div class="decision-list">';
-      recs.slice(0, 5).forEach(function(rec, i) {
-        html += '<div class="decision-item">';
-        html += '<div class="decision-rank">#' + (i+1) + '</div>';
-        html += '<div class="decision-content">';
-        html += '<div class="decision-player"><strong>' + esc(rec.action) + '</strong></div>';
-        html += '<div class="decision-replacement">' + esc(rec.detail) + '</div>';
-        html += '</div></div>';
-      });
-      html += '</div></div>';
-    }
+    html += '<div class="card">';
+    html += '<div class="card-header">Add / Drop</div>';
+    html += renderAddDropTiles(recs);
+    html += '</div>';
   }
 
   container.innerHTML = html;
@@ -267,13 +312,17 @@ function renderRosterTable(players, cats) {
     html += renderPlayerCell(p);
     html += '</td>';
 
-    // Today column: show opponent + time (v3 fix)
+    // Today column: show opponent and game time using date-nav date
+    var viewDate = new Date();
+    viewDate.setDate(viewDate.getDate() + _rosterDateOffset);
+    var todayStr = localDateStr(viewDate);
+    var schedGame = getGameForDate(p, todayStr);
+    var gameCellText = schedGame ? formatGameCell(schedGame) : (p.gameToday ? formatGameCell(p.gameToday) : '');
     html += '<td class="game-cell">';
-    if (p.gameToday) {
-      html += '<span class="game-info">' + esc(p.gameToday.opponent || '') + '</span>';
-      if (p.gameToday.time) html += '<br><span class="text-xs muted">' + p.gameToday.time + '</span>';
+    if (gameCellText) {
+      html += '<span class="game-info">' + esc(gameCellText) + '</span>';
     } else if (p.gamesToday) {
-      html += '<span class="game-info">' + p.nbaTeam + '</span>';
+      html += '<span class="game-info">' + esc(p.nbaTeam || '') + '</span>';
     } else {
       html += '<span class="no-game-label">-</span>';
     }
