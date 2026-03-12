@@ -949,14 +949,14 @@ function renderTrendingSection(allPlayers) {
       return '<div class="trend-row">' +
         '<span class="trend-dir ' + (dir === 'up' ? 'rising' : 'falling') + '">' + (dir === 'up' ? '+' : '-') + '</span>' +
         '<span class="trend-name">' + esc(p.name || '') + '</span>' +
-        '<span class="trend-team">' + (p.nbaTeam || '') + '</span>' +
+        '<span class="trend-team">' + esc(p.nbaTeam || '') + '</span>' +
         '</div>';
     }).join('');
   };
 
   return '<div class="trending-section card">' +
     '<div class="trending-header" onclick="this.parentElement.classList.toggle(\'open\')">' +
-    '<span>Trending</span><span class="toggle-arrow">&#9660;</span>' +
+    '<span>League Trending</span><span class="toggle-arrow">&#9660;</span>' +
     '</div>' +
     '<div class="trending-body">' +
     (risers.length ? '<div class="trend-group"><div class="trend-group-label">Trending Up</div>' + rows(risers, 'up') + '</div>' : '') +
