@@ -497,29 +497,102 @@ function renderScheduleAdvantage() {
   return html;
 }
 
-function renderTeamOfWeek(cats) {
-  // Find best player for each category across the league this period
-  if (!cats.length || !S.allPlayers.length) return '';
-  var html = '<div class="card"><div class="card-header" onclick="this.nextElementSibling.classList.toggle(\'hidden\')">Team of the Week <span class="text-xs muted">\u25BC</span></div>';
-  html += '<div class="hidden"><div class="mini-table">';
-  cats.forEach(function(cat) {
-    var best = null; var bestVal = cat.isNegative ? Infinity : -Infinity;
-    S.allPlayers.forEach(function(p) {
-      var pgStats = ESPNSync.getPerGameStats(p, 'last7');
-      var val = pgStats ? (pgStats[cat.abbr] !== undefined ? pgStats[cat.abbr] : null) : null;
-      if (val === null) return;
-      if (cat.isNegative ? val < bestVal : val > bestVal) { bestVal = val; best = p; }
+function computeTOTW(cats) {
+  // Rank league managers by how they'd do vs every other current-matchup winner.
+  // Uses team z-score sums per category as a proxy for current matchup performance,
+  // since full league matchup scores are not stored in S.
+  if (!cats.length || !S.teams.length) return [];
+
+  // Compute per-team category z-score totals (starters only)
+  var teamStats = S.teams.map(function(team) {
+    var catZ = {};
+    cats.forEach(function(cat) {
+      var sum = 0;
+      (team.players || []).forEach(function(p) {
+        if (p.slotId < 12) sum += (p.zScores ? p.zScores[cat.abbr] || 0 : 0);
+      });
+      catZ[cat.abbr] = sum;
     });
-    if (best) {
-      var isMyPlayer = best.onTeamId === S.myTeam.teamId;
-      html += '<div class="mini-row' + (isMyPlayer ? ' my-team-row' : '') + '">';
-      html += '<span style="color:' + cat.color + ';min-width:36px;font-weight:700">' + cat.abbr + '</span>';
-      html += '<span style="flex:1;cursor:pointer" onclick="openPlayerPopup(' + best.id + ')">' + esc(best.name) + '</span>';
-      html += '<span style="font-weight:700">' + (cat.isPercent ? pct(bestVal) : fmt(bestVal, 1)) + '</span>';
-      html += '</div>';
-    }
+    return { team: team, catZ: catZ };
   });
-  html += '</div></div></div>';
+
+  // Find current matchup pairs from schedule
+  var mp = S.league.currentMatchupPeriod;
+  var currentMatchups = (S.league.schedule || []).filter(function(m) {
+    return m.matchupPeriodId === mp;
+  });
+
+  // Determine winners of each current matchup using z-score proxy
+  var winners = [];
+  currentMatchups.forEach(function(m) {
+    var homeId = m.home ? m.home.teamId : null;
+    var awayId = m.away ? m.away.teamId : null;
+    if (!homeId || !awayId) return;
+
+    var homeStats = teamStats.find(function(ts) { return ts.team.teamId === homeId; });
+    var awayStats = teamStats.find(function(ts) { return ts.team.teamId === awayId; });
+    if (!homeStats || !awayStats) return;
+
+    var homeCatWins = 0, awayCatWins = 0;
+    cats.forEach(function(cat) {
+      var hZ = homeStats.catZ[cat.abbr] || 0;
+      var aZ = awayStats.catZ[cat.abbr] || 0;
+      if (hZ > aZ) homeCatWins++;
+      else if (aZ > hZ) awayCatWins++;
+    });
+    if (homeCatWins > awayCatWins) winners.push(homeStats);
+    else if (awayCatWins > homeCatWins) winners.push(awayStats);
+    else { winners.push(homeStats); winners.push(awayStats); } // tie: include both
+  });
+
+  // Fallback: if no schedule pairs, use all teams
+  if (!winners.length) winners = teamStats;
+
+  // For each winner, simulate vs all other winners
+  var results = winners.map(function(w) {
+    var winsAgainst = winners.filter(function(other) {
+      if (other === w) return false;
+      var wCatWins = 0, otherCatWins = 0;
+      cats.forEach(function(cat) {
+        var wZ = w.catZ[cat.abbr] || 0;
+        var oZ = other.catZ[cat.abbr] || 0;
+        if (wZ > oZ) wCatWins++;
+        else if (oZ > wZ) otherCatWins++;
+      });
+      return wCatWins > otherCatWins;
+    }).length;
+    return {
+      team: w.team,
+      winsAgainst: winsAgainst,
+      total: Math.max(0, winners.length - 1)
+    };
+  });
+
+  results.sort(function(a, b) { return b.winsAgainst - a.winsAgainst; });
+  return results;
+}
+
+function renderTeamOfWeek(cats) {
+  if (!cats.length || !S.teams.length) return '';
+  var html = '<div class="card"><div class="card-header" onclick="this.nextElementSibling.classList.toggle(\'hidden\')">Team of the Week <span class="text-xs muted">\u25BC</span></div>';
+  html += '<div class="hidden">';
+
+  var results = computeTOTW(cats);
+  if (!results.length) {
+    html += '<div class="empty-state"><p>No matchup data available.</p></div>';
+  } else {
+    html += '<div class="mini-table">';
+    results.forEach(function(r, i) {
+      var isMe = r.team.teamId === S.myTeam.teamId;
+      html += '<div class="mini-row' + (isMe ? ' my-team-row' : '') + '">';
+      html += '<span class="text-xs muted" style="min-width:20px">' + (i + 1) + '</span>';
+      html += '<span style="flex:1;font-weight:' + (i === 0 ? '700' : '400') + '">' + esc(r.team.name) + '</span>';
+      html += '<span class="text-xs">' + r.winsAgainst + '/' + r.total + ' matchups won</span>';
+      html += '</div>';
+    });
+    html += '</div>';
+  }
+  html += '</div></div>';
   return html;
 }
 
