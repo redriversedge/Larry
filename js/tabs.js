@@ -898,7 +898,8 @@ function renderPlayersList() {
     var isMyTeam = p.onTeamId === S.myTeam.teamId;
     html += '<tr class="' + (isMyTeam ? 'my-team-row' : '') + '">';
     html += '<td class="text-xs muted">' + (p.durantRank || idx + 1) + '</td>';
-    html += '<td class="stat-col game-cell" style="font-size:0.72rem;white-space:nowrap">' + formatGameCell(getGameForDate(p, todayStr)) + '</td>';
+    var gameCell = formatGameCell(getGameForDate(p, todayStr));
+    html += '<td class="stat-col game-cell" style="font-size:0.72rem;white-space:nowrap">' + (gameCell ? gameCell : '<span class="muted">-</span>') + '</td>';
     html += '<td style="cursor:pointer" onclick="openPlayerPopup(' + p.id + ')">' + renderPlayerCell(p) + '</td>';
 
     var period = _playersStatView;
@@ -942,7 +943,7 @@ function renderTrendingSection(allPlayers) {
   risers = risers.sort(function(a, b) { return (b.effectiveDURANT || 0) - (a.effectiveDURANT || 0); }).slice(0, 5);
   fallers = fallers.sort(function(a, b) { return (b.effectiveDURANT || 0) - (a.effectiveDURANT || 0); }).slice(0, 5);
 
-  if (!risers.length && !fallers.length) return '';
+  if (!risers.length && !fallers.length) return '<p class="empty-state">Not enough data for trends yet.</p>';
 
   var rows = function(players, dir) {
     return players.map(function(p) {
