@@ -36,9 +36,17 @@ var ESPNSync = (function() {
 
   // --- FETCH PLAYERS (FREE AGENTS) ---
   async function fetchPlayers(status) {
-    return await fetchESPN(['kona_player_info'], {
-      'scoringPeriodId': String(S.league.currentScoringPeriodId || 0)
-    });
+    var url = PROXY_URL + '?view=kona_player_info&scoringPeriodId=' + String(S.league.currentScoringPeriodId || 0);
+    var headers = {
+      'x-espn-league-id': S.espn.leagueId,
+      'x-espn-s2': S.espn.espnS2,
+      'x-espn-swid': S.espn.swid,
+      'x-espn-season': String(S.league.seasonId),
+      'x-fantasy-filter': JSON.stringify({ players: { limit: 500 } })
+    };
+    var resp = await fetch(url, { headers: headers });
+    if (!resp.ok) throw new Error('ESPN API returned ' + resp.status);
+    return await resp.json();
   }
 
   // --- PARSE LEAGUE SETTINGS ---
