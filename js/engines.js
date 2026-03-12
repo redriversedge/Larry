@@ -262,10 +262,10 @@ var Engines = (function() {
 
     // recentActivityFactor
     var last7 = player.stats && player.stats.last7 ? player.stats.last7 : {};
-    var hasActivity = Object.values(last7).some(function(v) { return v && v !== 0; });
+    var hasActivity = Object.keys(last7).some(function(k) { return last7[k] && last7[k] !== 0; });
     var recentActivityFactor = hasActivity ? 1.0 : 0.5;
 
-    // injuryFactor
+    // injuryFactor (GTD types already penalized in DURANT; re-applied here for availability multiplier)
     var status = player.injuryStatus || 'ACTIVE';
     var injuryFactor = (status === 'GTD' || status === 'DAY_TO_DAY' || status === 'GAME_TIME_DECISION') ? 0.85 : 1.0;
 
