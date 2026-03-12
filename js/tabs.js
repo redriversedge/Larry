@@ -600,12 +600,18 @@ function renderOpponentInsight(cats) {
   var oppTeam = S.teams.find(function(t) { return t.teamId === S.matchup.opponentTeamId; });
   if (!oppTeam || !oppTeam.players) return '';
 
-  // Strengths & weaknesses from z-scores
+  // Strengths & weaknesses from z-scores.
+  // oppTeam.players are roster stubs - look up enriched player data in S.allPlayers
+  // which has z-scores computed by computeDURANT.
   var oppCatTotals = [];
   cats.forEach(function(cat) {
     var sum = 0;
-    (oppTeam.players || []).forEach(function(p) {
-      if (p.slotId < 12) sum += (p.zScores ? p.zScores[cat.abbr] || 0 : 0);
+    (oppTeam.players || []).forEach(function(stub) {
+      if (stub.slotId >= 12) return; // skip bench and IR
+      // Find enriched player in S.allPlayers
+      var enriched = S.allPlayers.find(function(ap) { return ap.id === stub.id; });
+      var p = enriched || stub;
+      sum += (p.zScores ? p.zScores[cat.abbr] || 0 : 0);
     });
     oppCatTotals.push({ cat: cat, z: sum });
   });
