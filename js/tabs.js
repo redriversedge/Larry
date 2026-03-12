@@ -655,74 +655,79 @@ function renderOpponentInsight(cats) {
 function renderMatchupProjections(cats) {
   var myPlayers = (S.myTeam.players || []).filter(function(p) { return p.slotId < 12; });
   var oppTeam = S.teams.find(function(t) { return t.teamId === S.matchup.opponentTeamId; });
-  var oppPlayers = oppTeam ? (oppTeam.players || []).filter(function(p) { return p.slotId < 12; }) : [];
+  var oppPlayerStubs = oppTeam ? (oppTeam.players || []).filter(function(p) { return p.slotId < 12; }) : [];
+
+  // Enrich opp players from S.allPlayers for z-scores and stats
+  var oppPlayers = oppPlayerStubs.map(function(stub) {
+    return S.allPlayers.find(function(ap) { return ap.id === stub.id; }) || stub;
+  });
 
   if (!myPlayers.length) return '<div class="empty-state"><p>No roster data. Sync with ESPN first.</p></div>';
 
-  // Build games remaining map
-  var gamesMap = {};
-  myPlayers.concat(oppPlayers).forEach(function(p) { gamesMap[p.id] = p.gamesRemaining || 0; });
+  var VOLATILITY_THRESHOLD = 2.0;
 
-  var probs = Engines.monteCarloMatchup(myPlayers, oppPlayers, gamesMap, 3000);
+  // Compute projected totals per category: sum(season per-game * gamesRemaining) per team
+  // Also compute volatility: variance between last7 pg and season pg across roster
+  var html = '<div class="card">';
+  html += '<div class="card-header">Projected Totals';
+  html += '<span class="text-xs muted" style="margin-left:8px">~ = volatile</span>';
+  html += '</div>';
 
-  var html = '<div class="card"><div class="card-header">Win Probability (Monte Carlo)</div>';
   var projWins = 0, projLosses = 0;
 
   cats.forEach(function(cat) {
-    var prob = probs[cat.abbr] || {win:50,lose:50,tie:0};
-    var winPct = prob.win;
-    if (winPct > 50) projWins++;
-    else if (winPct < 50) projLosses++;
+    var myTotal = 0, oppTotal = 0;
+    var myVariance = 0, oppVariance = 0;
 
-    var cls = winPct > 60 ? 'stat-positive' : (winPct < 40 ? 'stat-negative' : '');
-    html += '<div class="mini-row">';
-    html += '<span style="color:' + cat.color + ';min-width:36px;font-weight:700">' + cat.abbr + '</span>';
-    html += '<div style="flex:1;height:6px;background:var(--bg-surface);border-radius:3px;overflow:hidden">';
-    html += '<div style="width:' + winPct + '%;height:100%;background:' + (winPct > 50 ? 'var(--accent-green)' : 'var(--accent-red)') + ';border-radius:3px"></div></div>';
-    html += '<span class="' + cls + '" style="min-width:40px;text-align:right;font-weight:700">' + winPct + '%</span>';
-    html += '</div>';
+    myPlayers.forEach(function(p) {
+      var gamesLeft = p.gamesRemaining || 0;
+      var seasonPg = ESPNSync.getPerGameStats(p, 'season');
+      var last7Pg = ESPNSync.getPerGameStats(p, 'last7');
+      var seasonVal = seasonPg ? (seasonPg[cat.abbr] || 0) : 0;
+      var last7Val = last7Pg ? (last7Pg[cat.abbr] || 0) : seasonVal;
+      myTotal += seasonVal * gamesLeft;
+      myVariance += Math.abs(last7Val - seasonVal);
+    });
+
+    oppPlayers.forEach(function(p) {
+      var gamesLeft = p.gamesRemaining || 0;
+      var seasonPg = ESPNSync.getPerGameStats(p, 'season');
+      var last7Pg = ESPNSync.getPerGameStats(p, 'last7');
+      var seasonVal = seasonPg ? (seasonPg[cat.abbr] || 0) : 0;
+      var last7Val = last7Pg ? (last7Pg[cat.abbr] || 0) : seasonVal;
+      oppTotal += seasonVal * gamesLeft;
+      oppVariance += Math.abs(last7Val - seasonVal);
+    });
+
+    var myWins = cat.isNegative ? myTotal < oppTotal : myTotal > oppTotal;
+    var oppWins = cat.isNegative ? oppTotal < myTotal : oppTotal > myTotal;
+    if (myWins) projWins++;
+    else if (oppWins) projLosses++;
+
+    var myVolatile = myVariance > VOLATILITY_THRESHOLD;
+    var oppVolatile = oppVariance > VOLATILITY_THRESHOLD;
+
+    // For display: flip if negative cat so green = winning
+    var myDisplay = cat.isNegative ? oppTotal : myTotal;
+    var oppDisplay = cat.isNegative ? myTotal : oppTotal;
+
+    var myLabel = fmt(myTotal, 1) + (myVolatile ? '<span class="volatile" style="color:var(--accent-gold);margin-left:2px">~</span>' : '');
+    var oppLabel = fmt(oppTotal, 1) + (oppVolatile ? '<span class="volatile" style="color:var(--accent-gold);margin-left:2px">~</span>' : '');
+
+    var myWinCls = (cat.isNegative ? myTotal < oppTotal : myTotal > oppTotal) ? 'winning' : ((cat.isNegative ? myTotal > oppTotal : myTotal < oppTotal) ? 'losing' : '');
+    var oppWinCls = (cat.isNegative ? oppTotal < myTotal : oppTotal > myTotal) ? 'winning' : ((cat.isNegative ? oppTotal > myTotal : oppTotal < myTotal) ? 'losing' : '');
+
+    html += '<div class="score-row">' +
+      '<div class="my-score ' + myWinCls + '">' + myLabel + '</div>' +
+      '<div class="cat-name">' + cat.abbr + '</div>' +
+      '<div class="opp-score ' + oppWinCls + '">' + oppLabel + '</div>' +
+    '</div>';
   });
 
   var projTies = Math.max(0, cats.length - projWins - projLosses);
   html += '<div style="text-align:center;padding:12px;font-size:1.1rem;font-weight:800">Projected: ' + projWins + '-' + projLosses + '-' + projTies + '</div>';
   html += '</div>';
 
-  // Volatility
-  var vol = Engines.categoryVolatility(myPlayers);
-  html += '<div class="card"><div class="card-header">Category Volatility</div><div class="filter-chips">';
-  cats.forEach(function(cat) {
-    var v = vol[cat.abbr];
-    if (!v) return;
-    var cls = v.label === 'High' ? 'stat-negative' : (v.label === 'Low' ? 'stat-positive' : '');
-    html += '<span class="chip ' + cls + '" style="border-color:' + cat.color + '">' + cat.abbr + ': ' + v.label + '</span>';
-  });
-  html += '</div></div>';
-  return html;
-}
-
-function renderMatchupRecap(cats) {
-  var mr = S.matchup.myRecord || {wins:0,losses:0,ties:0};
-  var total = mr.wins + mr.losses + mr.ties;
-  if (!total) return '<div class="empty-state"><p>No matchup data available yet.</p></div>';
-
-  var result = mr.wins > mr.losses ? 'win' : (mr.losses > mr.wins ? 'loss' : 'tie');
-  var html = '<div class="card" style="text-align:center;padding:24px">';
-  html += '<div style="font-size:2.5rem">' + (result === 'win' ? '\u{1F3C6}' : (result === 'loss' ? '\u{1F4A5}' : '\u{1F91D}')) + '</div>';
-  html += '<div style="font-size:1.5rem;font-weight:800;margin:8px 0">' + mr.wins + '-' + mr.losses + '-' + mr.ties + '</div>';
-  html += '<div class="muted">vs ' + esc(S.matchup.opponentName || 'Opponent') + '</div>';
-  html += '</div>';
-
-  html += '<div class="card"><div class="card-header">Category Breakdown</div>';
-  cats.forEach(function(cat) {
-    var my = S.matchup.myScores ? S.matchup.myScores[cat.abbr] || 0 : 0;
-    var opp = S.matchup.oppScores ? S.matchup.oppScores[cat.abbr] || 0 : 0;
-    var diff = cat.isNegative ? (opp - my) : (my - opp);
-    var won = diff > 0;
-    var icon = won ? '\u2705' : (diff === 0 ? '\u{1F91D}' : '\u274C');
-    html += '<div class="mini-row"><span>' + icon + '</span><span style="color:' + cat.color + ';min-width:36px;font-weight:700">' + cat.abbr + '</span>';
-    html += '<span style="flex:1">' + (cat.isPercent ? pct(my) : fmt(my,1)) + ' vs ' + (cat.isPercent ? pct(opp) : fmt(opp,1)) + '</span></div>';
-  });
-  html += '</div>';
   return html;
 }
 
