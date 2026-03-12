@@ -876,12 +876,18 @@ function renderPlayersList() {
     return (bVal - aVal) * _playersSortDir;
   });
 
+  // Render trending section above table
+  var todayStr = localDateStr(new Date());
+  var trendingHtml = renderTrendingSection(players);
+
   // Render table
-  var html = '<div class="text-xs muted" style="margin-bottom:6px">' + filtered.length + ' players</div>';
+  var html = trendingHtml;
+  html += '<div class="text-xs muted" style="margin-bottom:6px">' + filtered.length + ' players</div>';
   html += '<div class="table-scroll"><table class="data-table compact">';
   html += '<thead><tr>';
   html += '<th style="text-align:left;min-width:28px">#</th>';
   html += '<th style="text-align:left;min-width:120px" onclick="sortPlayers(\'name\')">Player<span class="sort-label">Sorted by Availability Score</span></th>';
+  html += '<th class="stat-col">Today</th>';
   cats.forEach(function(cat) {
     html += '<th class="stat-col" style="color:' + cat.color + '" onclick="sortPlayers(\'' + cat.abbr + '\')">' + cat.abbr + '</th>';
   });
@@ -892,6 +898,7 @@ function renderPlayersList() {
     html += '<tr class="' + (isMyTeam ? 'my-team-row' : '') + '">';
     html += '<td class="text-xs muted">' + (p.durantRank || idx + 1) + '</td>';
     html += '<td style="cursor:pointer" onclick="openPlayerPopup(' + p.id + ')">' + renderPlayerCell(p) + '</td>';
+    html += '<td class="stat-col game-cell" style="font-size:0.72rem;white-space:nowrap">' + formatGameCell(getGameForDate(p, todayStr)) + '</td>';
 
     var period = _playersStatView;
     cats.forEach(function(cat) {
@@ -923,6 +930,38 @@ function sortPlayers(col) {
   if (_playersSortCol === col) _playersSortDir *= -1;
   else { _playersSortCol = col; _playersSortDir = -1; }
   renderPlayersList();
+}
+
+function renderTrendingSection(allPlayers) {
+  var risers = [], fallers = [];
+  allPlayers.forEach(function(p) {
+    if (p.trend === 'hot') risers.push(p);
+    else if (p.trend === 'cold') fallers.push(p);
+  });
+  risers = risers.sort(function(a, b) { return (b.effectiveDURANT || 0) - (a.effectiveDURANT || 0); }).slice(0, 5);
+  fallers = fallers.sort(function(a, b) { return (b.effectiveDURANT || 0) - (a.effectiveDURANT || 0); }).slice(0, 5);
+
+  if (!risers.length && !fallers.length) return '';
+
+  var rows = function(players, dir) {
+    return players.map(function(p) {
+      return '<div class="trend-row">' +
+        '<span class="trend-dir ' + (dir === 'up' ? 'rising' : 'falling') + '">' + (dir === 'up' ? '+' : '-') + '</span>' +
+        '<span class="trend-name">' + esc(p.name || '') + '</span>' +
+        '<span class="trend-team">' + (p.nbaTeam || '') + '</span>' +
+        '</div>';
+    }).join('');
+  };
+
+  return '<div class="trending-section card">' +
+    '<div class="trending-header" onclick="this.parentElement.classList.toggle(\'open\')">' +
+    '<span>Trending</span><span class="toggle-arrow">&#9660;</span>' +
+    '</div>' +
+    '<div class="trending-body">' +
+    (risers.length ? '<div class="trend-group"><div class="trend-group-label">Trending Up</div>' + rows(risers, 'up') + '</div>' : '') +
+    (fallers.length ? '<div class="trend-group"><div class="trend-group-label">Trending Down</div>' + rows(fallers, 'down') + '</div>' : '') +
+    '</div>' +
+    '</div>';
 }
 
 // --- DAY FILTER HANDLERS ---

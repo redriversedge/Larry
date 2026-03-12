@@ -1109,3 +1109,34 @@ body {
   padding: 0 0 0 12px;
   flex-shrink: 0;
 }
+
+/* Trending Section */
+.trending-section { margin-bottom: 12px; }
+.trending-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 0.88rem;
+  user-select: none;
+}
+.trending-section .trending-body { display: none; padding: 0 14px 12px; }
+.trending-section.open .trending-body { display: block; }
+.trending-section.open .toggle-arrow { transform: rotate(180deg); }
+.toggle-arrow { transition: transform 0.2s; display: inline-block; }
+.trend-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+  font-size: 0.82rem;
+  border-bottom: 1px solid var(--border);
+}
+.trend-dir { font-weight: 900; width: 14px; }
+.trend-dir.rising { color: var(--accent-green); }
+.trend-dir.falling { color: var(--accent-red); }
+.trend-name { flex: 1; color: var(--text-primary); }
+.trend-team { font-size: 0.72rem; color: var(--text-secondary); }
+.trend-group-label { font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase; padding: 6px 0 4px; font-weight: 700; }
