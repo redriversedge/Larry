@@ -249,6 +249,30 @@ var Engines = (function() {
   }
 
 
+  // ========== ENGINE 3.5: AVAILABILITY SCORE ==========
+
+  function computeAvailabilityScore(player) {
+    // mpgFactor
+    var mpg = player.minutesPerGame || 0;
+    var mpgFactor = mpg >= 20 ? 1.0 : mpg >= 10 ? 0.75 : 0.5;
+
+    // ownershipFactor
+    var owned = player.percentOwned || 0;
+    var ownershipFactor = owned >= 5 ? 1.0 : owned >= 1 ? 0.8 : 0.6;
+
+    // recentActivityFactor
+    var last7 = player.stats && player.stats.last7 ? player.stats.last7 : {};
+    var hasActivity = Object.values(last7).some(function(v) { return v && v !== 0; });
+    var recentActivityFactor = hasActivity ? 1.0 : 0.5;
+
+    // injuryFactor
+    var status = player.injuryStatus || 'ACTIVE';
+    var injuryFactor = (status === 'GTD' || status === 'DAY_TO_DAY' || status === 'GAME_TIME_DECISION') ? 0.85 : 1.0;
+
+    return mpgFactor * ownershipFactor * recentActivityFactor * injuryFactor;
+  }
+
+
   // ========== ENGINE 4: RECOMMENDATIONS (v3 FIX: smarter drops) ==========
 
   function generateRecommendations(myPlayers, allPlayers) {
