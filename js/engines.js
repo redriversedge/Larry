@@ -273,6 +273,32 @@ var Engines = (function() {
   }
 
 
+  // ========== ENGINE 3.6: OPPORTUNITY BOOST ==========
+
+  function computeOpportunityBoost(allPlayers) {
+    // Count OUT/IR starters per NBA team (proTeamId)
+    var teamInjuries = {};
+    allPlayers.forEach(function(p) {
+      if (!p.proTeamId) return;
+      var isOut = p.injuryStatus === 'OUT' || p.injuryStatus === 'IR';
+      var isStarter = p.slotId < 12; // non-bench, non-IR fantasy slot
+      if (isOut && isStarter) {
+        teamInjuries[p.proTeamId] = (teamInjuries[p.proTeamId] || 0) + 1;
+      }
+    });
+
+    // Build boost map: proTeamId -> multiplier
+    var boostMap = {};
+    Object.keys(teamInjuries).forEach(function(teamId) {
+      if (teamInjuries[teamId] >= 2) {
+        boostMap[teamId] = 1.15;
+      }
+    });
+
+    return boostMap; // caller applies: boostMap[player.proTeamId] || 1.0
+  }
+
+
   // ========== ENGINE 4: RECOMMENDATIONS (v3 FIX: smarter drops) ==========
 
   function generateRecommendations(myPlayers, allPlayers) {
