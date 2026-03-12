@@ -1038,8 +1038,8 @@ function renderLeague(container) {
   // Group menu items with section headers
   var sections = {
     'Overview': ['standings', 'projectedStandings', 'playoffs', 'timeline'],
-    'Analysis': ['trades', 'teamAnalyzer', 'statsTrends', 'projections', 'opponentScout'],
-    'Info': ['news', 'schedule', 'draftCenter'],
+    'Analysis': ['trades', 'teamAnalyzer', 'projections'],
+    'Info': ['news', 'draftCenter'],
     'System': ['notifications', 'settings']
   };
   var sectionKeys = ['Overview', 'Analysis', 'Info', 'System'];
@@ -1641,14 +1641,7 @@ function renderNewsInjuries() {
     return (b.effectiveDURANT || 0) - (a.effectiveDURANT || 0);
   });
 
-  // My team injuries first
-  var myInjured = injured.filter(function(p) { return p.onTeamId === S.myTeam.teamId; });
-  var oppInjured = injured.filter(function(p) { return p.onTeamId === S.matchup.opponentTeamId; });
-  var leagueInjured = injured.filter(function(p) {
-    return p.onTeamId !== S.myTeam.teamId && p.onTeamId !== S.matchup.opponentTeamId;
-  });
-
-  function renderInjuryList(players, title) {
+  function renderInjuryList(players) {
     if (!players.length) return '<p class="muted text-sm" style="padding:4px 0">No injuries reported.</p>';
     var h = '';
     players.forEach(function(p) {
@@ -1664,34 +1657,8 @@ function renderNewsInjuries() {
     return h;
   }
 
-  html += '<div class="card"><div class="card-header">\u{1F6A8} Your Team Injuries (' + myInjured.length + ')</div>';
-  html += renderInjuryList(myInjured, 'My Team');
-  html += '</div>';
-
-  html += '<div class="card"><div class="card-header">\u{1F50D} Opponent Injuries (' + oppInjured.length + ')</div>';
-  html += renderInjuryList(oppInjured, 'Opponent');
-  html += '</div>';
-
-  html += '<div class="card"><div class="card-header">\u{1F3C0} League-Wide Injuries (' + leagueInjured.length + ')</div>';
-  html += renderInjuryList(leagueInjured, 'League');
-  html += '</div>';
-
-  // Injury impact summary
-  html += '<div class="card"><div class="card-header">Injury Impact</div>';
-  html += '<p class="muted text-sm">Players on your team who are OUT or on IR may be streamable spots. Consider picking up free agents for their empty games.</p>';
-  var myOut = myInjured.filter(function(p) {
-    return p.injuryStatus === 'OUT' || p.injuryStatus === 'SUSPENSION' || p.injuryStatus === 'IR' || p.injuryStatus === 'INJURED_RESERVE';
-  });
-  if (myOut.length) {
-    html += '<div style="margin-top:8px">';
-    myOut.forEach(function(p) {
-      html += '<div class="mini-row">';
-      html += '<span>' + statusBadge(p.injuryStatus) + ' ' + esc(p.name) + ' (' + p.slot + ')</span>';
-      html += '<span class="text-xs stat-negative">Lost production: ~' + fmt(p.zScores ? p.zScores.total : 0, 1) + ' z/game</span>';
-      html += '</div>';
-    });
-    html += '</div>';
-  }
+  html += '<div class="card"><div class="card-header">\u{1F3C0} League-Wide Injuries (' + injured.length + ')</div>';
+  html += renderInjuryList(injured);
   html += '</div>';
 
   return html;
