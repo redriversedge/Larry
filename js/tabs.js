@@ -649,7 +649,7 @@ function renderPlayersList() {
 
   // Sort by DURANT by default
   filtered.sort(function(a,b) {
-    if (_playersSortCol === 'durantScore') return (b.durantScore || 0) - (a.durantScore || 0);
+    if (_playersSortCol === 'durantScore') return (b.effectiveDURANT || 0) - (a.effectiveDURANT || 0);
     if (_playersSortCol === 'name') return (a.name || '').localeCompare(b.name || '');
     // Sort by stat
     var aVal = a.stats && a.stats[_playersStatView] ? a.stats[_playersStatView][_playersSortCol] || 0 : 0;
@@ -957,7 +957,7 @@ function renderROSProjections() {
   cats.forEach(function(cat) { html += '<th style="color:' + cat.color + '">' + cat.abbr + '</th>'; });
   html += '</tr></thead><tbody>';
 
-  myPlayers.sort(function(a,b) { return (b.durantScore || 0) - (a.durantScore || 0); });
+  myPlayers.sort(function(a,b) { return (b.effectiveDURANT || 0) - (a.effectiveDURANT || 0); });
   myPlayers.forEach(function(p) {
     html += '<tr><td style="text-align:left;cursor:pointer" onclick="openPlayerPopup(' + p.id + ')">' + esc(p.name) + '</td>';
     html += '<td>' + (p.rosGamesLeft || '-') + '</td>';
@@ -1039,7 +1039,7 @@ function renderDraftCenter() {
   if (!players.length) return '<div class="empty-state"><p>No player data.</p></div>';
 
   Engines.computeDURANT(players);
-  players.sort(function(a,b) { return (b.durantScore || 0) - (a.durantScore || 0); });
+  players.sort(function(a,b) { return (b.effectiveDURANT || 0) - (a.effectiveDURANT || 0); });
 
   // Assign tiers and projected rounds
   players.forEach(function(p, i) {
@@ -1251,7 +1251,7 @@ function renderOpponentScout() {
 
   // Opponent roster
   var oppPlayers = (oppTeam.players || []).slice();
-  oppPlayers.sort(function(a,b) { return (b.durantScore || 0) - (a.durantScore || 0); });
+  oppPlayers.sort(function(a,b) { return (b.effectiveDURANT || 0) - (a.effectiveDURANT || 0); });
 
   html += '<div class="card"><div class="card-header">Opponent Roster</div>';
   html += '<div class="table-scroll"><table class="data-table compact">';
@@ -1321,7 +1321,7 @@ function renderNewsInjuries() {
     var ao = statusOrder[a.injuryStatus] !== undefined ? statusOrder[a.injuryStatus] : 3;
     var bo = statusOrder[b.injuryStatus] !== undefined ? statusOrder[b.injuryStatus] : 3;
     if (ao !== bo) return ao - bo;
-    return (b.durantScore || 0) - (a.durantScore || 0);
+    return (b.effectiveDURANT || 0) - (a.effectiveDURANT || 0);
   });
 
   // My team injuries first
@@ -1682,10 +1682,10 @@ function renderNotifications() {
     // Check for strong free agents
     if (S.allPlayers.length) {
       var freeAgents = S.allPlayers.filter(function(p) { return p.onTeamId === 0; });
-      freeAgents.sort(function(a, b) { return (b.durantScore || 0) - (a.durantScore || 0); });
+      freeAgents.sort(function(a, b) { return (b.effectiveDURANT || 0) - (a.effectiveDURANT || 0); });
       var topFA = freeAgents[0];
       var worstStarter = myPlayers.filter(function(p) { return p.slotId < 12; }).sort(function(a, b) {
-        return (a.durantScore || 0) - (b.durantScore || 0);
+        return (a.effectiveDURANT || 0) - (b.effectiveDURANT || 0);
       })[0];
       if (topFA && worstStarter && (topFA.durantScore || 0) > (worstStarter.durantScore || 0) + 3) {
         autoNotifs.push({
