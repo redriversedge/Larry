@@ -435,9 +435,9 @@ function renderMatchupScore(cats) {
   html += renderScheduleAdvantage();
 
   // 7-Day Schedule Grids (my team + opponent)
-  var mySchedPlayers = (S.myTeam.players || []).filter(function(p) { return p.slotId < 12; });
+  var mySchedPlayers = S.myTeam.players || [];
   var oppSchedTeam = S.teams.find(function(t) { return t.teamId === S.matchup.opponentTeamId; });
-  var oppSchedPlayers = oppSchedTeam ? (oppSchedTeam.players || []).filter(function(p) { return p.slotId < 12; }).map(function(stub) {
+  var oppSchedPlayers = oppSchedTeam ? (oppSchedTeam.players || []).map(function(stub) {
     return S.allPlayers.find(function(ap) { return ap.id === stub.id; }) || stub;
   }) : [];
   html += renderScheduleGrid(mySchedPlayers, 'My Team - Next 7 Days');
@@ -679,15 +679,24 @@ function renderMatchupProjections(cats) {
 
   // Compute projected totals per category: sum(season per-game * gamesRemaining) per team
   // Also compute volatility: variance between last7 pg and season pg across roster
+  var myName = S.myTeam.name || 'My Team';
+  var oppName = S.matchup.opponentName || 'Opponent';
+
   var html = '<div class="card">';
-  html += '<div class="card-header">Projected Totals';
+  html += '<div class="card-header">Actual + Projected Totals';
   html += '<span class="text-xs muted" style="margin-left:8px">~ = volatile</span>';
+  html += '</div>';
+  // Team name header row
+  html += '<div class="score-row" style="font-weight:700;font-size:0.75rem;color:var(--text-secondary);border-bottom:2px solid var(--border);padding-bottom:6px">';
+  html += '<div class="my-score">' + esc(myName) + '</div>';
+  html += '<div class="cat-name"></div>';
+  html += '<div class="opp-score">' + esc(oppName) + '</div>';
   html += '</div>';
 
   var projWins = 0, projLosses = 0;
 
   cats.forEach(function(cat) {
-    var myTotal = 0, oppTotal = 0;
+    var myProjected = 0, oppProjected = 0;
     var myVariance = 0, oppVariance = 0;
 
     myPlayers.forEach(function(p) {
@@ -696,7 +705,7 @@ function renderMatchupProjections(cats) {
       var last7Pg = ESPNSync.getPerGameStats(p, 'last7');
       var seasonVal = seasonPg ? (seasonPg[cat.abbr] || 0) : 0;
       var last7Val = last7Pg ? (last7Pg[cat.abbr] || 0) : seasonVal;
-      myTotal += seasonVal * gamesLeft;
+      myProjected += seasonVal * gamesLeft;
       myVariance += Math.abs(last7Val - seasonVal);
     });
 
@@ -706,9 +715,15 @@ function renderMatchupProjections(cats) {
       var last7Pg = ESPNSync.getPerGameStats(p, 'last7');
       var seasonVal = seasonPg ? (seasonPg[cat.abbr] || 0) : 0;
       var last7Val = last7Pg ? (last7Pg[cat.abbr] || 0) : seasonVal;
-      oppTotal += seasonVal * gamesLeft;
+      oppProjected += seasonVal * gamesLeft;
       oppVariance += Math.abs(last7Val - seasonVal);
     });
+
+    // Combine actual scores so far with remaining projection
+    var myActual = (S.matchup.myScores && S.matchup.myScores[cat.abbr]) ? (S.matchup.myScores[cat.abbr] || 0) : 0;
+    var oppActual = (S.matchup.oppScores && S.matchup.oppScores[cat.abbr]) ? (S.matchup.oppScores[cat.abbr] || 0) : 0;
+    var myTotal = myActual + myProjected;
+    var oppTotal = oppActual + oppProjected;
 
     var myWins = cat.isNegative ? myTotal < oppTotal : myTotal > oppTotal;
     var oppWins = cat.isNegative ? oppTotal < myTotal : oppTotal > myTotal;
@@ -717,10 +732,6 @@ function renderMatchupProjections(cats) {
 
     var myVolatile = myVariance > VOLATILITY_THRESHOLD;
     var oppVolatile = oppVariance > VOLATILITY_THRESHOLD;
-
-    // For display: flip if negative cat so green = winning
-    var myDisplay = cat.isNegative ? oppTotal : myTotal;
-    var oppDisplay = cat.isNegative ? myTotal : oppTotal;
 
     var myLabel = fmt(myTotal, 1) + (myVolatile ? '<span class="volatile" style="color:var(--accent-gold);margin-left:2px">~</span>' : '');
     var oppLabel = fmt(oppTotal, 1) + (oppVolatile ? '<span class="volatile" style="color:var(--accent-gold);margin-left:2px">~</span>' : '');
@@ -1292,8 +1303,10 @@ function renderROSProjections() {
 }
 
 function renderScheduleGrid(players, label) {
-  var html = '<div class="card"><div class="card-header">' + esc(label) + '</div>';
-  if (!players || !players.length) { html += '<p class="muted text-sm" style="padding:8px">No players.</p></div>'; return html; }
+  var html = '<div class="card">';
+  html += '<div class="card-header" onclick="this.nextElementSibling.classList.toggle(\'hidden\')">' + esc(label) + ' <span class="text-xs muted">\u25BC</span></div>';
+  html += '<div class="hidden">';
+  if (!players || !players.length) { html += '<p class="muted text-sm" style="padding:8px">No players.</p></div></div>'; return html; }
 
   var days = [];
   for (var d = 0; d < 7; d++) {
@@ -1312,28 +1325,16 @@ function renderScheduleGrid(players, label) {
   var dailyTotals = new Array(7).fill(0);
 
   players.forEach(function(p) {
-    html += '<tr><td style="text-align:left">' + esc(p.name) + '</td>';
+    var isBench = p.slotId >= 12;
+    html += '<tr' + (isBench ? ' class="bench-row"' : '') + '><td style="text-align:left">' + esc(p.name) + (isBench ? ' <span class="text-xs muted">BE</span>' : '') + '</td>';
     var total = 0;
 
     days.forEach(function(day, di) {
-      var hasGame = false;
-
-      if (p.schedule && p.schedule.length) {
-        hasGame = p.schedule.some(function(g) { return g.date === day.dateStr; });
-      } else if (di === 0 && p.gamesToday) {
-        hasGame = true;
-      } else {
-        var teamHash = 0;
-        var team = p.nbaTeam || '';
-        for (var c = 0; c < team.length; c++) teamHash += team.charCodeAt(c);
-        var gameDays = [(teamHash % 7), ((teamHash + 2) % 7), ((teamHash + 4) % 7)];
-        if (teamHash % 3 === 0) gameDays.push((teamHash + 5) % 7);
-        hasGame = gameDays.indexOf(di) >= 0;
-      }
-
-      var cellContent = hasGame ? p.nbaTeam : '-';
+      var game = getGameForDate(p, day.dateStr);
+      var hasGame = !!game;
+      var cellContent = game ? formatGameCell(game) : '<span class="muted">-</span>';
       var cellCls = hasGame ? 'has-game' : '';
-      html += '<td class="sched-cell ' + cellCls + '">' + cellContent + '</td>';
+      html += '<td class="sched-cell ' + cellCls + '" style="font-size:0.65rem">' + cellContent + '</td>';
       if (hasGame) { total++; dailyTotals[di]++; }
     });
     html += '<td><strong>' + total + '</strong></td></tr>';
@@ -1342,7 +1343,7 @@ function renderScheduleGrid(players, label) {
   html += '<tr class="totals-row"><td><strong>Total</strong></td>';
   dailyTotals.forEach(function(t) { html += '<td><strong>' + t + '</strong></td>'; });
   html += '<td><strong>' + dailyTotals.reduce(function(a, b) { return a + b; }, 0) + '</strong></td></tr>';
-  html += '</tbody></table></div></div>';
+  html += '</tbody></table></div></div></div>';
   return html;
 }
 
