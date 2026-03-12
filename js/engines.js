@@ -239,13 +239,21 @@ var Engines = (function() {
       else if (gp < 20) p.durantScore *= 0.85;
 
       // Injury discount
-      if (p.status === 'OUT' || p.status === 'SUSPENSION') p.durantScore *= 0.3;
-      else if (p.status === 'GTD' || p.status === 'DAY_TO_DAY' || p.status === 'GAME_TIME_DECISION') p.durantScore *= 0.85;
+      if (p.injuryStatus === 'OUT' || p.injuryStatus === 'SUSPENSION') p.durantScore *= 0.3;
+      else if (p.injuryStatus === 'GTD' || p.injuryStatus === 'DAY_TO_DAY' || p.injuryStatus === 'GAME_TIME_DECISION') p.durantScore *= 0.85;
     });
 
     // Rank
     players.sort(function(a,b) { return (b.durantScore || 0) - (a.durantScore || 0); });
     players.forEach(function(p, i) { p.durantRank = i + 1; });
+
+    // Compute effectiveDURANT for all players
+    var boostMap = computeOpportunityBoost(players);
+    players.forEach(function(p) {
+      var availability = computeAvailabilityScore(p);
+      var boost = boostMap[p.proTeamId] || 1.0;
+      p.effectiveDURANT = (p.durantScore || 0) * availability * boost;
+    });
   }
 
 
@@ -301,17 +309,39 @@ var Engines = (function() {
 
   // ========== ENGINE 4: RECOMMENDATIONS (v3 FIX: smarter drops) ==========
 
+  function isValidAddCandidate(player) {
+    var status = player.injuryStatus || 'ACTIVE';
+    if (status === 'OUT' || status === 'SUSPENSION' || status === 'IR') return false;
+    var mpg = player.minutesPerGame || 0;
+    var owned = player.percentOwned || 0;
+    if (mpg < 5 && owned < 1) return false;
+    var gp = player.gamesPlayed || 0;
+    var last7 = player.stats && player.stats.last7 ? player.stats.last7 : {};
+    var hasLast7 = Object.keys(last7).some(function(k) { return last7[k] && last7[k] !== 0; });
+    if (gp === 0 && !hasLast7) return false;
+    return true;
+  }
+
   function generateRecommendations(myPlayers, allPlayers) {
+    var boostMap = computeOpportunityBoost(allPlayers);
+
+    allPlayers.forEach(function(p) {
+      var availability = computeAvailabilityScore(p);
+      var boost = boostMap[p.proTeamId] || 1.0;
+      p.effectiveDURANT = (p.durantScore || 0) * availability * boost;
+    });
+
     var cats = getOrderedCategories();
     var recs = [];
     if (!myPlayers || !myPlayers.length) return recs;
 
-    // Sort my players by DURANT (worst first for drops)
-    var sortedMy = myPlayers.slice().sort(function(a,b) { return (a.durantScore || 0) - (b.durantScore || 0); });
+    // Sort my players by effectiveDURANT (worst first for drops)
+    var sortedMy = myPlayers.slice().sort(function(a,b) { return (a.effectiveDURANT || 0) - (b.effectiveDURANT || 0); });
 
-    // Get free agents sorted by DURANT (best first)
-    var freeAgents = allPlayers.filter(function(p) { return p.onTeamId === 0; });
-    freeAgents.sort(function(a,b) { return (b.durantScore || 0) - (a.durantScore || 0); });
+    // Get free agents sorted by effectiveDURANT (best first), filtered by hard criteria
+    var freeAgents = allPlayers
+      .filter(function(p) { return p.onTeamId === 0 && isValidAddCandidate(p); })
+      .sort(function(a, b) { return b.effectiveDURANT - a.effectiveDURANT; });
 
     // v3 FIX: Only recommend dropping bench players with low DURANT
     // Never recommend dropping top-50 ranked players
@@ -329,7 +359,7 @@ var Engines = (function() {
       freeAgents.forEach(function(pickup) {
         if (recs.length >= 5) return;
         // Must be a meaningful upgrade
-        var improvement = (pickup.durantScore || 0) - (dropCandidate.durantScore || 0);
+        var improvement = pickup.effectiveDURANT - dropCandidate.effectiveDURANT;
         if (improvement > 2) {
           // Check if the pickup helps categories we need
           var catImpact = [];
@@ -370,8 +400,17 @@ var Engines = (function() {
       }
     });
 
-    // Sort by improvement
-    recs.sort(function(a,b) { return (b.improvement || 0) - (a.improvement || 0); });
+    // Sort by improvement, with tiebreaker chain
+    recs.sort(function(a, b) {
+      var diff = b.improvement - a.improvement;
+      if (Math.abs(diff) > 2) return diff;
+      // Tiebreaker: ownership, then MPG, then alphabetical
+      var ownDiff = (b.player.percentOwned || 0) - (a.player.percentOwned || 0);
+      if (Math.abs(ownDiff) > 0.5) return ownDiff;
+      var mpgDiff = (b.player.minutesPerGame || 0) - (a.player.minutesPerGame || 0);
+      if (Math.abs(mpgDiff) > 1) return mpgDiff;
+      return a.player.lastName.localeCompare(b.player.lastName);
+    });
     return recs;
   }
 
