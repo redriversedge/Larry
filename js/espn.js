@@ -320,18 +320,9 @@ var ESPNSync = (function() {
       player.status = raw.injuryStatus;
     }
 
-    // Today's game - check proTeamId schedule
-    player.gamesToday = false;
-    player.gameToday = null;
-    if (raw.proTeamId && S.scheduleLookup) {
-      player.schedule = S.scheduleLookup[raw.proTeamId] || [];
-      var todayStr = localDateStr(new Date());
-      var todayGame = player.schedule.find(function(g) { return g.date === todayStr; });
-      if (todayGame) {
-        player.gamesToday = true;
-        player.gameToday = todayGame;
-      }
-    }
+    // Note: player.schedule is initialized above to []
+    // Schedule data is populated by enrichPlayerSchedules() post-pass
+    // (called after S.scheduleLookup is built)
 
     return player;
   }
