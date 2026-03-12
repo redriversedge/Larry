@@ -323,6 +323,9 @@ var Engines = (function() {
   }
 
   function generateRecommendations(myPlayers, allPlayers) {
+    // Re-compute effectiveDURANT here using the full allPlayers pool.
+    // computeDURANT may be called on a subset; we need the full pool for an
+    // accurate boostMap. This overwrite is intentional.
     var boostMap = computeOpportunityBoost(allPlayers);
 
     allPlayers.forEach(function(p) {
@@ -346,8 +349,8 @@ var Engines = (function() {
     // v3 FIX: Only recommend dropping bench players with low DURANT
     // Never recommend dropping top-50 ranked players
     var droppable = sortedMy.filter(function(p) {
-      // Only bench or IR
-      if (p.slotId !== 12 && p.slotId !== 13) return false;
+      // Only bench (IR players cannot be simply dropped)
+      if (p.slotId !== 12) return false;
       // Don't drop players ranked in top 60% of roster
       var rosterRank = sortedMy.indexOf(p);
       var threshold = Math.floor(sortedMy.length * 0.4);
@@ -409,7 +412,7 @@ var Engines = (function() {
       if (Math.abs(ownDiff) > 0.5) return ownDiff;
       var mpgDiff = (b.player.minutesPerGame || 0) - (a.player.minutesPerGame || 0);
       if (Math.abs(mpgDiff) > 1) return mpgDiff;
-      return a.player.lastName.localeCompare(b.player.lastName);
+      return (a.player.lastName || a.player.fullName || '').localeCompare(b.player.lastName || b.player.fullName || '');
     });
     return recs;
   }
