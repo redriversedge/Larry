@@ -37,6 +37,23 @@ var _draftTierFilter = 'all';
 var _draftRoundFilter = 'all';
 
 
+// ========== UTILITY: FORMAT POSITIONS ==========
+
+function formatPositions(eligibleSlots) {
+  var slotMap = { 0: 'PG', 1: 'SG', 2: 'SF', 3: 'PF', 4: 'C', 5: 'G', 6: 'F', 7: 'UTIL' };
+  var seen = {};
+  var result = [];
+  (eligibleSlots || []).forEach(function(id) {
+    var pos = slotMap[id];
+    if (pos && !seen[pos]) {
+      seen[pos] = true;
+      result.push(pos);
+    }
+  });
+  return result.join('/') || '--';
+}
+
+
 // ========== ROSTER TAB ==========
 
 function renderRoster(container) {
@@ -301,7 +318,7 @@ function renderPlayerCell(p) {
   if (p.trend === 'hot') html += '<span class="trend-badge hot">\u2191 HOT</span>';
   else if (p.trend === 'cold') html += '<span class="trend-badge cold">\u2193 COLD</span>';
   html += '</span>';
-  html += '<span class="player-meta">' + p.positions.join('/') + ' - ' + p.nbaTeam + '</span>';
+  html += '<span class="player-meta">' + formatPositions(p.eligibleSlots) + ' - ' + p.nbaTeam + '</span>';
   html += '</div></div>';
   return html;
 }
@@ -695,8 +712,7 @@ function renderPlayersList() {
   html += '<div class="table-scroll"><table class="data-table compact">';
   html += '<thead><tr>';
   html += '<th style="text-align:left;min-width:28px">#</th>';
-  html += '<th style="text-align:left;min-width:120px" onclick="sortPlayers(\'name\')">Player</th>';
-  html += '<th onclick="sortPlayers(\'durantScore\')">DURANT</th>';
+  html += '<th style="text-align:left;min-width:120px" onclick="sortPlayers(\'name\')">Player<span class="sort-label">Sorted by Availability Score</span></th>';
   cats.forEach(function(cat) {
     html += '<th class="stat-col" style="color:' + cat.color + '" onclick="sortPlayers(\'' + cat.abbr + '\')">' + cat.abbr + '</th>';
   });
@@ -707,7 +723,6 @@ function renderPlayersList() {
     html += '<tr class="' + (isMyTeam ? 'my-team-row' : '') + '">';
     html += '<td class="text-xs muted">' + (p.durantRank || idx + 1) + '</td>';
     html += '<td style="cursor:pointer" onclick="openPlayerPopup(' + p.id + ')">' + renderPlayerCell(p) + '</td>';
-    html += '<td><strong>' + fmt(p.durantScore || 0, 1) + '</strong></td>';
 
     var period = _playersStatView;
     cats.forEach(function(cat) {
@@ -1175,7 +1190,7 @@ function renderDraftCenter() {
 
   html += '<div class="text-xs muted" style="margin-bottom:6px">' + filtered.length + ' players</div>';
   html += '<div class="card"><div class="table-scroll"><table class="data-table compact">';
-  html += '<thead><tr><th>#</th><th style="text-align:left">Player</th><th>Tier</th><th>Rd</th><th>DURANT</th><th>Z-Total</th>';
+  html += '<thead><tr><th>#</th><th style="text-align:left">Player</th><th>Tier</th><th>Rd</th>';
   cats.slice(0,5).forEach(function(cat) { html += '<th style="color:' + cat.color + '">' + cat.abbr + '</th>'; });
   html += '</tr></thead><tbody>';
 
@@ -1186,8 +1201,6 @@ function renderDraftCenter() {
     html += '<td style="text-align:left;cursor:pointer" onclick="openPlayerPopup(' + p.id + ')">' + esc(p.name) + '</td>';
     html += '<td style="color:' + (tierColors[p.tier] || 'inherit') + ';font-size:0.7rem">' + p.tier + '</td>';
     html += '<td>' + p.projectedRound + '</td>';
-    html += '<td><strong>' + fmt(p.durantScore || 0, 1) + '</strong></td>';
-    html += '<td>' + fmt(p.zScores ? p.zScores.total : 0, 2) + '</td>';
     cats.slice(0,5).forEach(function(cat) {
       var pgStats = ESPNSync.getPerGameStats(p, 'season');
       var val = pgStats ? (pgStats[cat.abbr] !== undefined ? pgStats[cat.abbr] : null) : null;
@@ -1350,16 +1363,15 @@ function renderOpponentScout() {
 
   html += '<div class="card"><div class="card-header">Opponent Roster</div>';
   html += '<div class="table-scroll"><table class="data-table compact">';
-  html += '<thead><tr><th style="text-align:left">Player</th><th>Pos</th><th>Slot</th><th>DURANT</th><th>Status</th>';
+  html += '<thead><tr><th style="text-align:left">Player</th><th>Pos</th><th>Slot</th><th>Status</th>';
   cats.slice(0, 5).forEach(function(cat) { html += '<th style="color:' + cat.color + '">' + cat.abbr + '</th>'; });
   html += '</tr></thead><tbody>';
 
   oppPlayers.forEach(function(p) {
     html += '<tr style="cursor:pointer" onclick="openPlayerPopup(' + p.id + ')">';
     html += '<td style="text-align:left">' + esc(p.name) + '</td>';
-    html += '<td>' + p.positions.join('/') + '</td>';
+    html += '<td>' + formatPositions(p.eligibleSlots) + '</td>';
     html += '<td>' + (p.slot || 'BE') + '</td>';
-    html += '<td><strong>' + fmt(p.durantScore || 0, 1) + '</strong></td>';
     html += '<td>' + statusBadge(p.injuryStatus) + '</td>';
     cats.slice(0, 5).forEach(function(cat) {
       var pgStats = ESPNSync.getPerGameStats(p, 'season');
@@ -1677,7 +1689,7 @@ function tradeAnalyzerSearch(side, query) {
   matches.forEach(function(p) {
     html += '<div class="mini-row" style="cursor:pointer;padding:4px 8px" onclick="selectTradePlayer(\'' + side + '\',' + p.id + ')">';
     html += '<span>' + esc(p.name) + '</span>';
-    html += '<span class="text-xs muted">' + p.positions.join('/') + ' | ' + p.nbaTeam + ' | DURANT: ' + fmt(p.durantScore || 0, 1) + '</span>';
+    html += '<span class="text-xs muted">' + formatPositions(p.eligibleSlots) + ' | ' + p.nbaTeam + '</span>';
     html += '</div>';
   });
   resultsEl.innerHTML = html;
@@ -1913,7 +1925,7 @@ function renderPlayerPopup() {
   html += '<span class="player-initials" style="width:56px;height:42px;font-size:1.2rem;background:' + color + ';display:none;border-radius:8px">' + initials + '</span>';
   html += '</div>';
   html += '<div class="popup-info"><h3>' + statusBadge(p.injuryStatus) + ' ' + esc(p.name) + '</h3>';
-  html += '<div class="popup-meta">' + p.positions.join('/') + ' | ' + p.nbaTeam + ' | Own: ' + fmt(p.ownership, 0) + '%</div>';
+  html += '<div class="popup-meta">' + formatPositions(p.eligibleSlots) + ' | ' + p.nbaTeam + ' | Own: ' + fmt(p.ownership, 0) + '%</div>';
   if (p.status !== 'ACTIVE' && p.status !== 'HEALTHY') {
     html += '<div class="popup-injury">' + p.status + '</div>';
   }
