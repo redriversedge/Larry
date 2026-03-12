@@ -1099,6 +1099,7 @@ function renderLeagueSubPage(container) {
 // ========== LEAGUE SUB-PAGES ==========
 
 function renderStandings() {
+  if (!S.teams.length) return '<div class="empty-state"><p>No standings data.</p></div>';
   var html = '<div class="card">';
   html += '<div class="table-scroll"><table class="data-table">';
   html += '<thead><tr><th style="text-align:left">#</th><th style="text-align:left">Team</th><th>W</th><th>L</th><th>T</th><th>PF</th></tr></thead><tbody>';
@@ -1281,7 +1282,7 @@ function renderROSProjections() {
     html += '<td>' + (p.rosGamesLeft || '-') + '</td>';
     cats.forEach(function(cat) {
       var val = p.rosProjection ? p.rosProjection[cat.abbr] : null;
-      html += '<td>' + (val !== null ? (cat.isPercent ? pct(val) : fmt(val, 0)) : '-') + '</td>';
+      html += '<td>' + (val != null ? (cat.isPercent ? pct(val) : fmt(val, 0)) : '-') + '</td>';
     });
     html += '</tr>';
   });
@@ -1410,8 +1411,8 @@ function renderDraftCenter() {
     html += '<td style="text-align:left;cursor:pointer" onclick="openPlayerPopup(' + p.id + ')">' + esc(p.name) + '</td>';
     html += '<td style="color:' + (tierColors[p.tier] || 'inherit') + ';font-size:0.7rem">' + p.tier + '</td>';
     html += '<td>' + p.projectedRound + '</td>';
+    var pgStats = ESPNSync.getPerGameStats(p, 'season');
     cats.slice(0,5).forEach(function(cat) {
-      var pgStats = ESPNSync.getPerGameStats(p, 'season');
       var val = pgStats ? (pgStats[cat.abbr] !== undefined ? pgStats[cat.abbr] : null) : null;
       html += '<td>' + (val !== null ? fmt(val, 1) : '') + '</td>';
     });
@@ -1452,7 +1453,7 @@ function renderProjectedStandings() {
     var winRate = (r.wins + r.losses + r.ties) > 0 ? r.wins / (r.wins + r.losses + r.ties) : 0.5;
 
     // Adjust win rate based on z-score strength (stronger teams win more)
-    var avgZ = S.teams.length ? totalZ / cats.length : 0;
+    var avgZ = (S.teams.length && cats.length) ? totalZ / cats.length : 0;
     var zBonus = Math.max(-0.15, Math.min(0.15, avgZ * 0.02));
     var projectedWinRate = Math.max(0.1, Math.min(0.9, winRate + zBonus));
 
