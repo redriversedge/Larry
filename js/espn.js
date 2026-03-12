@@ -628,7 +628,7 @@ var ESPNSync = (function() {
     if (!gp || gp === 0) return null; // blank, not zero
     var perGame = {};
     Object.keys(stats).forEach(function(cat) {
-      if (stats[cat] != null && stats[cat] !== 0) {
+      if (stats[cat] != null) {
         perGame[cat] = parseFloat((stats[cat] / gp).toFixed(1));
       }
     });
