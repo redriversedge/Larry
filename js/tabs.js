@@ -443,15 +443,38 @@ function renderMatchupScore(cats) {
   return html;
 }
 
-function renderScheduleAdvantage() {
-  var myGames = 0, oppGames = 0;
-  var myPlayers = S.myTeam.players || [];
-  myPlayers.forEach(function(p) { if (p.slotId < 12) myGames += (p.gamesRemaining || 0); });
-
-  var oppTeam = S.teams.find(function(t) { return t.teamId === S.matchup.opponentTeamId; });
-  if (oppTeam && oppTeam.players) {
-    oppTeam.players.forEach(function(p) { if (p.slotId < 12) oppGames += (p.gamesRemaining || 0); });
+function computeScheduleAdvantage(myPlayers, oppPlayers) {
+  var now = new Date();
+  var matchupEnd = getMatchupDates().end;
+  function countGamesRemaining(players) {
+    return (players || [])
+      .filter(function(p) { return p.slotId !== 13; }) // exclude IR
+      .reduce(function(sum, p) {
+        if (p.schedule && p.schedule.length) {
+          var games = p.schedule.filter(function(g) {
+            var d = new Date(g.date);
+            return d >= now && d <= matchupEnd;
+          });
+          return sum + games.length;
+        }
+        // Fallback to gamesRemaining estimate
+        return sum + (p.gamesRemaining || 0);
+      }, 0);
   }
+  return {
+    mine: countGamesRemaining(myPlayers),
+    opp: countGamesRemaining(oppPlayers)
+  };
+}
+
+function renderScheduleAdvantage() {
+  var myPlayers = S.myTeam.players || [];
+  var oppTeam = S.teams.find(function(t) { return t.teamId === S.matchup.opponentTeamId; });
+  var oppPlayers = oppTeam ? (oppTeam.players || []) : [];
+
+  var adv = computeScheduleAdvantage(myPlayers, oppPlayers);
+  var myGames = adv.mine;
+  var oppGames = adv.opp;
 
   var diff = myGames - oppGames;
   var matchupDates = getMatchupDates();
