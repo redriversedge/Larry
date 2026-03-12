@@ -705,6 +705,28 @@ body {
 }
 @keyframes syncPulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
 
+/* --- SCORE ROW: Category in Middle --- */
+.score-row {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.9rem;
+}
+.score-row .my-score { text-align: right; font-weight: 700; padding-right: 8px; }
+.score-row .cat-name {
+  text-align: center;
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  padding: 0 8px;
+  text-transform: uppercase;
+  min-width: 40px;
+}
+.score-row .opp-score { text-align: left; font-weight: 700; padding-left: 8px; }
+.score-row .winning { color: var(--accent-green); }
+.score-row .losing { color: var(--accent-red); }
+
 /* --- SCHEDULE ADVANTAGE --- */
 .sched-adv { display: flex; gap: 12px; padding: 10px 0; }
 .sched-adv-team { flex: 1; text-align: center; }
@@ -1000,3 +1022,121 @@ body {
 }
 .trend-badge.hot { background: rgba(34,197,94,0.2); color: var(--accent-green); }
 .trend-badge.cold { background: rgba(239,68,68,0.2); color: var(--accent-red); }
+
+/* --- SORT LABEL --- */
+.sort-label {
+  font-size: 0.65rem;
+  color: var(--text-secondary);
+  display: block;
+  margin-bottom: 6px;
+}
+
+/* Add/Drop Tiles */
+.addrop-scroll {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 8px;
+  scrollbar-width: none;
+}
+.addrop-scroll::-webkit-scrollbar { display: none; }
+
+.addrop-tile {
+  flex: 0 0 140px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.addrop-tile .player-headshot {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--bg-surface);
+}
+
+.addrop-tile .tile-name {
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-align: center;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+
+.addrop-tile .tile-pos {
+  font-size: 0.68rem;
+  color: var(--text-secondary);
+}
+
+.addrop-tile .tile-drop {
+  font-size: 0.7rem;
+  color: var(--accent-red);
+  text-align: center;
+}
+
+.addrop-tile .tile-reason {
+  font-size: 0.66rem;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+/* Injury Alert Banner */
+.injury-banner {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid var(--accent-red);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  font-size: 0.82rem;
+  color: var(--text-primary);
+}
+.injury-banner .banner-dismiss {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 1rem;
+  padding: 0 0 0 12px;
+  flex-shrink: 0;
+}
+
+/* Trending Section */
+.trending-section { margin-bottom: 12px; }
+.trending-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 0.88rem;
+  user-select: none;
+}
+.trending-section .trending-body { display: none; padding: 0 14px 12px; }
+.trending-section.open .trending-body { display: block; }
+.trending-section.open .toggle-arrow { transform: rotate(180deg); }
+.toggle-arrow { transition: transform 0.2s; display: inline-block; }
+.trend-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+  font-size: 0.82rem;
+  border-bottom: 1px solid var(--border);
+}
+.trend-dir { font-weight: 900; width: 14px; }
+.trend-dir.rising { color: var(--accent-green); }
+.trend-dir.falling { color: var(--accent-red); }
+.trend-name { flex: 1; color: var(--text-primary); }
+.trend-team { font-size: 0.72rem; color: var(--text-secondary); }
+.trend-group-label { font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase; padding: 6px 0 4px; font-weight: 700; }

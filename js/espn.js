@@ -36,9 +36,17 @@ var ESPNSync = (function() {
 
   // --- FETCH PLAYERS (FREE AGENTS) ---
   async function fetchPlayers(status) {
-    return await fetchESPN(['kona_player_info'], {
-      'scoringPeriodId': String(S.league.currentScoringPeriodId || 0)
-    });
+    var url = PROXY_URL + '?view=kona_player_info&scoringPeriodId=' + String(S.league.currentScoringPeriodId || 0);
+    var headers = {
+      'x-espn-league-id': S.espn.leagueId,
+      'x-espn-s2': S.espn.espnS2,
+      'x-espn-swid': S.espn.swid,
+      'x-espn-season': String(S.league.seasonId),
+      'x-fantasy-filter': JSON.stringify({ players: { limit: 500 } })
+    };
+    var resp = await fetch(url, { headers: headers });
+    if (!resp.ok) throw new Error('ESPN API returned ' + resp.status);
+    return await resp.json();
   }
 
   // --- PARSE LEAGUE SETTINGS ---
@@ -312,13 +320,9 @@ var ESPNSync = (function() {
       player.status = raw.injuryStatus;
     }
 
-    // Today's game - check proTeamId schedule
-    player.gamesToday = false;
-    player.gameToday = null;
-    if (raw.proTeamId) {
-      // ESPN schedule data comes from mScoreboard
-      // We mark this in the enrichment phase after full data is loaded
-    }
+    // Note: player.schedule is initialized above to []
+    // Schedule data is populated by enrichPlayerSchedules() post-pass
+    // (called after S.scheduleLookup is built)
 
     return player;
   }
@@ -401,6 +405,106 @@ var ESPNSync = (function() {
     });
   }
 
+  // --- BUILD SCHEDULE LOOKUP FROM mScoreboard ---
+  // ESPN returns scoreboard data under data.scoreboard (from mScoreboard view).
+  // data.scoreboard.proGames is an object keyed by proTeamId (string) where each
+  // value is an array of game objects. Each game has:
+  //   - date: ISO date string (e.g. "2026-03-12T00:00:00.000Z")
+  //   - proTeamIds: [awayProTeamId, homeProTeamId]
+  //   - (optionally) startTimeUTCStr or gameTime for tip-off time
+  // Returns: { [proTeamId]: [{ date, opponent, isHome, time }] }
+  function buildScheduleLookup(data) {
+    var lookup = {};
+    try {
+      var sb = data && data.scoreboard;
+      if (!sb) return lookup;
+
+      // Primary structure: scoreboard.proGames keyed by proTeamId string
+      var proGames = sb.proGames || sb.proGamesByScoringPeriod || null;
+
+      // proGamesByScoringPeriod is keyed by scoring period first, then by team
+      // Flatten it if that's what we got
+      if (proGames && !Array.isArray(proGames)) {
+        var firstVal = proGames[Object.keys(proGames)[0]];
+        // If firstVal is also an object (not array of game objects), it's nested by scoring period
+        if (firstVal && !Array.isArray(firstVal) && typeof firstVal === 'object' && !firstVal.proTeamIds) {
+          var flat = {};
+          Object.keys(proGames).forEach(function(periodId) {
+            var periodGames = proGames[periodId];
+            if (periodGames && typeof periodGames === 'object') {
+              Object.keys(periodGames).forEach(function(teamId) {
+                if (!flat[teamId]) flat[teamId] = [];
+                var games = periodGames[teamId];
+                if (Array.isArray(games)) {
+                  games.forEach(function(g) { flat[teamId].push(g); });
+                }
+              });
+            }
+          });
+          proGames = flat;
+        }
+      }
+
+      if (!proGames || typeof proGames !== 'object') return lookup;
+
+      Object.keys(proGames).forEach(function(teamIdStr) {
+        var teamId = parseInt(teamIdStr, 10);
+        var games = proGames[teamIdStr];
+        if (!Array.isArray(games)) return;
+
+        lookup[teamId] = [];
+        games.forEach(function(game) {
+          // date: prefer date field, fallback to startTimestamp
+          var rawDate = game.date || game.gameDate || game.startDate || '';
+          if (!rawDate) return;
+
+          // Normalize to YYYY-MM-DD local date string
+          var dateObj = new Date(rawDate);
+          if (isNaN(dateObj.getTime())) return;
+          var dateStr = localDateStr(dateObj);
+
+          // Determine opponent and home/away
+          // proTeamIds: [awayId, homeId] based on ESPN convention
+          var proTeamIds = game.proTeamIds || [];
+          var awayId = proTeamIds[0] || 0;
+          var homeId = proTeamIds[1] || 0;
+          var isHome = homeId === teamId;
+          var opponentId = isHome ? awayId : homeId;
+          var opponent = ESPN_TEAM_MAP[opponentId] || ('T' + opponentId);
+
+          // Game time: ESPN may provide startTimeUTCStr, or we format from date
+          var time = '';
+          if (game.startTimeUTCStr) {
+            time = game.startTimeUTCStr;
+          } else if (game.gameTime || game.time) {
+            time = game.gameTime || game.time;
+          } else if (rawDate && rawDate.indexOf('T') >= 0) {
+            // Format UTC time to ET approximation (UTC-5 standard / UTC-4 daylight)
+            var utcHour = dateObj.getUTCHours();
+            var utcMin = dateObj.getUTCMinutes();
+            // Rough ET offset: -5 (use -5, close enough for display)
+            var etHour = utcHour - 5;
+            if (etHour < 0) etHour += 24;
+            var ampm = etHour >= 12 ? 'PM' : 'AM';
+            var h = etHour % 12 || 12;
+            var m = utcMin < 10 ? '0' + utcMin : String(utcMin);
+            time = h + ':' + m + ' ' + ampm + ' ET';
+          }
+
+          lookup[teamId].push({
+            date: dateStr,
+            opponent: opponent,
+            isHome: isHome,
+            time: time
+          });
+        });
+      });
+    } catch (e) {
+      console.warn('buildScheduleLookup error:', e.message);
+    }
+    return lookup;
+  }
+
   // --- PARSE FREE AGENTS ---
   function parseFreeAgents(data) {
     S.freeAgents = [];
@@ -426,12 +530,17 @@ var ESPNSync = (function() {
         ESPNSync._lastLeagueData = data;
         parseLeagueSettings(data);
         parseTeams(data);
+        S.scheduleLookup = buildScheduleLookup(data);
+        enrichPlayerSchedules();
         if (S.myTeam.teamId > 0) parseMatchup(data);
 
         // Fetch free agents to populate allPlayers for search/rankings
         try {
           var faData = await fetchPlayers();
-          if (faData) parseFreeAgents(faData);
+          if (faData) {
+            parseFreeAgents(faData);
+            enrichPlayerSchedules();
+          }
         } catch (faErr) {
           console.warn('Free agent fetch failed:', faErr.message);
         }
@@ -452,6 +561,28 @@ var ESPNSync = (function() {
       updateSyncIndicator('error');
       console.error('Sync failed:', e);
     }
+  }
+
+  // --- ENRICH ALL PLAYERS WITH SCHEDULE DATA ---
+  // Called after S.scheduleLookup is built. parsePlayer runs before the lookup
+  // exists, so rostered players need a post-pass to get schedule populated.
+  // Free agents parsed later (parseFreeAgents) will hit the inline branch in
+  // parsePlayer which already checks S.scheduleLookup.
+  function enrichPlayerSchedules() {
+    if (!S.scheduleLookup) return;
+    var todayStr = localDateStr(new Date());
+    S.allPlayers.forEach(function(p) {
+      if (!p.nbaTeamId) return;
+      p.schedule = S.scheduleLookup[p.nbaTeamId] || [];
+      var todayGame = p.schedule.find(function(g) { return g.date === todayStr; });
+      if (todayGame) {
+        p.gamesToday = true;
+        p.gameToday = todayGame;
+      } else {
+        p.gamesToday = false;
+        p.gameToday = null;
+      }
+    });
   }
 
   function enrichGamesRemaining() {
@@ -489,6 +620,63 @@ var ESPNSync = (function() {
     S.matchup.oppGamesRemaining = oppGames;
   }
 
+  // --- PER-GAME STAT HELPER ---
+  function getPerGameStats(player, period) {
+    // period: 'season' | 'last7' | 'last15' | 'last30'
+    var stats = player.stats && player.stats[period] ? player.stats[period] : {};
+    var gp = player.stats && player.stats[period + 'GP'] ? player.stats[period + 'GP'] : (player.gamesPlayed || 0);
+    if (!gp || gp === 0) return null; // blank, not zero
+    var perGame = {};
+    Object.keys(stats).forEach(function(cat) {
+      if (stats[cat] != null) {
+        perGame[cat] = parseFloat((stats[cat] / gp).toFixed(1));
+      }
+    });
+    return perGame;
+  }
+
+  // --- FETCH STATS FOR A SINGLE SCORING PERIOD (DAY) ---
+  function fetchScoringPeriodStats(scoringPeriodId) {
+    var url = PROXY_URL + '?view=kona_player_info&scoringPeriodId=' + scoringPeriodId;
+    var headers = {
+      'x-espn-league-id': S.espn.leagueId,
+      'x-espn-s2': S.espn.espnS2,
+      'x-espn-swid': S.espn.swid,
+      'x-espn-season': String(S.league.seasonId)
+    };
+    return fetch(url, { headers: headers })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        var statsMap = {};
+        // Parse kona_player_info response - same structure as the free agents fetch
+        // playerPoolEntries contains player objects with stats
+        var entries = data && data.playerPoolEntries ? data.playerPoolEntries : [];
+        entries.forEach(function(entry) {
+          var id = entry.playerId || (entry.playerPoolEntry && entry.playerPoolEntry.player && entry.playerPoolEntry.player.id);
+          var rawStats = entry.playerPoolEntry && entry.playerPoolEntry.player && entry.playerPoolEntry.player.stats;
+          if (id && rawStats) {
+            // Find stats for this specific scoring period
+            var periodStats = null;
+            (rawStats || []).forEach(function(s) {
+              if (s.scoringPeriodId === scoringPeriodId && s.statSourceId === 0) {
+                periodStats = s.stats;
+              }
+            });
+            if (periodStats) {
+              // Map ESPN stat IDs to abbreviations
+              var mapped = {};
+              Object.keys(periodStats).forEach(function(espnId) {
+                var abbr = ESPN_STAT_MAP[parseInt(espnId)];
+                if (abbr) mapped[abbr] = periodStats[espnId];
+              });
+              statsMap[id] = mapped;
+            }
+          }
+        });
+        return statsMap;
+      });
+  }
+
   var _lastLeagueData = null;
 
   return {
@@ -503,6 +691,8 @@ var ESPNSync = (function() {
     selectTeam: selectTeam,
     applyMyTeam: applyMyTeam,
     _lastLeagueData: _lastLeagueData,
-    parsePlayer: parsePlayer
+    parsePlayer: parsePlayer,
+    getPerGameStats: getPerGameStats,
+    fetchScoringPeriodStats: fetchScoringPeriodStats
   };
 })();
