@@ -42,7 +42,7 @@ var ESPNSync = (function() {
       'x-espn-s2': S.espn.espnS2,
       'x-espn-swid': S.espn.swid,
       'x-espn-season': String(S.league.seasonId),
-      'x-fantasy-filter': JSON.stringify({ players: { limit: 500 } })
+      'x-fantasy-filter': JSON.stringify({ players: { limit: 500, filterStatus: { value: ['FREEAGENT', 'WAIVERS'] }, sortPercOwned: { sortAsc: false, sortPriority: 1 } } })
     };
     var resp = await fetch(url, { headers: headers });
     if (!resp.ok) throw new Error('ESPN API returned ' + resp.status);
@@ -260,14 +260,14 @@ var ESPNSync = (function() {
       positions: [],
       eligibleSlots: (raw.eligibleSlots || []).slice(),
       defaultPositionId: raw.defaultPositionId || 0,
-      nbaTeamId: raw.proTeamId || 0,
+      proTeamId: raw.proTeamId || 0,
       nbaTeam: ESPN_TEAM_MAP[raw.proTeamId] || '???',
       status: 'ACTIVE',
       injuryStatus: raw.injuryStatus || 'ACTIVE',
       slot: ESPN_SLOT_MAP[entry.lineupSlotId] || 'BE',
       slotId: entry.lineupSlotId || 12,
       onTeamId: 0,
-      ownership: raw.ownership ? raw.ownership.percentOwned || 0 : 0,
+      percentOwned: raw.ownership ? raw.ownership.percentOwned || 0 : 0,
       stats: { season: {}, last30: {}, last15: {}, last7: {}, projectedSeason: {}, projectedMatchup: {} },
       gamesPlayed: 0,
       minutesPerGame: 0,
