@@ -809,17 +809,20 @@ var Engines = (function() {
         projectedMargin = (myNow + myRemaining) - (oppNow + oppRemaining);
       }
 
-      // Estimate win probability from projected margin relative to expected variance
-      var totalGames = Math.max(1, myGR + oppGR);
-      var scale = hasScores ? Math.max(1, (myNow + oppNow) / 2) : Math.max(1, totalGames * 2);
-      var confidence = projectedMargin / Math.max(scale * 0.15, 1);
-      // Sigmoid-ish mapping: clamp to 0-100
-      var winProb = Math.round(Math.min(100, Math.max(0, 50 + confidence * 20)));
+      // Win probability from projected margin as percentage of total production
+      var projMyTotal = cat.isNegative ? (oppNow + oppRemaining) : (myNow + myRemaining);
+      var projOppTotal = cat.isNegative ? (myNow + myRemaining) : (oppNow + oppRemaining);
+      var totalProduction = projMyTotal + projOppTotal;
+      var winProb = 50;
+      if (totalProduction > 0) {
+        var marginPct = projectedMargin / (totalProduction / 2);
+        winProb = Math.round(Math.min(95, Math.max(5, 50 + marginPct * 30)));
+      }
 
-      if (winProb > 75) {
+      if (winProb > 70) {
         strategy.locks.push(cat.abbr);
         strategy.categoryWeights[cat.abbr] = 0.5;
-      } else if (winProb < 25) {
+      } else if (winProb < 30) {
         strategy.punts.push(cat.abbr);
         strategy.categoryWeights[cat.abbr] = 0.3;
       } else {
