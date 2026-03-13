@@ -70,7 +70,10 @@ RULES:
 - Consider games remaining and schedule when making recommendations
 - For start/sit: factor in opponent, back-to-backs, rest days
 - For trades: analyze category impact both ways
-- For pickups: match to team needs, not just overall value`;
+- For pickups: match to team needs, not just overall value
+- NEVER recommend picking up a player with status OUT, SUSPENSION, or IR
+- Always check and mention injury status before recommending any player
+- Prioritize target categories from the matchup strategy over general value`;
 
   if (ctx.leagueName) {
     prompt += '\n\nLEAGUE: ' + ctx.leagueName + ' (' + (ctx.scoringType || 'H2H') + ', ' + (ctx.teamCount || '?') + ' teams)';

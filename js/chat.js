@@ -102,23 +102,38 @@ function buildChatContext() {
     context += '\n';
   }
 
-  // Roster with z-scores
+  // Matchup strategy
+  var strat = S.matchup.strategy || {};
+  if (strat.summary) {
+    context += 'MATCHUP STRATEGY: ' + strat.summary + '\n';
+    if (strat.targets && strat.targets.length) context += 'TARGET CATEGORIES: ' + strat.targets.join(', ') + ' (focus pickups and streaming here)\n';
+    if (strat.locks && strat.locks.length) context += 'LOCK CATEGORIES: ' + strat.locks.join(', ') + ' (safe, maintain)\n';
+    if (strat.punts && strat.punts.length) context += 'PUNT CATEGORIES: ' + strat.punts.join(', ') + ' (not worth chasing this week)\n';
+  }
+
+  // Roster with z-scores and injury status
   var myPlayers = S.myTeam.players || [];
   if (myPlayers.length) {
     context += 'ROSTER:\n';
     myPlayers.sort(function(a,b) { return (b.durantScore||0) - (a.durantScore||0); });
     myPlayers.forEach(function(p) {
-      context += '  ' + p.name + ' (' + p.positions.join('/') + ', ' + p.nbaTeam + ', DURANT: ' + fmt(p.durantScore||0,1) + ', Z: ' + fmt(p.zScores?p.zScores.total:0,2) + ', Slot: ' + p.slot + ')\n';
+      var status = (p.injuryStatus && p.injuryStatus !== 'ACTIVE') ? ', Status: ' + p.injuryStatus : '';
+      context += '  ' + p.name + ' (' + p.positions.join('/') + ', ' + p.nbaTeam + status + ', DURANT: ' + fmt(p.durantScore||0,1) + ', Z: ' + fmt(p.zScores?p.zScores.total:0,2) + ', Slot: ' + p.slot + ')\n';
     });
   }
 
-  // Top free agents
-  var freeAgents = (S.allPlayers || []).filter(function(p) { return p.onTeamId === 0; });
+  // Top free agents (exclude injured OUT/SUSPENSION/IR)
+  var freeAgents = (S.allPlayers || []).filter(function(p) {
+    if (p.onTeamId !== 0) return false;
+    var inj = p.injuryStatus || 'ACTIVE';
+    return inj !== 'OUT' && inj !== 'SUSPENSION' && inj !== 'IR';
+  });
   freeAgents.sort(function(a,b) { return (b.durantScore||0) - (a.durantScore||0); });
   if (freeAgents.length) {
     context += 'TOP FREE AGENTS:\n';
     freeAgents.slice(0, 10).forEach(function(p) {
-      context += '  ' + p.name + ' (' + p.positions.join('/') + ', ' + p.nbaTeam + ', DURANT: ' + fmt(p.durantScore||0,1) + ', Own: ' + fmt(p.ownership,0) + '%)\n';
+      var status = (p.injuryStatus && p.injuryStatus !== 'ACTIVE') ? ', Status: ' + p.injuryStatus : '';
+      context += '  ' + p.name + ' (' + p.positions.join('/') + ', ' + p.nbaTeam + status + ', DURANT: ' + fmt(p.durantScore||0,1) + ', Own: ' + fmt(p.percentOwned||0,0) + '%)\n';
     });
   }
 
@@ -137,7 +152,7 @@ async function sendChat(presetMsg) {
 
   try {
     var context = buildChatContext();
-    var systemPrompt = 'You are Larry, an expert fantasy basketball analyst owl. You are helping a manager in a ' + S.league.scoringType + ' league with ' + S.league.teamCount + ' teams. Be specific, data-driven, and actionable. Reference actual player names, stats, and z-scores from the context. Keep responses concise but thorough. Use ** for emphasis on key points.\n\nCURRENT DATA:\n' + context;
+    var systemPrompt = 'You are Larry, an expert fantasy basketball analyst owl. You are helping a manager in a ' + S.league.scoringType + ' league with ' + S.league.teamCount + ' teams. Be specific, data-driven, and actionable. Reference actual player names, stats, and z-scores from the context. Keep responses concise but thorough. Use ** for emphasis on key points.\n\nINJURY RULES:\n- NEVER recommend picking up a player with status OUT, SUSPENSION, or IR. They cannot contribute.\n- If a roster player is OUT/IR, flag them as a potential drop or IR stash candidate.\n- Players with GTD or DAY_TO_DAY status are risky starts; mention the risk.\n- Always check and mention injury status before recommending any player.\n\nMATCHUP STRATEGY RULES:\n- When recommending pickups or streams, prioritize TARGET categories over overall value.\n- Reference the specific target/lock/punt categories from the matchup strategy.\n- Tailor all advice to winning THIS week\'s matchup, not general season value.\n- If a player helps target categories, say so explicitly.\n\nCURRENT DATA:\n' + context;
 
     var messages = [];
     _chatHistory.forEach(function(msg) {

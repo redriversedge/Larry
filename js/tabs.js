@@ -82,10 +82,10 @@ function renderAddDropTiles(recommendations) {
     var headshotUrl = 'https://a.espncdn.com/i/headshots/nba/players/full/' + p.id + '.png';
     var reason = rec.detail ? rec.detail.split('.')[0] : 'Better fit';
     return '<div class="addrop-tile">' +
-      '<img class="player-headshot" src="' + headshotUrl + '" onerror="this.style.background=\'var(--bg-surface)\';this.src=\'\'" alt="' + (p.fullName || '') + '">' +
-      '<div class="tile-name">' + (p.fullName || '') + '</div>' +
+      '<img class="player-headshot" src="' + headshotUrl + '" onerror="this.style.background=\'var(--bg-surface)\';this.src=\'\'" alt="' + (p.name || '') + '">' +
+      '<div class="tile-name">' + (p.name || '') + '</div>' +
       '<div class="tile-pos">' + formatPositions(p.eligibleSlots) + '</div>' +
-      '<div class="tile-drop">Drop: ' + (drop ? drop.fullName : '--') + '</div>' +
+      '<div class="tile-drop">Drop: ' + (drop ? drop.name : '--') + '</div>' +
       '<div class="tile-reason">' + reason + '</div>' +
     '</div>';
   }).join('');
@@ -179,9 +179,15 @@ function renderRoster(container) {
     html += '</div>';
   }
 
-  // Decision Hub (v3: horizontal add/drop tile row)
+  // Strategy one-liner + Decision Hub (v3: horizontal add/drop tile row)
   if (S.allPlayers.length) {
     Engines.computeDURANT(S.allPlayers);
+    var strat = S.matchup.strategy || {};
+    if (strat.summary) {
+      html += '<div style="padding:8px 12px;margin-bottom:8px;background:var(--bg-input);border-radius:8px;font-size:13px">';
+      html += '<span style="color:var(--accent-gold);font-weight:600">Strategy:</span> ' + esc(strat.summary);
+      html += '</div>';
+    }
     var recs = Engines.generateRecommendations(myPlayers, S.allPlayers);
     html += '<div class="card">';
     html += '<div class="card-header">Add / Drop</div>';
@@ -408,6 +414,54 @@ function renderMatchup(container) {
   container.innerHTML = html;
 }
 
+function renderMatchupStrategy() {
+  var strat = S.matchup.strategy || {};
+  if (!strat.targets && !strat.locks && !strat.punts) return '';
+  if (!strat.targets.length && !strat.locks.length && !strat.punts.length) return '';
+
+  var collapsed = isSectionCollapsed('matchupStrategy');
+  var html = '<div class="card">';
+  html += '<div class="card-header" onclick="toggleSection(\'matchupStrategy\');render()" style="cursor:pointer">';
+  html += 'Matchup Strategy <span style="float:right;opacity:0.5">' + (collapsed ? '+' : '-') + '</span></div>';
+
+  if (!collapsed) {
+    html += '<div style="padding:12px">';
+
+    // Strategy categories in colored pills
+    if (strat.targets.length) {
+      html += '<div style="margin-bottom:10px">';
+      html += '<span style="color:var(--accent-gold);font-weight:600;margin-right:8px">TARGET</span>';
+      strat.targets.forEach(function(cat) {
+        html += '<span style="display:inline-block;padding:4px 10px;margin:2px 4px;border-radius:12px;background:rgba(245,158,11,0.15);color:var(--accent-gold);font-size:13px;font-weight:600">' + cat + '</span>';
+      });
+      html += '</div>';
+    }
+
+    if (strat.locks.length) {
+      html += '<div style="margin-bottom:10px">';
+      html += '<span style="color:var(--accent-green);font-weight:600;margin-right:8px">LOCK</span>';
+      strat.locks.forEach(function(cat) {
+        html += '<span style="display:inline-block;padding:4px 10px;margin:2px 4px;border-radius:12px;background:rgba(34,197,94,0.15);color:var(--accent-green);font-size:13px;font-weight:600">' + cat + '</span>';
+      });
+      html += '</div>';
+    }
+
+    if (strat.punts.length) {
+      html += '<div style="margin-bottom:10px">';
+      html += '<span style="color:var(--accent-red);font-weight:600;margin-right:8px">PUNT</span>';
+      strat.punts.forEach(function(cat) {
+        html += '<span style="display:inline-block;padding:4px 10px;margin:2px 4px;border-radius:12px;background:rgba(239,68,68,0.15);color:var(--accent-red);font-size:13px;font-weight:600">' + cat + '</span>';
+      });
+      html += '</div>';
+    }
+
+    html += '<p class="muted text-sm" style="margin-top:8px">Focus streaming and pickups on target categories. Locks are safe. Punts are not worth chasing this week.</p>';
+    html += '</div>';
+  }
+  html += '</div>';
+  return html;
+}
+
 function renderMatchupScore(cats) {
   var html = '';
   var mr = S.matchup.myRecord || {wins:0,losses:0,ties:0};
@@ -430,6 +484,9 @@ function renderMatchupScore(cats) {
     html += renderScoreRow(cat.abbr, myDisplay, oppDisplay);
   });
   html += '</div></div>';
+
+  // Matchup Strategy card
+  html += renderMatchupStrategy();
 
   // Schedule Advantage (v3 fix)
   html += renderScheduleAdvantage();

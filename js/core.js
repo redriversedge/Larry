@@ -105,7 +105,8 @@ function initState() {
       myTeamId: 0, opponentTeamId: 0, opponentName: '',
       myScores: {}, oppScores: {},
       myRecord: { wins: 0, losses: 0, ties: 0 },
-      daysRemaining: 0, myGamesRemaining: 0, oppGamesRemaining: 0
+      daysRemaining: 0, myGamesRemaining: 0, oppGamesRemaining: 0,
+      strategy: { locks: [], targets: [], punts: [], categoryWeights: {}, summary: '' }
     },
     allPlayers: [],
     freeAgents: [],

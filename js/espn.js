@@ -228,6 +228,7 @@ var ESPNSync = (function() {
   function selectTeam(teamId) {
     if (applyMyTeam(teamId)) {
       if (ESPNSync._lastLeagueData) parseMatchup(ESPNSync._lastLeagueData);
+      Engines.computeMatchupStrategy();
       autosave();
       return true;
     }
@@ -335,6 +336,7 @@ var ESPNSync = (function() {
       result = {
         id: raw.player.id, name: raw.player.fullName || '',
         positions: [], nbaTeam: ESPN_TEAM_MAP[raw.player.proTeamId] || '???',
+        injuryStatus: raw.player.injuryStatus || 'ACTIVE',
         stats: { season: {}, last30: {}, last7: {} }, onTeamId: 0,
         ownership: raw.player.ownership ? raw.player.ownership.percentOwned || 0 : 0
       };
@@ -546,6 +548,7 @@ var ESPNSync = (function() {
         }
 
         enrichGamesRemaining();
+        Engines.computeMatchupStrategy();
         Engines.rosProjections(S.allPlayers);
 
         S.espn.lastSync = new Date().toISOString();

@@ -338,6 +338,12 @@ var Engines = (function() {
     var recs = [];
     if (!myPlayers || !myPlayers.length) return recs;
 
+    // Matchup strategy: weight recommendations toward target categories
+    var strat = S.matchup.strategy || {};
+    var catWeights = strat.categoryWeights || {};
+    var hasStrategy = Object.keys(catWeights).length > 0;
+    var targetCats = strat.targets || [];
+
     // Sort my players by effectiveDURANT (worst first for drops)
     var sortedMy = myPlayers.slice().sort(function(a,b) { return (a.effectiveDURANT || 0) - (b.effectiveDURANT || 0); });
 
@@ -361,25 +367,56 @@ var Engines = (function() {
     droppable.forEach(function(dropCandidate) {
       freeAgents.forEach(function(pickup) {
         if (recs.length >= 5) return;
-        // Must be a meaningful upgrade
-        var improvement = pickup.effectiveDURANT - dropCandidate.effectiveDURANT;
+        var durantImprovement = pickup.effectiveDURANT - dropCandidate.effectiveDURANT;
+        if (durantImprovement <= 0) return;
+
+        // Compute matchup-adjusted improvement (weighted by target categories)
+        var matchupImprovement = 0;
+        if (hasStrategy) {
+          matchupImprovement = matchupAdjustedValue(pickup, catWeights) - matchupAdjustedValue(dropCandidate, catWeights);
+        }
+
+        // Blend: 40% overall value, 60% matchup fit (or 100% overall if no strategy)
+        var improvement = hasStrategy
+          ? (durantImprovement * 0.4) + (matchupImprovement * 0.6)
+          : durantImprovement;
+
         if (improvement > 2) {
-          // Check if the pickup helps categories we need
+          // Check category impact, highlighting target cats
           var catImpact = [];
           cats.forEach(function(cat) {
             var pickupZ = pickup.zScores ? pickup.zScores[cat.abbr] || 0 : 0;
             var dropZ = dropCandidate.zScores ? dropCandidate.zScores[cat.abbr] || 0 : 0;
-            if (pickupZ > dropZ + 0.3) catImpact.push('+' + cat.abbr);
-            else if (pickupZ < dropZ - 0.3) catImpact.push('-' + cat.abbr);
+            var isTarget = targetCats.indexOf(cat.abbr) >= 0;
+            var prefix = isTarget ? '[TARGET]' : '';
+            if (pickupZ > dropZ + 0.3) catImpact.push(prefix + '+' + cat.abbr);
+            else if (pickupZ < dropZ - 0.3) catImpact.push(prefix + '-' + cat.abbr);
           });
+
+          // Build detail with strategy context
+          var detailParts = [];
+          detailParts.push('DURANT: ' + fmt(pickup.durantScore || 0, 1) + ' vs ' + fmt(dropCandidate.durantScore || 0, 1));
+          if (catImpact.length) {
+            detailParts.push(catImpact.join(', '));
+          }
+          if (hasStrategy && targetCats.length) {
+            // Count how many target cats this pickup helps
+            var targetHelps = [];
+            targetCats.forEach(function(tc) {
+              var pz = pickup.zScores ? pickup.zScores[tc] || 0 : 0;
+              var dz = dropCandidate.zScores ? dropCandidate.zScores[tc] || 0 : 0;
+              if (pz > dz + 0.2) targetHelps.push(tc);
+            });
+            if (targetHelps.length) {
+              detailParts.push('Helps targets: ' + targetHelps.join(', '));
+            }
+          }
 
           recs.push({
             type: 'pickup',
             priority: improvement > 5 ? 'high' : 'medium',
             action: 'Add ' + pickup.name + ', Drop ' + dropCandidate.name,
-            detail: 'DURANT: ' + fmt(pickup.durantScore || 0, 1) + ' vs ' + fmt(dropCandidate.durantScore || 0, 1) + ' (+' + fmt(improvement, 1) + '). ' +
-              'Z-Total: ' + fmt(pickup.zScores ? pickup.zScores.total : 0, 2) + ' vs ' + fmt(dropCandidate.zScores ? dropCandidate.zScores.total : 0, 2) + '. ' +
-              (catImpact.length ? catImpact.join(', ') + '.' : 'Similar category profile.'),
+            detail: detailParts.join('. ') + '.',
             player: pickup,
             dropPlayer: dropCandidate,
             improvement: improvement
@@ -388,16 +425,30 @@ var Engines = (function() {
       });
     });
 
-    // Streaming recommendations (for today's games)
+    // Streaming recommendations (for today's games), sorted by matchup fit
     var benchNoGame = myPlayers.filter(function(p) { return p.slotId === 12 && !p.gamesToday; });
-    var faWithGame = freeAgents.filter(function(p) { return p.gamesToday; }).slice(0, 3);
-    faWithGame.forEach(function(fa) {
+    var faWithGame = freeAgents.filter(function(p) { return p.gamesToday; });
+    if (hasStrategy) {
+      faWithGame.sort(function(a, b) {
+        return matchupAdjustedValue(b, catWeights) - matchupAdjustedValue(a, catWeights);
+      });
+    }
+    faWithGame.slice(0, 3).forEach(function(fa) {
       if (benchNoGame.length && recs.length < 8) {
+        var streamDetail = fa.nbaTeam + ' game. DURANT: ' + fmt(fa.durantScore || 0, 1);
+        if (hasStrategy && targetCats.length) {
+          var helps = [];
+          targetCats.forEach(function(tc) {
+            var z = fa.zScores ? fa.zScores[tc] || 0 : 0;
+            if (z > 0.3) helps.push(tc);
+          });
+          if (helps.length) streamDetail += '. Boosts ' + helps.join(', ');
+        }
         recs.push({
           type: 'stream',
           priority: 'low',
           action: 'Stream ' + fa.name + ' (playing today)',
-          detail: fa.nbaTeam + ' game. DURANT: ' + fmt(fa.durantScore || 0, 1),
+          detail: streamDetail,
           player: fa
         });
       }
@@ -405,14 +456,14 @@ var Engines = (function() {
 
     // Sort by improvement, with tiebreaker chain
     recs.sort(function(a, b) {
-      var diff = b.improvement - a.improvement;
+      var diff = (b.improvement || 0) - (a.improvement || 0);
       if (Math.abs(diff) > 2) return diff;
       // Tiebreaker: ownership, then MPG, then alphabetical
       var ownDiff = (b.player.percentOwned || 0) - (a.player.percentOwned || 0);
       if (Math.abs(ownDiff) > 0.5) return ownDiff;
       var mpgDiff = (b.player.minutesPerGame || 0) - (a.player.minutesPerGame || 0);
       if (Math.abs(mpgDiff) > 1) return mpgDiff;
-      return (a.player.lastName || a.player.fullName || '').localeCompare(b.player.lastName || b.player.fullName || '');
+      return (a.player.lastName || a.player.name || '').localeCompare(b.player.lastName || b.player.name || '');
     });
     return recs;
   }
@@ -715,6 +766,95 @@ var Engines = (function() {
   }
 
 
+  // ========== ENGINE 12: MATCHUP STRATEGY ==========
+
+  function computeMatchupStrategy() {
+    var cats = getOrderedCategories();
+    var strategy = { locks: [], targets: [], punts: [], categoryWeights: {}, summary: '' };
+    if (!cats.length) { S.matchup.strategy = strategy; return strategy; }
+
+    var myScores = S.matchup.myScores || {};
+    var oppScores = S.matchup.oppScores || {};
+    var myGR = S.matchup.myGamesRemaining || 0;
+    var oppGR = S.matchup.oppGamesRemaining || 0;
+    var hasScores = Object.keys(myScores).length > 0;
+
+    // Get my team's per-game production by category (starters only)
+    var myPlayers = (S.myTeam.players || []).filter(function(p) { return p.slotId < 12; });
+    var oppTeam = S.teams.find(function(t) { return t.teamId === S.matchup.opponentTeamId; });
+    var oppPlayers = oppTeam ? (oppTeam.players || []).filter(function(p) { return p.slotId < 12; }) : [];
+
+    cats.forEach(function(cat) {
+      var myNow = myScores[cat.abbr] || 0;
+      var oppNow = oppScores[cat.abbr] || 0;
+      var margin = cat.isNegative ? (oppNow - myNow) : (myNow - oppNow);
+
+      // Project remaining production
+      var myRemaining = 0;
+      myPlayers.forEach(function(p) {
+        var avg = p.stats && p.stats.season ? (p.stats.season[cat.abbr] || 0) : 0;
+        myRemaining += avg * (p.gamesRemaining || 0);
+      });
+      var oppRemaining = 0;
+      oppPlayers.forEach(function(p) {
+        var enriched = S.allPlayers.find(function(ap) { return ap.id === p.id; }) || p;
+        var avg = enriched.stats && enriched.stats.season ? (enriched.stats.season[cat.abbr] || 0) : 0;
+        oppRemaining += avg * (enriched.gamesRemaining || p.gamesRemaining || 0);
+      });
+
+      var projectedMargin;
+      if (cat.isNegative) {
+        projectedMargin = (oppNow + oppRemaining) - (myNow + myRemaining);
+      } else {
+        projectedMargin = (myNow + myRemaining) - (oppNow + oppRemaining);
+      }
+
+      // Estimate win probability from projected margin relative to expected variance
+      var totalGames = Math.max(1, myGR + oppGR);
+      var scale = hasScores ? Math.max(1, (myNow + oppNow) / 2) : Math.max(1, totalGames * 2);
+      var confidence = projectedMargin / Math.max(scale * 0.15, 1);
+      // Sigmoid-ish mapping: clamp to 0-100
+      var winProb = Math.round(Math.min(100, Math.max(0, 50 + confidence * 20)));
+
+      if (winProb > 75) {
+        strategy.locks.push(cat.abbr);
+        strategy.categoryWeights[cat.abbr] = 0.5;
+      } else if (winProb < 25) {
+        strategy.punts.push(cat.abbr);
+        strategy.categoryWeights[cat.abbr] = 0.3;
+      } else {
+        strategy.targets.push(cat.abbr);
+        strategy.categoryWeights[cat.abbr] = 2.0;
+      }
+    });
+
+    // Build summary
+    var parts = [];
+    if (strategy.targets.length) parts.push('Target ' + strategy.targets.join(', '));
+    if (strategy.locks.length) parts.push('Lock ' + strategy.locks.join(', '));
+    if (strategy.punts.length) parts.push('Punt ' + strategy.punts.join(', '));
+    strategy.summary = parts.join('. ');
+    if (!strategy.summary) strategy.summary = 'No matchup data available.';
+
+    S.matchup.strategy = strategy;
+    return strategy;
+  }
+
+
+  // ========== MATCHUP-ADJUSTED VALUE HELPER ==========
+
+  function matchupAdjustedValue(player, catWeights) {
+    var cats = getOrderedCategories();
+    var score = 0;
+    cats.forEach(function(cat) {
+      var z = player.zScores ? player.zScores[cat.abbr] || 0 : 0;
+      var w = catWeights[cat.abbr] || 1.0;
+      score += z * w;
+    });
+    return score;
+  }
+
+
   // ========== PUBLIC API ==========
 
   return {
@@ -730,6 +870,8 @@ var Engines = (function() {
     risersAndFallers: risersAndFallers,
     findTrades: findTrades,
     getTeamCatRank: getTeamCatRank,
-    getBlendedStat: getBlendedStat
+    getBlendedStat: getBlendedStat,
+    computeMatchupStrategy: computeMatchupStrategy,
+    matchupAdjustedValue: matchupAdjustedValue
   };
 })();
