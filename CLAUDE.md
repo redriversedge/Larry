@@ -85,10 +85,13 @@ All engines live in the `Engines` IIFE module.
 ### New TypeScript code (`src/`, `tests/`)
 
 - Modern TypeScript with `strict: true` and `noUncheckedIndexedAccess: true` (see `tsconfig.json`).
-- Use `let`/`const`, arrow functions, template literals, ES modules, generics — all the modern things. The legacy ES5 rule does NOT apply here.
+- Use `let`/`const`, arrow functions, template literals, ES modules, generics, all the modern things. The legacy ES5 rule does NOT apply here.
 - Engine modules (`src/engine/*.ts`) must be pure functions over typed inputs. Do not import from `src/data/*` or any I/O-touching module. This is what makes them testable and backtest-friendly.
 - I/O lives in Netlify Functions (`netlify/functions/*.ts` once that migration starts) and `src/data/*`. UI consumes typed responses; it never recomputes ranks.
 - Build pipeline (compile `src/` to `dist/` for browser consumption) is added in Phase 1 when the first `src/engine/*.ts` lands. Until then `tsconfig` runs in `noEmit: true` typecheck-only mode.
+
+### General conventions (apply to both legacy and new code)
+
 - State access: `S.espn`, `S.league`, `S.myTeam`, `S.matchup`, `S.players`, `S.teams`
 - Every tab/page render wrapped in try/catch with diagnostic error card (never blank screens).
 - Mobile search inputs: use `oninput` with debounce, NOT `onkeyup` (preserves mobile keyboard).
