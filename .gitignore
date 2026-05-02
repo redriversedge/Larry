@@ -8,6 +8,13 @@ Thumbs.db
 # Node
 node_modules/
 
+# Build output
+dist/
+coverage/
+
+# Working files
+temporary screenshots/
+
 # Environment
 .env
 .env.local
