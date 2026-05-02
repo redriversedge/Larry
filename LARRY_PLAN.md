@@ -29,9 +29,12 @@ This is a roadmap, **not** a single prompt for Claude Code. Work through it phas
 
 ## Status
 
-Phase 0 is **complete**. REPO_MAP.md, PLAN_RECONCILED.md, tsconfig.json, vitest.config.ts, and package.json with vitest in devDependencies all exist. The hybrid architecture (legacy ES5 vanilla JS in `js/*.js` plus new TypeScript in `src/`) is documented in CLAUDE.md.
+- **Phase 0 complete.** REPO_MAP.md, PLAN_RECONCILED.md, tsconfig.json, vitest.config.ts, and package.json with vitest in devDependencies. Hybrid architecture (legacy ES5 in `js/*.js` plus new TypeScript in `src/`) documented in CLAUDE.md.
+- **Phase 1 complete.** Bespoke recommendation engine shipped under `src/engine/` with G-score, continuous team-fit, deterministic ranking, and a Claude rationale wrapper. Built bundle at `dist/larry-engine.js`, feature-flagged behind `S.prefs.useV2Engine`. Marcel deferred to Phase 1.5.
+- **Phase 2 complete.** Bookmarklet-based ESPN cookie linking, iOS Shortcut fallback, Disconnect button, and expired-cookies banner. Cookies stay in `S.espn` (localStorage); no server-side encryption (see Phase 2 entry below for the scope reframe). Manual e2e on real devices is pending.
+- **Phase 3 is next.** UX overhaul. See Phase 3 entry in the roadmap.
 
-Phase 1 is the active phase. See the prompt in Appendix A.
+Each phase ends with a doc-update step that brings CLAUDE.md, LARRY_PLAN.md, and PLAN_RECONCILED.md current with what actually shipped, before the final commit.
 
 ---
 
@@ -505,8 +508,9 @@ Phase 0 already enabled TypeScript with `strict: true` and `noUncheckedIndexedAc
 - TypeScript strict mode enabled (`tsconfig.json`).
 - vitest configured (`vitest.config.ts`, `package.json` devDeps).
 - Netlify build status badge in README.
+- **Doc updates:** CLAUDE.md updated with hybrid TS rule. LARRY_PLAN.md status reflects Phase 0 done. PLAN_RECONCILED.md created with Path (D) Hybrid resolution.
 
-### Phase 1, Bespoke recommendations engine (~1 weekend, ~10h) ← ACTIVE
+### Phase 1, Bespoke recommendations engine ✅ COMPLETE
 
 - **Branch:** `feature/phase-1-engine` off `dev`.
 - **Scope:** ship the new TS engine running ALONGSIDE the existing engines under a feature flag. G-score, continuous team-fit, deterministic ranking, Claude rationale layer. Marcel deferred to Phase 1.5.
@@ -532,7 +536,9 @@ Phase 0 already enabled TypeScript with `strict: true` and `noUncheckedIndexedAc
   5. Wire feature flag in `js/engines.js` Engine 4.
   6. Write tests, including the headline regression test.
   7. Verify on real personal roster snapshot.
-  8. Bump CACHE_VERSION, run full Testing Checklist, commit.
+  8. Bump CACHE_VERSION, run full Testing Checklist.
+  9. **Doc updates:** mark Phase 1 complete in `LARRY_PLAN.md`, update `CLAUDE.md` if architecture or file tree changed, log any plan divergence in `PLAN_RECONCILED.md`. Do this before the final commit.
+  10. Commit.
 - **Done when:** the headline test passes (two rosters, same strategy bucket, materially different top 5), the category-fit test passes, your own roster shows a v2 top 5 that differs from v1 with a rationale referencing a real weak category.
 - **Commit:** `feat(phase-1): bespoke recommendation engine with G-score and team-fit blend`. Merge `feature/phase-1-engine` to `dev`. Tag as `v0.2.0-phase1`.
 
@@ -558,29 +564,50 @@ Phase 0 already enabled TypeScript with `strict: true` and `noUncheckedIndexedAc
   5. Build the Scheduled Function that runs nightly and writes `projections/latest.json` to Netlify Blobs with strong consistency.
   6. Add a config toggle (`Engines.projectionSource = "espn" | "marcel"`) that defaults to `"marcel"` once the rebuild has run successfully at least once.
   7. Backtest: compute correlation between Marcel projections and last season's actuals. Compare to ESPN's projection RMSE on the same player set. Document findings in `tests/golden/marcel-backtest.md`.
+  8. **Doc updates:** mark Phase 1.5 complete in `LARRY_PLAN.md`, update `CLAUDE.md` if architecture or file tree changed, log any plan divergence in `PLAN_RECONCILED.md`. Do this before the final commit.
 - **Done when:** the Scheduled Function has run successfully, projections show up in Netlify Blobs, the engine produces v2 top 5 that differs from the Phase-1-with-ESPN-projections v2 top 5, and the backtest correlation against last season's actuals is at least as good as ESPN's projections.
 - **Commit:** `feat(phase-1-5): Marcel projection model with minutes/age curves`. Merge to `dev`. Tag as `v0.2.5-phase1-5`.
 
-### Phase 2, Cookie flow rewrite (~1 weekend, ~6h)
+### Phase 2, Cookie flow rewrite ✅ COMPLETE (manual e2e pending)
 
-- **Branch:** `feature/phase-2-cookies` off `dev`.
-- **Files:** new `public/connect.html`, `src/ui/pages/link.tsx`, `netlify/functions/espn-link.ts`, `src/shared/crypto.ts`. Delete localStorage cookie code.
-- **Steps:**
-  1. Build the bookmarklet install page with the JS source visible.
-  2. Implement `/api/espn-link` with AES-GCM encryption.
-  3. Migrate existing users: keep manual paste working. On next login show a one-time "upgrade your security" banner that prompts re-connect via bookmarklet.
-  4. Add Disconnect button in Settings.
-  5. Publish iOS Shortcut as a fallback.
-- **Tests:** end-to-end script on iPhone (real device), Android Chrome, desktop Safari, desktop Chrome.
-- **Done when:** a fresh user can connect ESPN on iPhone in under 60 seconds.
-- **Commit:** `feat(phase-2): bookmarklet-based ESPN cookie linking with AES-GCM at-rest`. Merge to `dev`. Tag as `v0.3.0-phase2`.
+- **Branch:** `feature/phase-2-cookies` off `dev`. Pushed; merge to `dev` after manual e2e on real devices.
+- **Scope reframe (during Phase 2):** Original plan prescribed a server-side encrypted cookie store via `netlify/functions/espn-link.ts` and `src/shared/crypto.ts` with AES-GCM. Larry has no userId, no auth, no session system; each browser is an island. Server-side storage with a session token doesn't help because the same XSS would steal the session token instead. Real security improvement requires httpOnly session cookies + CSRF + auth, which is multiple phases of work for a single-user hobbyist app. Phase 2 therefore writes the bookmarklet's cookies directly to localStorage, mirroring manual paste. PLAN_RECONCILED.md entry for this reframe is pending.
+- **Files added:**
+  - `public/bookmarklet.js` -- audit-friendly bookmarklet source
+  - `public/connect-bookmarklet.html` -- install page (rewritten to /connect via netlify.toml)
+  - `public/link.html` -- handler page (rewritten to /link)
+  - `public/ios-shortcut.txt` -- TODO + manual publish steps for the iCloud Shortcut
+  - `src/cookies/parseToken.ts` -- pure parser (testable, no DOM)
+  - `src/cookies/index.ts` -- IIFE entry, builds dist/larry-cookies.js
+  - `tests/cookies/parseToken.test.ts` -- 15 cases (valid, expired, future, missing s2/swid, short s2, malformed swid, malformed JSON, malformed base64, empty fragment, no token param, non-object payload, custom maxAgeMs, brace-wrapped SWID, no-hash fragment)
+  - `dist/larry-cookies.js[.map]` -- bundle, committed to git for Netlify publish
+- **Files modified:**
+  - `js/core.js` -- "Use Bookmarklet" button at top of wizard step 3, gotoBookmarkletInstall, disconnectEspn, reconnectEspn, setEspnExpired, expired-banner hook in safeRender
+  - `js/tabs.js` -- Disconnect button on Settings ESPN Connection card, renderEspnExpiredBanner
+  - `js/espn.js` -- 401 detection in fetchESPN/fetchPlayers; success path clears expired flag
+  - `package.json` -- build:cookies esbuild script alongside build:engine
+  - `netlify.toml` -- /link and /connect rewrites (status 200 so the fragment reaches the client)
+  - `sw.js` -- bumped CACHE_VERSION to v3.8.0; added new routes and bundle
+  - `.gitignore` -- allow dist/larry-cookies.js[.map]
+- **Done when (achieved):**
+  - Bookmarklet on espn.com subdomains base64-encodes {s2, swid, ts} and redirects to /link with token in URL fragment.
+  - /link parses, validates 5-min window, validates s2 length and SWID shape, writes S.espn.{espnS2, swid}, strips fragment via history.replaceState, and redirects to /.
+  - Manual paste flow still works as a fallback (regression check, not removed).
+  - Disconnect button clears cookies + cached league/team/roster, returns user to wizard.
+  - 401 from ESPN sets cookieExpired flag; banner with Reconnect button shown atop tabs and routes to /connect.
+  - npm test 28/28 passing (15 new); npm run build clean; npx tsc --noEmit clean; node --check js/*.js clean; ASCII grep clean.
+- **Manual e2e (deferred to human):** real-device verification on iPhone Safari, Android Chrome, desktop Chrome and Safari. Publish iCloud share link for the iOS Shortcut from iPhone (steps in public/ios-shortcut.txt). Goal: fresh user connects ESPN on iPhone in under 60 seconds.
+- **Doc updates (this commit):** marked Phase 1 and Phase 2 complete in LARRY_PLAN.md status. Updated CLAUDE.md with Phase 2 file tree entries and a "Cookie linking" key concept. PLAN_RECONCILED.md update for the scope reframe is pending.
+- **Commit:** `feat(phase-2): bookmarklet-based ESPN cookie linking with iOS Shortcut fallback` (c76774b). Merge `feature/phase-2-cookies` to `dev` after manual e2e passes. Tag as `v0.3.0-phase2`.
 
 ### Phase 3, UX overhaul (~1 weekend, ~8h)
 
 - **Branch:** `feature/phase-3-ux` off `dev`.
 - **Files:** `src/ui/components/RecCard.tsx`, `src/ui/tabs/Coach.tsx`, `src/ui/tabs/Matchup.tsx`, `src/ui/tabs/Roster.tsx`, `src/ui/tabs/Players.tsx`, plus shared `src/ui/components/{CategoryBars,LoadingSkeleton,EmptyState}.tsx`.
-- **Steps:** rebuild each tab per Part 3, with skeleton loaders, the category-need header, and the explainability "Why?" expander.
-- **Tests:** Lighthouse mobile >=90, manual on iPhone SE viewport.
+- **Steps:**
+  1. Rebuild each tab per Part 3, with skeleton loaders, the category-need header, and the explainability "Why?" expander.
+  2. Lighthouse mobile >=90, manual on iPhone SE viewport.
+  3. **Doc updates:** mark Phase 3 complete in `LARRY_PLAN.md`, update `CLAUDE.md` if architecture or file tree changed, log any plan divergence in `PLAN_RECONCILED.md`. Do this before the final commit.
 - **Done when:** every tab tells you something specific about *your* team within 1 second of opening.
 - **Commit:** `feat(phase-3): mobile-first UX overhaul with explainable recommendations`. Merge to `dev`. Tag as `v0.4.0-phase3`.
 
@@ -588,6 +615,10 @@ Phase 0 already enabled TypeScript with `strict: true` and `noUncheckedIndexedAc
 
 - **Branch:** `feature/phase-4-trade-schedule` off `dev`.
 - **Files:** `netlify/functions/trade.ts`, `src/engine/trade.ts`, `src/ui/pages/Trade.tsx`, `src/engine/schedule.ts`, `src/ui/tabs/Matchup.tsx` augmented.
+- **Steps:**
+  1. Build the trade analyzer engine and Netlify Function.
+  2. Build the schedule-aware matchup projections.
+  3. **Doc updates:** mark Phase 4 complete in `LARRY_PLAN.md`, update `CLAUDE.md` if architecture or file tree changed, log any plan divergence in `PLAN_RECONCILED.md`. Do this before the final commit.
 - **Done when:** pasting two rosters yields a verdict you'd actually trust.
 - **Commit:** `feat(phase-4): trade analyzer and schedule-aware matchup projections`. Merge to `dev`. Tag as `v0.5.0-phase4`.
 
@@ -595,23 +626,31 @@ Phase 0 already enabled TypeScript with `strict: true` and `noUncheckedIndexedAc
 
 - **Branch:** `feature/phase-5-draft` off `dev`.
 - **Files:** `src/ui/pages/Draft/{Board,Queue,Tier}.tsx`, `netlify/functions/draft-state.ts`, Turso table `draft_picks`.
+- **Steps:**
+  1. Build draft board, queue, tier UIs.
+  2. Wire round-aware alpha into the engine.
+  3. **Doc updates:** mark Phase 5 complete in `LARRY_PLAN.md`, update `CLAUDE.md` if architecture or file tree changed, log any plan divergence in `PLAN_RECONCILED.md`. Do this before the final commit.
 - **Done when:** you can mock-draft your own league and the recs change appropriately by round and roster construction.
 - **Commit:** `feat(phase-5): live draft mode with round-aware recommendations`. Merge to `dev`. Tag as `v0.6.0-phase5`.
 
 ### Phase 6, Browser extension + power features (rolling, ~10h)
 
 - **Branch:** `feature/phase-6-extension` off `dev`.
-- Manifest V3 Chrome extension for one-click connect on desktop.
-- Streamer planner.
-- Injury push notifications (PWA web-push).
+- **Steps:**
+  1. Manifest V3 Chrome extension for one-click connect on desktop.
+  2. Streamer planner.
+  3. Injury push notifications (PWA web-push).
+  4. **Doc updates:** mark Phase 6 complete in `LARRY_PLAN.md`, update `CLAUDE.md` if architecture or file tree changed, log any plan divergence in `PLAN_RECONCILED.md`. Do this before the final commit.
 - **Commit:** `feat(phase-6): chrome extension and power-user features`. Merge to `dev`. Tag as `v0.7.0-phase6`.
 
 ### Phase 7, Backtesting + polish (rolling)
 
 - **Branch:** `feature/phase-7-backtest` off `dev`.
-- Backtest the engine against last season: did its top-3 weekly add suggestions outperform a random/top-ADP baseline?
-- Tune alpha schedule and regression weights based on the backtest.
-- Add a "Larry's track record" page that publicly shows hit rate. Builds trust for new users.
+- **Steps:**
+  1. Backtest the engine against last season: did its top-3 weekly add suggestions outperform a random/top-ADP baseline?
+  2. Tune alpha schedule and regression weights based on the backtest.
+  3. Add a "Larry's track record" page that publicly shows hit rate. Builds trust for new users.
+  4. **Doc updates:** mark Phase 7 complete in `LARRY_PLAN.md`, update `CLAUDE.md` if architecture or file tree changed, log any plan divergence in `PLAN_RECONCILED.md`. Do this before the final commit.
 - **Commit:** `feat(phase-7): season backtest + alpha/regression tuning + public track record page`. Merge to `dev`. Tag as `v1.0.0`.
 
 ### Effort summary
@@ -619,9 +658,9 @@ Phase 0 already enabled TypeScript with `strict: true` and `noUncheckedIndexedAc
 | Phase | Scope | Effort | Risk |
 |---|---|---|---|
 | 0 | TS + audit | 3h | ✅ Done |
-| 1 | Engine math + integration (G-score, team-fit, Claude rationale) | ~10h | Medium (engine correctness, build pipeline) |
+| 1 | Engine math + integration (G-score, team-fit, Claude rationale) | ~10h | ✅ Done |
 | 1.5 | Marcel projection model + Scheduled Function | ~10h | Medium (data sourcing) |
-| 2 | Cookie flow | ~6h | Low (well-understood) |
+| 2 | Cookie flow (bookmarklet + iOS Shortcut, localStorage only) | ~6h | ✅ Done (manual e2e pending) |
 | 3 | UX | ~8h | Low |
 | 4 | Trade + schedule | ~12h | Medium |
 | 5 | Draft mode | ~10h | Medium (time-boxed to season) |

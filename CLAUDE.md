@@ -20,7 +20,9 @@ manifest.json           -- PWA manifest
 sw.js                   -- Service worker (bump CACHE_VERSION on every deploy)
 netlify/functions/espn-proxy.js   -- ESPN API CORS proxy
 netlify/functions/larry-chat.js   -- Claude API proxy (reads ANTHROPIC_API_KEY env var)
-src/                    -- NEW TypeScript code (Phase 1+); engine, types, shared
+public/                 -- Static pages (Phase 2+): /connect bookmarklet install, /link cookie handler, ios-shortcut.txt
+src/                    -- TypeScript code (Phase 1+); engine, cookies, types, shared
+dist/                   -- Built IIFE bundles, committed to git (larry-engine.js, larry-cookies.js)
 tests/                  -- vitest tests for new TS code
 package.json            -- devDeps only; no runtime deps
 tsconfig.json           -- strict, noUncheckedIndexedAccess, scoped to src/ and tests/
@@ -38,6 +40,7 @@ REPO_MAP.md             -- Phase 0 audit: file tree + key-file summaries
 - **Games remaining**: Most important variable. Factor into every analysis. Raw averages without games context are meaningless.
 - **Matchup strategy**: Weekly strategy engine (Engine 12) classifies each category as Lock (>70% win probability), Target (30-70%), or Punt (<30%). Strategy drives recommendations, add/drop suggestions, and streaming picks. Recalculates on team change or sync.
 - **Injury awareness**: Players with OUT, SUSPENSION, or IR status are filtered from add recommendations and free agent suggestions in chat. Injury status shown on tiles, roster rows, and chat context. Never recommend injured players as pickups.
+- **Cookie linking (Phase 2+)**: ESPN's `espn_s2` and `SWID` cookies live in `S.espn` (localStorage). Two paths: (a) manual paste in wizard step 3, (b) Larry Link bookmarklet on fantasy.espn.com that base64-encodes the cookies into a URL fragment and redirects through `/link` (handled by `public/link.html` + `dist/larry-cookies.js`) which writes to `S.espn` and bounces to the app. No server-side cookie storage; cookies stay client-side only. 401 from ESPN sets `S.espn.cookieExpired` and `safeRender` shows a banner with a Reconnect button routing to `/connect`.
 
 ## Analysis Engines (js/engines.js)
 
