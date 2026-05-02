@@ -1,5 +1,5 @@
 // Larry v3.0 Service Worker
-var CACHE_VERSION = 'larry-v3.7.0';
+var CACHE_VERSION = 'larry-v3.8.0';
 var CACHE_FILES = [
   '/',
   '/index.html',
@@ -11,10 +11,15 @@ var CACHE_FILES = [
   '/js/espn.js',
   '/js/chat.js',
   '/dist/larry-engine.js',
+  '/dist/larry-cookies.js',
   '/manifest.json',
   '/assets/larry-logo.svg',
   '/assets/icon-192.png',
-  '/assets/icon-512.png'
+  '/assets/icon-512.png',
+  '/connect',
+  '/link',
+  '/public/bookmarklet.js',
+  '/public/ios-shortcut.txt'
 ];
 
 self.addEventListener('install', function(e) {

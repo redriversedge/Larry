@@ -22,7 +22,14 @@ var ESPNSync = (function() {
     };
 
     var resp = await fetch(url, { headers: headers });
-    if (!resp.ok) throw new Error('ESPN API returned ' + resp.status);
+    if (!resp.ok) {
+      // Phase 2: 401 from ESPN means cookies expired. Surface a banner
+      // via the cookieExpired flag instead of failing silently.
+      if (resp.status === 401 && typeof setEspnExpired === 'function') {
+        setEspnExpired(true);
+      }
+      throw new Error('ESPN API returned ' + resp.status);
+    }
     return await resp.json();
   }
 
@@ -45,7 +52,12 @@ var ESPNSync = (function() {
       'x-fantasy-filter': JSON.stringify({ players: { limit: 500, filterStatus: { value: ['FREEAGENT', 'WAIVERS'] }, sortPercOwned: { sortAsc: false, sortPriority: 1 } } })
     };
     var resp = await fetch(url, { headers: headers });
-    if (!resp.ok) throw new Error('ESPN API returned ' + resp.status);
+    if (!resp.ok) {
+      if (resp.status === 401 && typeof setEspnExpired === 'function') {
+        setEspnExpired(true);
+      }
+      throw new Error('ESPN API returned ' + resp.status);
+    }
     return await resp.json();
   }
 
@@ -553,6 +565,8 @@ var ESPNSync = (function() {
 
         S.espn.lastSync = new Date().toISOString();
         S.espn.connected = true;
+        // Phase 2: clear the expired-cookies flag on successful sync.
+        S.espn.cookieExpired = false;
         addSyncLog('success', 'Synced ' + S.teams.length + ' teams, ' + S.allPlayers.length + ' players');
         S.analysisCache.lastComputed = null;
         autosave();

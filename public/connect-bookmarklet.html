@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0a0a1a">
+  <title>Connect ESPN with Larry Link</title>
+  <link rel="stylesheet" href="/css/larry.css">
+  <style>
+    body { overflow: auto; height: auto; min-height: 100dvh; }
+    .bm-page {
+      max-width: 720px; margin: 0 auto;
+      padding: 16px 16px calc(48px + env(safe-area-inset-bottom));
+    }
+    .bm-page h1 { font-size: 1.4rem; margin-bottom: 4px; }
+    .bm-page h2 { font-size: 1.05rem; margin: 20px 0 8px; }
+    .bm-page p, .bm-page li { font-size: 0.9rem; color: var(--text-secondary); }
+    .bm-page p strong, .bm-page li strong { color: var(--text-primary); }
+    .bm-back { font-size: 0.85rem; color: var(--accent-blue); text-decoration: none; }
+    .bm-back:hover { text-decoration: underline; }
+    .bm-card {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 14px; margin: 12px 0;
+    }
+    .bm-anchor {
+      display: inline-block; padding: 10px 14px;
+      background: var(--accent-blue); color: white !important;
+      border-radius: var(--radius-sm); text-decoration: none;
+      font-weight: 600; font-size: 0.95rem;
+      cursor: grab; user-select: none;
+    }
+    .bm-anchor:active { cursor: grabbing; }
+    .bm-source {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+      font-size: 0.78rem; color: var(--text-primary);
+      background: var(--bg-input); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 12px;
+      white-space: pre; overflow-x: auto;
+      tab-size: 2;
+    }
+    .bm-url-box {
+      display: flex; gap: 8px; align-items: stretch; margin-top: 8px;
+    }
+    .bm-url-input {
+      flex: 1; background: var(--bg-input); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 10px; color: var(--text-primary);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+      font-size: 0.75rem;
+    }
+    .bm-copy-btn {
+      background: var(--accent-blue); color: white; border: none;
+      border-radius: var(--radius-sm); padding: 0 14px; cursor: pointer;
+      font-weight: 600; font-size: 0.85rem;
+    }
+    .bm-copy-btn:hover { filter: brightness(1.1); }
+    .bm-copy-btn.copied { background: var(--accent-green); }
+    .bm-step {
+      display: flex; gap: 10px; padding: 10px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .bm-step:last-child { border-bottom: none; }
+    .bm-step-num {
+      flex-shrink: 0;
+      width: 26px; height: 26px; border-radius: 50%;
+      background: var(--accent-blue); color: white;
+      display: inline-flex; align-items: center; justify-content: center;
+      font-size: 0.78rem; font-weight: 700;
+    }
+    .bm-step-body { flex: 1; font-size: 0.88rem; }
+    .bm-step-body strong { color: var(--text-primary); }
+    .bm-screenshot {
+      display: block; margin: 8px 0;
+      max-width: 100%; max-height: 280px;
+      border: 1px solid var(--border); border-radius: var(--radius-sm);
+      background: var(--bg-surface);
+    }
+    .bm-screenshot-placeholder {
+      display: flex; align-items: center; justify-content: center;
+      width: 100%; max-width: 280px; height: 160px;
+      background: var(--bg-surface); border: 1px dashed var(--border-light);
+      border-radius: var(--radius-sm); color: var(--text-muted);
+      font-size: 0.78rem; margin: 8px 0; text-align: center; padding: 12px;
+    }
+    .bm-divider {
+      height: 1px; background: var(--border); margin: 24px 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="bm-page">
+    <header style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <h1>Connect ESPN with Larry Link</h1>
+      <a class="bm-back" href="/">&larr; Back to Larry</a>
+    </header>
+    <p>
+      Larry Link is a small bookmark you tap on ESPN Fantasy to send your
+      league cookies to Larry. It runs only on espn.com, copies your
+      session cookies, and redirects the tab to Larry. Nothing leaves your
+      device except the redirect URL with the cookies in the fragment.
+    </p>
+
+    <h2>What it does</h2>
+    <div class="bm-card">
+      <p style="margin-bottom:8px">
+        Read the source below before adding it to your bookmarks. It is
+        about 30 lines. If anything looks off, don't add it. You can also
+        view the file directly at <a href="/public/bookmarklet.js" style="color:var(--accent-blue)">/public/bookmarklet.js</a>.
+      </p>
+<pre class="bm-source" id="bm-source"><code>(function () {
+  try {
+    if (!/(^|\.)espn\.com$/i.test(location.hostname)) {
+      alert('Open ESPN Fantasy first, then tap Larry Link.');
+      return;
+    }
+    var cookies = document.cookie.split(';').reduce(function (acc, pair) {
+      var eq = pair.indexOf('=');
+      if (eq &lt; 0) return acc;
+      var name = pair.slice(0, eq).trim();
+      var value = pair.slice(eq + 1).trim();
+      try { acc[name] = decodeURIComponent(value); }
+      catch (e) { acc[name] = value; }
+      return acc;
+    }, {});
+    if (!cookies.espn_s2 || !cookies.SWID) {
+      alert('Sign in to ESPN Fantasy first, then tap Larry Link again.');
+      return;
+    }
+    var token = btoa(JSON.stringify({
+      s2: cookies.espn_s2,
+      swid: cookies.SWID,
+      ts: Date.now()
+    }));
+    location.href = 'https://larrybball.netlify.app/link#token=' + encodeURIComponent(token);
+  } catch (e) {
+    alert('Larry Link error: ' + (e &amp;&amp; e.message ? e.message : e));
+  }
+})();</code></pre>
+    </div>
+
+    <h2>Desktop browsers</h2>
+    <div class="bm-card">
+      <p>Show your bookmarks bar, then drag this button onto it.</p>
+      <p style="margin-top:10px">
+        <a id="bm-anchor" class="bm-anchor" href="#"
+           onclick="event.preventDefault();alert('Drag this button onto your bookmarks bar instead of clicking it.');return false;">
+          Larry Link
+        </a>
+      </p>
+      <p style="margin-top:10px;font-size:0.8rem">
+        Once it is on your bookmarks bar, sign into
+        <a href="https://fantasy.espn.com" target="_blank" rel="noopener" style="color:var(--accent-blue)">fantasy.espn.com</a>
+        in another tab and click Larry Link from your bookmarks bar.
+      </p>
+    </div>
+
+    <h2>iPhone / iPad Safari</h2>
+    <div class="bm-card">
+      <div class="bm-step">
+        <span class="bm-step-num">1</span>
+        <div class="bm-step-body">
+          On this page, tap the <strong>Share</strong> button in Safari, then tap <strong>Add Bookmark</strong>. Save it to <strong>Favorites</strong>.
+          <div class="bm-screenshot-placeholder">screenshot: /public/img/ios-step-1-share.png (placeholder)</div>
+        </div>
+      </div>
+      <div class="bm-step">
+        <span class="bm-step-num">2</span>
+        <div class="bm-step-body">
+          Open <strong>Edit Bookmarks</strong> (book icon &rarr; Edit), find the bookmark you just saved (named "Connect ESPN with Larry Link"), and tap it to edit.
+          <div class="bm-screenshot-placeholder">screenshot: /public/img/ios-step-2-edit.png (placeholder)</div>
+        </div>
+      </div>
+      <div class="bm-step">
+        <span class="bm-step-num">3</span>
+        <div class="bm-step-body">
+          <strong>Replace the URL</strong> with the bookmark URL below, rename it to <strong>Larry Link</strong>, and save. From now on, when you are signed into fantasy.espn.com, tap Larry Link from your Favorites to send cookies to Larry.
+          <div class="bm-url-box">
+            <input id="bm-url-input" class="bm-url-input" readonly value="" />
+            <button class="bm-copy-btn" id="bm-copy-btn" onclick="copyBookmarkUrl()">Copy</button>
+          </div>
+          <div class="bm-screenshot-placeholder">screenshot: /public/img/ios-step-3-replace-url.png (placeholder)</div>
+        </div>
+      </div>
+    </div>
+
+    <h2>Android Chrome</h2>
+    <div class="bm-card">
+      <div class="bm-step">
+        <span class="bm-step-num">1</span>
+        <div class="bm-step-body">
+          On this page, tap the menu (3 dots) &rarr; <strong>Star icon</strong> to bookmark.
+          <div class="bm-screenshot-placeholder">screenshot: /public/img/android-step-1-bookmark.png (placeholder)</div>
+        </div>
+      </div>
+      <div class="bm-step">
+        <span class="bm-step-num">2</span>
+        <div class="bm-step-body">
+          Open <strong>Bookmarks</strong> (menu &rarr; Bookmarks), find the saved bookmark, and tap <strong>Edit</strong> (pencil icon).
+          <div class="bm-screenshot-placeholder">screenshot: /public/img/android-step-2-edit.png (placeholder)</div>
+        </div>
+      </div>
+      <div class="bm-step">
+        <span class="bm-step-num">3</span>
+        <div class="bm-step-body">
+          <strong>Replace the URL</strong> with the bookmark URL above, rename to <strong>Larry Link</strong>, and save. To use it, type "Larry Link" in the address bar; Chrome suggests the bookmark, tap it to fire while on fantasy.espn.com.
+          <div class="bm-screenshot-placeholder">screenshot: /public/img/android-step-3-fire.png (placeholder)</div>
+        </div>
+      </div>
+    </div>
+
+    <h2>iOS Shortcut (alternative for iPhone)</h2>
+    <div class="bm-card">
+      <p>
+        If editing a bookmark URL is too clunky, install the iOS Shortcut.
+        It runs the same code via the Share Sheet on any espn.com tab.
+      </p>
+      <p style="margin-top:8px">
+        <a id="bm-shortcut-link" href="/public/ios-shortcut.txt" target="_blank" rel="noopener"
+           style="color:var(--accent-blue);font-weight:600">
+          Install Larry Link iOS Shortcut &rarr;
+        </a>
+      </p>
+      <p style="margin-top:8px;font-size:0.78rem;color:var(--text-muted)">
+        Pending: Clifford to publish the iCloud share link from his iPhone. See /public/ios-shortcut.txt for instructions.
+      </p>
+    </div>
+
+    <div class="bm-divider"></div>
+
+    <h2>Manual paste fallback</h2>
+    <div class="bm-card">
+      <p>
+        If the bookmarklet does not work for you, you can paste the
+        <code>espn_s2</code> and <code>SWID</code> cookies directly into
+        Larry's setup wizard.
+      </p>
+      <p style="margin-top:10px">
+        <a href="/" style="color:var(--accent-blue);font-weight:600">
+          &larr; Back to Larry &rarr; manual paste
+        </a>
+      </p>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      // Take the source from the visible <pre> so what users see and
+      // what gets installed match exactly. Strip comments and collapse
+      // whitespace, then prepend javascript: for the bookmark URL.
+      var pre = document.getElementById('bm-source');
+      var raw = pre ? (pre.textContent || '') : '';
+      var stripped = raw
+        .replace(/\/\*[\s\S]*?\*\//g, ' ')
+        .replace(/(^|\s)\/\/[^\n]*/g, '$1')
+        .replace(/\s+/g, ' ')
+        .trim();
+      var bookmarkHref = 'javascript:' + stripped;
+
+      var anchor = document.getElementById('bm-anchor');
+      if (anchor) anchor.setAttribute('href', bookmarkHref);
+
+      var input = document.getElementById('bm-url-input');
+      if (input) input.value = bookmarkHref;
+    })();
+
+    function copyBookmarkUrl() {
+      var input = document.getElementById('bm-url-input');
+      var btn = document.getElementById('bm-copy-btn');
+      if (!input || !btn) return;
+      input.select();
+      input.setSelectionRange(0, 99999);
+      var ok = false;
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(input.value);
+          ok = true;
+        } else {
+          ok = document.execCommand('copy');
+        }
+      } catch (e) { ok = false; }
+      btn.textContent = ok ? 'Copied' : 'Copy failed';
+      btn.classList.toggle('copied', ok);
+      setTimeout(function () {
+        btn.textContent = 'Copy';
+        btn.classList.remove('copied');
+      }, 2000);
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0a0a1a">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Larry Link</title>
+  <link rel="stylesheet" href="/css/larry.css">
+  <style>
+    body { overflow: auto; height: auto; min-height: 100dvh; }
+    .link-page {
+      max-width: 560px; margin: 0 auto;
+      padding: 32px 16px; text-align: center;
+    }
+    .link-card {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 24px; margin-top: 24px;
+    }
+    .link-spinner {
+      width: 40px; height: 40px;
+      border: 3px solid var(--border-light);
+      border-top-color: var(--accent-blue);
+      border-radius: 50%;
+      margin: 0 auto 16px;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .link-icon {
+      font-size: 48px; margin-bottom: 8px;
+    }
+    .link-icon.success { color: var(--accent-green); }
+    .link-icon.error { color: var(--accent-red); }
+    .link-msg { font-size: 0.95rem; color: var(--text-primary); margin-bottom: 4px; }
+    .link-detail { font-size: 0.82rem; color: var(--text-secondary); margin-top: 4px; }
+    .link-actions { margin-top: 18px; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+    .link-btn {
+      display: inline-block; padding: 9px 14px;
+      border-radius: var(--radius-sm); text-decoration: none;
+      font-weight: 600; font-size: 0.88rem; border: none; cursor: pointer;
+    }
+    .link-btn.primary { background: var(--accent-blue); color: white; }
+    .link-btn.secondary {
+      background: transparent; color: var(--text-primary);
+      border: 1px solid var(--border-light);
+    }
+  </style>
+</head>
+<body>
+  <div class="link-page">
+    <div class="link-card" id="link-card">
+      <div class="link-spinner" id="link-spinner"></div>
+      <div class="link-msg" id="link-msg">Linking ESPN cookies...</div>
+      <div class="link-detail" id="link-detail">If this hangs for more than a couple seconds, tap retry below.</div>
+      <div class="link-actions" id="link-actions" style="display:none">
+        <a class="link-btn secondary" id="link-back" href="/connect">Back to install page</a>
+        <a class="link-btn primary" id="link-home" href="/">Open Larry</a>
+      </div>
+    </div>
+  </div>
+
+  <script src="/dist/larry-cookies.js"></script>
+  <script>
+    (function () {
+      var STATE_KEY = 'larry_state';
+
+      function showError(message, detail) {
+        var card = document.getElementById('link-card');
+        var spinner = document.getElementById('link-spinner');
+        var msg = document.getElementById('link-msg');
+        var det = document.getElementById('link-detail');
+        var actions = document.getElementById('link-actions');
+        if (spinner) spinner.style.display = 'none';
+        if (card && !card.querySelector('.link-icon')) {
+          var icon = document.createElement('div');
+          icon.className = 'link-icon error';
+          icon.textContent = '\u2717';
+          card.insertBefore(icon, card.firstChild);
+        }
+        if (msg) msg.textContent = message || 'Larry Link failed.';
+        if (det) det.textContent = detail || 'Open the install page and try again.';
+        if (actions) actions.style.display = 'flex';
+      }
+
+      function showSuccess() {
+        var card = document.getElementById('link-card');
+        var spinner = document.getElementById('link-spinner');
+        var msg = document.getElementById('link-msg');
+        var det = document.getElementById('link-detail');
+        if (spinner) spinner.style.display = 'none';
+        if (card && !card.querySelector('.link-icon')) {
+          var icon = document.createElement('div');
+          icon.className = 'link-icon success';
+          icon.textContent = '\u2713';
+          card.insertBefore(icon, card.firstChild);
+        }
+        if (msg) msg.textContent = 'Cookies linked.';
+        if (det) det.textContent = 'Opening Larry...';
+      }
+
+      // Strip the fragment immediately so the token never lingers in
+      // the address bar or the back/forward cache.
+      function stripFragment() {
+        try {
+          var clean = location.pathname + location.search;
+          history.replaceState({}, '', clean);
+        } catch (e) { /* noop */ }
+      }
+
+      function writeCookies(s2, swid) {
+        var raw;
+        try { raw = localStorage.getItem(STATE_KEY); }
+        catch (e) {
+          throw new Error('localStorage is not available. Enable cookies and try again.');
+        }
+        var state = {};
+        if (raw) {
+          try { state = JSON.parse(raw) || {}; }
+          catch (e) { state = {}; }
+        }
+        if (!state.espn || typeof state.espn !== 'object') state.espn = {};
+        state.espn.espnS2 = s2;
+        state.espn.swid = swid;
+        // Force the app to re-sync on next load. The legacy app sets
+        // espn.connected once the ESPN call succeeds; until then the
+        // safest stance is "have cookies, not yet verified."
+        state.espn.connected = false;
+        state.espn.lastSync = null;
+        localStorage.setItem(STATE_KEY, JSON.stringify(state));
+      }
+
+      function run() {
+        if (!window.LarryCookies || typeof window.LarryCookies.parseLinkToken !== 'function') {
+          showError('Larry Link bundle missing.', 'Reload this page or rebuild the app.');
+          return;
+        }
+
+        var hash = window.location.hash || '';
+        var result = window.LarryCookies.parseLinkToken(hash);
+        // Always strip the fragment, regardless of validity.
+        stripFragment();
+
+        if (!result.ok) {
+          showError(result.error, 'Open the install page and tap Larry Link on fantasy.espn.com again.');
+          return;
+        }
+
+        try {
+          writeCookies(result.s2, result.swid);
+        } catch (e) {
+          showError('Could not save cookies.', (e && e.message) ? e.message : 'localStorage write failed.');
+          return;
+        }
+
+        showSuccess();
+        setTimeout(function () { location.replace('/'); }, 600);
+      }
+
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', run);
+      } else {
+        run();
+      }
+    })();
+  </script>
+</body>
+</html>

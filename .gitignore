@@ -9,11 +9,13 @@ Thumbs.db
 node_modules/
 
 # Build output
-# Phase 1 decision: dist/larry-engine.js is committed to git so Netlify can
-# publish it without a build step. dist/ is otherwise ignored.
+# Phase 1+ decision: bundles under dist/ are committed to git so Netlify
+# can publish them without a build step. dist/ is otherwise ignored.
 dist/*
 !dist/larry-engine.js
 !dist/larry-engine.js.map
+!dist/larry-cookies.js
+!dist/larry-cookies.js.map
 coverage/
 
 # Working files

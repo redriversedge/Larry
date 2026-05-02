@@ -1,0 +1,87 @@
+Larry Link iOS Shortcut, manual publish steps for Clifford
+==========================================================
+
+TODO: Build this Shortcut on your iPhone and replace this file with the
+iCloud share link. The install page (/connect) currently links to this
+file as a placeholder. Once you have the iCloud share URL, replace the
+contents of this file with that URL only (one line, no trailing
+whitespace), and update public/connect-bookmarklet.html so the shortcut
+link points at the iCloud URL directly instead of /public/ios-shortcut.txt.
+
+Why this is a manual step
+-------------------------
+iCloud share links for Shortcuts can only be generated from the iOS
+Shortcuts app on a real device. Claude Code cannot produce one from
+this environment.
+
+Build the Shortcut (one time, on your iPhone)
+---------------------------------------------
+1. Open the Shortcuts app.
+2. Tap "+" to create a new Shortcut.
+3. Name it: Larry Link
+4. Add Action 1: "Get URLs from Input"
+   - Configure: Input Type = Safari Web Pages
+   - Restrict to host: *.espn.com
+   (When you run the Shortcut from the Share Sheet on a Safari tab,
+   this picks up the current tab URL.)
+5. Add Action 2: "Run JavaScript on Web Page"
+   - Web Page: pass the URL from Action 1.
+   - JavaScript body: paste the block below verbatim.
+
+   --- BEGIN JS BODY ---
+   try {
+     if (!/(^|\.)espn\.com$/i.test(location.hostname)) {
+       completion('Open ESPN Fantasy first.');
+     } else {
+       var cookies = document.cookie.split(';').reduce(function (acc, pair) {
+         var eq = pair.indexOf('=');
+         if (eq < 0) return acc;
+         var name = pair.slice(0, eq).trim();
+         var value = pair.slice(eq + 1).trim();
+         try { acc[name] = decodeURIComponent(value); }
+         catch (e) { acc[name] = value; }
+         return acc;
+       }, {});
+       if (!cookies.espn_s2 || !cookies.SWID) {
+         completion('Sign in to ESPN Fantasy first.');
+       } else {
+         var token = btoa(JSON.stringify({
+           s2: cookies.espn_s2,
+           swid: cookies.SWID,
+           ts: Date.now()
+         }));
+         completion('https://larrybball.netlify.app/link#token=' + encodeURIComponent(token));
+       }
+     }
+   } catch (e) {
+     completion('Larry Link error: ' + (e && e.message ? e.message : e));
+   }
+   --- END JS BODY ---
+
+   Note: "Run JavaScript on Web Page" expects you to call completion(...)
+   with the result. The result is whatever value you want returned to the
+   next action. We return the larrybball.netlify.app URL.
+
+6. Add Action 3: "Open URLs"
+   - URL: pass the result from Action 2.
+
+7. Tap the Share button at the top of the Shortcut and choose "Copy
+   iCloud Link". Paste it somewhere safe.
+
+8. In Settings (one time): Settings -> Shortcuts -> Advanced ->
+   "Allow Sharing Large Amounts of Data" must be ON.
+
+9. Test it: open fantasy.espn.com in Safari, sign in, tap the Share
+   button, scroll to the Shortcuts section, tap "Larry Link". Safari
+   should redirect to https://larrybball.netlify.app/link and Larry
+   should pick up the cookies.
+
+Publish the link
+----------------
+- Replace the contents of this file (public/ios-shortcut.txt) with the
+  iCloud URL only (a single line).
+- Edit public/connect-bookmarklet.html: find the anchor with id
+  "bm-shortcut-link" and replace its href with the iCloud URL. Remove
+  the "Pending" copy directly underneath it.
+- Bump CACHE_VERSION in sw.js so existing PWA installs pick up the
+  updated install page.

@@ -7,3 +7,16 @@
   [headers.values]
     X-Frame-Options = "DENY"
     X-Content-Type-Options = "nosniff"
+
+# Phase 2 cookie flow. /link receives the bookmarklet redirect and
+# /connect serves the install page. Both are static rewrites so the
+# fragment (#token=...) reaches the client unchanged.
+[[redirects]]
+  from = "/link"
+  to = "/public/link.html"
+  status = 200
+
+[[redirects]]
+  from = "/connect"
+  to = "/public/connect-bookmarklet.html"
+  status = 200

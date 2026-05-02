@@ -313,6 +313,12 @@ function safeRender(container) {
     var renderers = [renderRoster, renderMatchup, renderPlayers, renderChat, renderLeague];
     if (S.currentTab >= 0 && S.currentTab < renderers.length) {
       renderers[S.currentTab](container);
+      // Phase 2: prepend the expired-cookies banner if flagged. Done
+      // here instead of inside each tab so tabs do not need to know
+      // about the cookie-expired state.
+      if (S.espn && S.espn.cookieExpired && typeof renderEspnExpiredBanner === 'function') {
+        container.insertAdjacentHTML('afterbegin', renderEspnExpiredBanner());
+      }
     }
   } catch (e) {
     container.innerHTML = '<div class="error-card"><h3>Something went wrong</h3><p>' + e.message + '</p>' +
@@ -540,6 +546,14 @@ function wizardStep2Next() {
 function renderSetupStep3() {
   var html = '<div class="setup-card"><h2>ESPN Authentication</h2>';
   html += '<p class="text-sm muted" style="margin-bottom:16px">Larry needs your ESPN cookies to access your private league data.</p>';
+
+  // Phase 2: bookmarklet path. Promoted above manual paste for iPhone users.
+  html += '<div class="bookmarklet-promo" style="background:var(--bg-surface);border:1px solid var(--accent-blue);border-radius:var(--radius-sm);padding:12px;margin-bottom:14px;">';
+  html += '<div style="font-weight:600;font-size:0.95rem;margin-bottom:4px">iPhone? Use Larry Link bookmarklet</div>';
+  html += '<div class="text-sm muted" style="margin-bottom:10px">Skip the copy/paste. Install once, then tap on ESPN Fantasy to send cookies to Larry.</div>';
+  html += '<button class="btn btn-primary btn-full" onclick="gotoBookmarkletInstall()">Use Bookmarklet (recommended for iPhone)</button>';
+  html += '<div class="text-xs muted" style="margin-top:8px;text-align:center">or paste cookies manually below</div>';
+  html += '</div>';
 
   // Quick paste
   html += '<div class="form-group"><label>Quick Paste (try pasting both cookies at once)</label>';
@@ -769,6 +783,56 @@ function resetSetup() {
   _setupStep = 1; _wizardData = { leagueId: '', espnS2: '', swid: '' };
   _wizardError = null; _wizardConnecting = false; _wizardConnectTriggered = false;
   saveState(); render();
+}
+
+// Phase 2: bookmarklet handoff. Persist league ID to state so it
+// survives the navigation to /connect (and the bookmarklet redirect
+// through /link back to /), then go to the install page.
+function gotoBookmarkletInstall() {
+  if (_wizardData.leagueId && !S.espn.leagueId) {
+    S.espn.leagueId = _wizardData.leagueId;
+    saveState();
+  }
+  window.location.href = '/connect';
+}
+
+// Phase 2: clear ESPN cookies and cached league/team/roster data, then
+// drop the user back at the wizard. Theme, watchlist, prefs are kept.
+function disconnectEspn() {
+  S.espn = initState().espn;
+  S.league = initState().league;
+  S.myTeam = initState().myTeam;
+  S.teams = [];
+  S.matchup = initState().matchup;
+  S.allPlayers = [];
+  S.freeAgents = [];
+  S.analysisCache = initState().analysisCache;
+  S.setupComplete = false;
+  _setupStep = 1;
+  _wizardData = { leagueId: '', espnS2: '', swid: '' };
+  _wizardError = null;
+  _wizardConnecting = false;
+  _wizardConnectTriggered = false;
+  saveState();
+  if (typeof showToast === 'function') showToast('Disconnected from ESPN', 'info');
+  render();
+}
+
+// Phase 2: when ESPN returns 401, surface a banner instead of failing
+// silently. Setting this flag is what triggers renderEspnExpiredBanner
+// from tabs.js to render a top-of-screen alert.
+function setEspnExpired(expired) {
+  if (!S.espn) S.espn = {};
+  S.espn.cookieExpired = !!expired;
+  if (expired) S.espn.connected = false;
+  saveState();
+}
+
+// Phase 2: re-link CTA from the expired banner. Routes the user
+// straight to the bookmarklet install page (skipping the wizard) so
+// they can re-link without re-entering league ID.
+function reconnectEspn() {
+  window.location.href = '/connect';
 }
 
 // --- AUTO REFRESH (v3: on load + every 2 min) ---

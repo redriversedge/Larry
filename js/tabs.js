@@ -2088,6 +2088,9 @@ function renderSettingsPage() {
   html += '<div class="settings-row"><label>Last Sync</label><span>' + (S.espn.lastSync ? new Date(S.espn.lastSync).toLocaleString() : 'Never') + '</span></div>';
   html += '<div class="settings-row"><label>Status</label><span class="' + (S.espn.connected ? 'stat-positive' : 'stat-negative') + '">' + (S.espn.connected ? 'Connected' : 'Disconnected') + '</span></div>';
   html += '<button class="btn btn-primary btn-full" onclick="ESPNSync.syncAll()">Sync Now</button>';
+  // Phase 2: Disconnect clears cookies and cached league/team/roster data,
+  // then drops the user back at the wizard. Theme and prefs survive.
+  html += '<button class="btn btn-warning btn-full" style="margin-top:8px" onclick="if(confirm(\'This will sign you out of ESPN and clear your cookies. You will need to reconnect to use Larry.\'))disconnectEspn()">Disconnect ESPN</button>';
   html += '</div>';
 
   // League info
@@ -2126,6 +2129,20 @@ function renderSettingsPage() {
   html += '</div>';
 
   return html;
+}
+
+
+// Phase 2: top-of-tab banner shown when ESPN returns 401 (cookies
+// expired). safeRender in core.js prepends this to whatever the
+// current tab renders, so the banner appears on every tab without
+// each tab having to know about it. The Reconnect button routes
+// directly to /connect (bookmarklet install page), bypassing the
+// wizard so users keep their league ID and prefs.
+function renderEspnExpiredBanner() {
+  return '<div class="alert alert-danger" style="margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">' +
+    '<div style="flex:1;min-width:200px"><strong>ESPN session expired.</strong> Reconnect ESPN to continue.</div>' +
+    '<button class="btn btn-primary btn-sm" onclick="reconnectEspn()" style="white-space:nowrap">Reconnect ESPN</button>' +
+    '</div>';
 }
 
 
