@@ -125,6 +125,9 @@
   <script src="/js/themes.js"></script>
   <script src="/js/core.js"></script>
   <script src="/js/espn.js"></script>
+  <!-- Phase 1 v2 engine bundle (IIFE, exposes window.LarryEngine).
+       Loaded before engines.js so the v2 bridge can find it on first call. -->
+  <script src="/dist/larry-engine.js"></script>
   <script src="/js/engines.js"></script>
   <script src="/js/tabs.js"></script>
   <script src="/js/chat.js"></script>

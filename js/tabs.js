@@ -2105,6 +2105,18 @@ function renderSettingsPage() {
   });
   html += '</div>';
 
+  // Phase 1 Beta: v2 recommendation engine toggle. Hidden under a
+  // collapsed Beta card so it does not pollute the main settings view.
+  // No UI redesign in this phase per LARRY_PLAN.md (Phase 3 covers UX).
+  var v2On = !!(S.prefs && S.prefs.useV2Engine);
+  html += '<div class="card">';
+  html += '<div class="card-header" onclick="this.nextElementSibling.classList.toggle(\'hidden\')">Beta <span class="text-xs muted">\u25BC</span></div>';
+  html += '<div class="hidden">';
+  html += '<div class="settings-row"><label>v2 recommendation engine</label>';
+  html += '<input type="checkbox" id="toggle-v2-engine" ' + (v2On ? 'checked' : '') + ' onchange="S.prefs.useV2Engine=this.checked;saveState();"></div>';
+  html += '<div class="settings-row" style="font-size:12px;color:var(--muted)">G-score + team-fit blend. Reload after changing.</div>';
+  html += '</div></div>';
+
   // Data management
   html += '<div class="card"><div class="card-header">Data Management</div>';
   html += '<button class="btn btn-secondary btn-full" onclick="exportData()">Export Data (JSON)</button>';

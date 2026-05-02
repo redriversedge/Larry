@@ -17,6 +17,6 @@
     "outDir": "dist",
     "rootDir": "."
   },
-  "include": ["src/**/*", "tests/**/*", "vitest.config.ts"],
-  "exclude": ["node_modules", "dist", "coverage", "js", "netlify"]
+  "include": ["src/**/*", "tests/**/*", "vitest.config.ts", "netlify/functions/**/*.ts", "tools/**/*.ts"],
+  "exclude": ["node_modules", "dist", "coverage", "js"]
 }

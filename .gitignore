@@ -9,7 +9,11 @@ Thumbs.db
 node_modules/
 
 # Build output
-dist/
+# Phase 1 decision: dist/larry-engine.js is committed to git so Netlify can
+# publish it without a build step. dist/ is otherwise ignored.
+dist/*
+!dist/larry-engine.js
+!dist/larry-engine.js.map
 coverage/
 
 # Working files
@@ -18,3 +22,7 @@ temporary screenshots/
 # Environment
 .env
 .env.local
+
+# Real-roster snapshots used for manual verification.
+# Contain personal team data; never commit.
+tests/fixtures/users/

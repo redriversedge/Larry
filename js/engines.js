@@ -322,7 +322,156 @@ var Engines = (function() {
     return true;
   }
 
+  // Phase 1 v2 engine bridge. When useV2 is true, generateRecommendations
+  // delegates to the bespoke G-score + team-fit engine bundled at
+  // dist/larry-engine.js (global window.LarryEngine). When useV2 is false,
+  // the legacy v1 path runs unchanged. Persisted in S.prefs so the toggle
+  // survives reload.
+  function v2Enabled() {
+    if (S && S.prefs && typeof S.prefs.useV2Engine === 'boolean') return S.prefs.useV2Engine;
+    return false;
+  }
+
+  function v2BuildPlayerProjection(p) {
+    // Project the legacy player object into the shape src/shared/types.ts
+    // PlayerProjection expects. Larry's parser maps ESPN stat IDs
+    // (0=PTS, 1=BLK, 2=STL, 3=AST, 6=REB) to category abbrs in
+    // p.stats.season as season *totals*. Divide by gamesPlayed for per-game.
+    // For rookies / mid-season pickups with gp=0, fall back to projectedSeason
+    // pro-rated over an 82-game season.
+    var perGame = { REB: 0, AST: 0, STL: 0, BLK: 0, PTS: 0 };
+    var season = (p.stats && p.stats.season) || {};
+    var projected = (p.stats && p.stats.projectedSeason) || {};
+    var gp = p.gamesPlayed || 0;
+    ['REB','AST','STL','BLK','PTS'].forEach(function(c) {
+      if (gp > 0) {
+        var raw = season[c];
+        perGame[c] = typeof raw === 'number' ? raw / gp : 0;
+      } else {
+        var praw = projected[c];
+        perGame[c] = typeof praw === 'number' ? praw / 82 : 0;
+      }
+    });
+    var positions = (p.positions || []).filter(function(pos) {
+      return ['PG','SG','SF','PF','C'].indexOf(pos) >= 0;
+    });
+    return {
+      id: String(p.id),
+      name: p.name || ('Player ' + p.id),
+      team: p.nbaTeam || '',
+      positions: positions,
+      gamesRemaining: p.gamesRemaining || 0,
+      perGame: perGame,
+      injuryStatus: p.injuryStatus || 'ACTIVE'
+    };
+  }
+
+  function v2BuildContext(myPlayers, allPlayers) {
+    var freeAgents = (allPlayers || [])
+      .filter(function(p) { return p.onTeamId === 0 && isValidAddCandidate(p); })
+      .map(v2BuildPlayerProjection);
+    var myProj = (myPlayers || []).map(v2BuildPlayerProjection);
+    // League-wide rosters keyed by team id. Each team's players are looked up
+    // from allPlayers via onTeamId. This drives the team-need vector's stdev.
+    var leaguePlayers = {};
+    (S.teams || []).forEach(function(t) {
+      var tid = String(t.teamId);
+      leaguePlayers[tid] = (allPlayers || [])
+        .filter(function(p) { return p.onTeamId === t.teamId; })
+        .map(v2BuildPlayerProjection);
+    });
+    var Eng = window.LarryEngine;
+    var source = Eng.createInMemoryProjectionSource(freeAgents, myProj);
+    var leagueCats = (S.league && S.league.categories) ?
+      S.league.categories.map(function(c){return c.abbr;}) :
+      ['REB','AST','STL','BLK','PTS'];
+    return {
+      roster: { myPlayers: myProj, leaguePlayers: leaguePlayers },
+      league: {
+        size: (S.league && S.league.teamCount) || 12,
+        scoringPeriod: (S.league && S.league.currentScoringPeriodId) || 0,
+        currentMatchup: null,
+        allCategories: leagueCats
+      },
+      projectionSource: source,
+      mode: 'in-season'
+    };
+  }
+
+  function v2ToLegacyRecs(output, myPlayers) {
+    // Map RankedPlayer -> the legacy rec shape so the existing
+    // renderAddDropTiles() does not need to change. We pick a drop target
+    // (worst bench player by effectiveDURANT) just so the UI fields are
+    // populated; the v2 engine itself does not currently propose drops.
+    var sortedMy = (myPlayers || []).slice().sort(function(a,b) {
+      return (a.effectiveDURANT || 0) - (b.effectiveDURANT || 0);
+    });
+    var drop = sortedMy.find(function(p) { return p.slotId === 12; }) || sortedMy[0] || null;
+    var top = (output.ranked || []).slice(0, 5);
+    return top.map(function(rp, idx) {
+      var why = (rp.breakdown.why || []).join(' ');
+      return {
+        type: 'pickup',
+        priority: idx === 0 ? 'high' : 'medium',
+        action: drop ? ('Add ' + rp.player.name + ', Drop ' + drop.name) : ('Add ' + rp.player.name),
+        detail: 'v2 score: ' + rp.breakdown.final.toFixed(2) +
+                ' (G=' + rp.breakdown.gScore.toFixed(2) +
+                ', fit=' + rp.breakdown.fitBonus.toFixed(2) + '). ' + why,
+        player: rp.player,
+        dropPlayer: drop,
+        improvement: rp.breakdown.final
+      };
+    });
+  }
+
+  function v2FetchRationale(payload) {
+    if (typeof fetch !== 'function') return;
+    fetch('/api/recommend-explain', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    }).then(function(res) { return res.ok ? res.json() : null; })
+      .then(function(data) {
+        if (!data || !data.rationale) return;
+        S.matchup = S.matchup || {};
+        S.matchup.lastV2Rationale = data.rationale;
+        // Best-effort DOM merge: prepend a banner to the Add / Drop card.
+        var headers = document.querySelectorAll('.card-header');
+        for (var i = 0; i < headers.length; i++) {
+          if ((headers[i].textContent || '').indexOf('Add / Drop') >= 0) {
+            var card = headers[i].parentNode;
+            var existing = card.querySelector('[data-v2-rationale]');
+            var div = existing || document.createElement('div');
+            div.setAttribute('data-v2-rationale', '1');
+            div.style.cssText = 'padding:8px 12px;margin:8px 0;background:var(--bg-input);border-radius:8px;font-size:13px';
+            div.textContent = 'Larry v2: ' + data.rationale;
+            if (!existing) card.insertBefore(div, headers[i].nextSibling);
+            break;
+          }
+        }
+      })
+      .catch(function() { /* ignore */ });
+  }
+
+  function v2GenerateRecommendations(myPlayers, allPlayers) {
+    var Eng = window.LarryEngine;
+    if (!Eng || typeof Eng.recommend !== 'function') {
+      console.warn('LarryEngine v2 not loaded; falling back to v1');
+      return null;
+    }
+    var ctx = v2BuildContext(myPlayers, allPlayers);
+    var output = Eng.recommend(ctx);
+    var recs = v2ToLegacyRecs(output, myPlayers);
+    var payload = Eng.buildExplainPayload(output.ranked.slice(0, 5), output.teamNeeds);
+    v2FetchRationale(payload);
+    return recs;
+  }
+
   function generateRecommendations(myPlayers, allPlayers) {
+    if (v2Enabled()) {
+      var v2Recs = v2GenerateRecommendations(myPlayers, allPlayers);
+      if (v2Recs) return v2Recs;
+    }
     // Re-compute effectiveDURANT here using the full allPlayers pool.
     // computeDURANT may be called on a subset; we need the full pool for an
     // accurate boostMap. This overwrite is intentional.
