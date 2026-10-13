@@ -34,7 +34,9 @@ REPO_MAP.md             -- Phase 0 audit: file tree + key-file summaries
 
 ## Key Concepts
 
-- **S object**: Global state in localStorage under `larry_state`. All app data lives here.
+- **S object**: Global state in localStorage under `larry_state`. All app data lives here. `S.version` drives one-time migrations in `migrateState()` (core.js); bump `APP_VERSION` and add a branch there when the shape changes.
+- **Stats are PER-GAME**: `p.stats.{season,last30,last15,last7}` hold per-game rates, normalized once in `parsePlayer` (espn.js). Raw ESPN split totals live under `p.stats.totals.<split>`, each split's game count under `p.stats.gp.<split>`. Percentages and GP/GS pass through undivided. Never divide `stats.season` by `gamesPlayed` again; that was the old shape and it caused the 52x matchup inflation and the 78,905-point ROS projection. `projectedSeason` stays as totals, with `projectedPerGame` alongside it.
+- **Season id**: `S.league.seasonId` is the calendar year the season ENDS in (2026-27 season = 2027). Seeded by `computeSeasonId()` and overwritten by ESPN on first sync. Never hardcode it.
 - **DURANT ranking (v2)**: Primary player ranking. Per-game z-score against a starter-quality Q-pool, with small samples shrunk toward the pool mean and each category capped at +/- 3. `durantScore` is the sum of category z-scores times 10. Nothing multiplies it: no injury discount, no games-remaining factor, no trend or scarcity bonus. Computed by `computeBaseValues` in `src/engine/zscore.ts`, consumed by `computeDURANT` in `js/engines.js`. See `docs/RANKING_V2_SPEC.md`. Rank correlation with the FantasyPros 6-expert consensus top 150 is 0.786, up from 0.296 under the pre-v2 score.
 - **Availability vs DURANT**: `durantScore` and `durantRank` are season-long value and are what every ranking surface sorts on. `availability` (0 to 1) and the opportunity boost are separate fields combined into `effectiveDURANT`, which only add/drop, streaming and lineup logic may read. Any multiplier applies only when the score is positive, because scaling a negative score raises it.
 - **H2H Each Category**: League format. Categories: REB, AST, STL, BLK, PTS (display in this order everywhere).
@@ -153,6 +155,10 @@ The chat is strategy-aware. It references target categories when discussing pick
 - Use `new Date().toISOString()` for local dates (use local timezone conversion)
 - Put long content in fixed-height containers without overflow scroll
 - Hardcode team names or roster data, everything comes from ESPN API
+- Divide `stats.season` by `gamesPlayed` (it is already per-game, see Key Concepts)
+- Parse a schedule date with `new Date('YYYY-MM-DD')` (reads as UTC midnight and drops today's games after 7pm Central). Compare local `YYYY-MM-DD` strings instead.
+- Invent data when the real thing is missing. Show "unavailable" instead; the player popup used to hash the team name into a fake 7-day schedule.
+- Pin a Claude model id in a Netlify function. Read `process.env.ANTHROPIC_MODEL` with a current default, or it silently 404s when the model retires.
 - Commit directly to `main`
 - Use em dashes in any file (use commas, periods, or double hyphens)
 

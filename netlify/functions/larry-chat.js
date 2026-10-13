@@ -34,11 +34,15 @@ exports.handler = async function(event) {
     // Use client-provided system prompt if available, otherwise build from context
     const systemPrompt = clientSystem || buildSystemPrompt(context || {});
 
+    // claude-sonnet-4-20250514 was pinned here and is past its retirement
+    // date, so every chat request was returning a 404 from the Claude API.
+    // Keep the model in an env var so the next rotation is a Netlify setting
+    // change rather than a deploy.
     const payload = JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 2048,
+      model: process.env.ANTHROPIC_MODEL || 'claude-sonnet-5',
+      max_tokens: Number(process.env.ANTHROPIC_MAX_TOKENS) || 2048,
       system: systemPrompt,
-      messages: messages.slice(-20)
+      messages: trimToUserStart(messages, 20)
     });
 
     const data = await callClaude(apiKey, payload);
@@ -58,6 +62,16 @@ exports.handler = async function(event) {
     return { statusCode: error.statusCode || 500, headers, body: JSON.stringify({ error: error.message }) };
   }
 };
+
+// Take the last `limit` messages, then drop leading assistant turns. A bare
+// slice(-N) can land on an assistant message, and the Claude API requires the
+// first message to be a user turn.
+function trimToUserStart(messages, limit) {
+  const recent = messages.slice(-limit);
+  let start = 0;
+  while (start < recent.length && recent[start].role !== 'user') start++;
+  return recent.slice(start);
+}
 
 function buildSystemPrompt(ctx) {
   let prompt = `You are Larry, an AI fantasy basketball analyst named after the Larry O'Brien Championship Trophy.

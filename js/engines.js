@@ -229,46 +229,35 @@ var Engines = (function() {
     return out.length ? out : V2_CATEGORIES.slice();
   }
 
-  // Single source of truth for turning a legacy player into per-game rates.
-  // Larry's parser stores stats.season as season TOTALS, so we divide by
-  // games played; a player with no games falls back to projectedSeason over a
-  // full year. When HANDOFF phase 1 moves normalization to parse time this
-  // function is the only thing that has to change: set perGame directly and
-  // the engine takes it unmodified.
+  // Single source of truth for turning a legacy player into the ranking
+  // engine's input shape.
+  //
+  // As of the parse-time normalization, stats.season is ALREADY per-game, so
+  // this hands the engine `perGame` directly rather than totals plus a
+  // divisor. computeBaseValues accepts either shape and the resulting
+  // baseValue is identical, which tests/engine/baseValue.test.ts pins.
+  //
+  // gamesPlayed still matters: it drives the shrink weight, so a 15-game
+  // sample is still pulled toward the pool mean.
   function v2BaseValueInput(p) {
-    var season = (p.stats && p.stats.season) || {};
-    var projected = (p.stats && p.stats.projectedSeason) || {};
-    var seasonTotals = {};
-    var projectedSeason = {};
-    for (var i = 0; i < V2_CATEGORIES.length; i++) {
-      var c = V2_CATEGORIES[i];
-      seasonTotals[c] = typeof season[c] === 'number' ? season[c] : 0;
-      projectedSeason[c] = typeof projected[c] === 'number' ? projected[c] : 0;
-    }
     return {
       id: String(p.id),
       gamesPlayed: p.gamesPlayed || 0,
-      seasonTotals: seasonTotals,
-      projectedSeason: projectedSeason
+      perGame: v2PerGame(p)
     };
   }
 
-  // Per-game rates for a legacy player object, derived the same way the
-  // ranking derives them. ESPN stat IDs (0=PTS, 1=BLK, 2=STL, 3=AST, 6=REB)
-  // land in p.stats.season as season TOTALS, so divide by games played; a
-  // player with no games falls back to projectedSeason over a full year.
+  // Per-game rates for a legacy player object. stats.season is per-game after
+  // parse; a player with no games at all falls back to the projection, which
+  // the parser pro-rates over a full season into stats.projectedPerGame.
   function v2PerGame(p) {
     var perGame = { REB: 0, AST: 0, STL: 0, BLK: 0, PTS: 0 };
-    var season = (p.stats && p.stats.season) || {};
-    var projected = (p.stats && p.stats.projectedSeason) || {};
+    var stats = p.stats || {};
     var gp = p.gamesPlayed || 0;
+    var src = gp > 0 ? (stats.season || {}) : (stats.projectedPerGame || {});
     for (var i = 0; i < V2_CATEGORIES.length; i++) {
       var c = V2_CATEGORIES[i];
-      if (gp > 0) {
-        perGame[c] = typeof season[c] === 'number' ? season[c] / gp : 0;
-      } else {
-        perGame[c] = typeof projected[c] === 'number' ? projected[c] / 82 : 0;
-      }
+      perGame[c] = typeof src[c] === 'number' && isFinite(src[c]) ? src[c] : 0;
     }
     return perGame;
   }

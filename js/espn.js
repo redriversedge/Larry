@@ -68,6 +68,11 @@ var ESPNSync = (function() {
     S.league.name = settings.name || '';
     S.league.teamCount = data.teams ? data.teams.length : 0;
 
+    // ESPN is authoritative for the season. computeSeasonId() only seeds the
+    // first request; once the league responds we use what it tells us.
+    if (data.seasonId) S.league.seasonId = data.seasonId;
+    if (data.segmentId !== undefined) S.league.segmentId = data.segmentId;
+
     // Scoring type
     var scoringTypeId = settings.scoringSettings ? settings.scoringSettings.scoringType : null;
     S.league.scoringType = scoringTypeId === 0 ? 'H2H Each Category' :
@@ -247,6 +252,68 @@ var ESPNSync = (function() {
     return false;
   }
 
+  var FULL_SEASON_GAMES = 82;
+
+  // Stats that must NOT be divided by games played. Percentages are already
+  // rates, and GP/GS are game counts rather than accumulated production.
+  var NON_RATE_STATS = { 'FG%': 1, 'FT%': 1, 'GP': 1, 'GS': 1 };
+
+  // Games played for one split. Stat id 42 is games played; the id-40 slot is
+  // minutes and was once used as a fallback here, which silently divided
+  // every rate by roughly 30x too much. appliedTotal/20 is a last-resort
+  // estimate for splits that report neither.
+  function splitGamesPlayed(statSet, mapped) {
+    var gp = statSet.stats['42'];
+    if (!gp && typeof mapped['GP'] === 'number') gp = mapped['GP'];
+    if (!gp && statSet.appliedTotal) gp = Math.round(statSet.appliedTotal / 20);
+    return gp || 0;
+  }
+
+  // Divide counting stats by games, pass rates through untouched. With no
+  // games the split has no rate to report, so counting stats come back 0.
+  function toPerGameStats(totals, gp) {
+    var perGame = {};
+    if (!totals) return perGame;
+    Object.keys(totals).forEach(function(key) {
+      var val = totals[key];
+      if (typeof val !== 'number' || !isFinite(val)) { perGame[key] = val; return; }
+      if (NON_RATE_STATS[key]) { perGame[key] = val; return; }
+      perGame[key] = gp > 0 ? val / gp : 0;
+    });
+    return perGame;
+  }
+
+  // Convert one already-stored player from the pre-3.9.0 totals shape to the
+  // per-game shape. Called by the loadState migration so an existing
+  // larry_state does not have to be thrown away. Idempotent: a player that
+  // already carries stats.totals is left alone.
+  function migrateStatsToPerGame(player) {
+    if (!player || !player.stats) return false;
+    if (player.stats.totals) return false; // already migrated
+    var splits = ['season', 'last30', 'last15', 'last7'];
+    var totals = {};
+    var gpBySplit = {};
+    var seasonGP = player.gamesPlayed || 0;
+    for (var i = 0; i < splits.length; i++) {
+      var name = splits[i];
+      var raw = player.stats[name];
+      if (!raw) continue;
+      totals[name] = raw;
+      // Pre-migration state only tracked season GP, so that is the best
+      // divisor available for the recent splits. They get refreshed with
+      // real per-split counts on the next sync.
+      gpBySplit[name] = seasonGP;
+      player.stats[name] = toPerGameStats(raw, seasonGP);
+    }
+    player.stats.totals = totals;
+    player.stats.gp = gpBySplit;
+    if (player.stats.projectedSeason) {
+      player.stats.projectedPerGame =
+        toPerGameStats(player.stats.projectedSeason, FULL_SEASON_GAMES);
+    }
+    return true;
+  }
+
   // --- STAT SPLIT IDENTIFIER ---
   function identifyStatSplit(statSet) {
     var src = statSet.statSourceId;
@@ -281,7 +348,13 @@ var ESPNSync = (function() {
       slotId: entry.lineupSlotId || 12,
       onTeamId: 0,
       percentOwned: raw.ownership ? raw.ownership.percentOwned || 0 : 0,
-      stats: { season: {}, last30: {}, last15: {}, last7: {}, projectedSeason: {}, projectedMatchup: {} },
+      // season/last30/last15/last7 hold PER-GAME rates; raw split totals live
+      // under stats.totals and each split's game count under stats.gp.
+      stats: {
+        season: {}, last30: {}, last15: {}, last7: {},
+        projectedSeason: {}, projectedMatchup: {}, projectedPerGame: {},
+        totals: {}, gp: {}
+      },
       gamesPlayed: 0,
       minutesPerGame: 0,
       schedule: [],
@@ -307,7 +380,22 @@ var ESPNSync = (function() {
       if (defPos) player.positions.push(defPos);
     }
 
-    // Parse stats
+    // Parse stats.
+    //
+    // ESPN returns counting stats as split TOTALS. Almost every consumer in
+    // this app wants per-game rates, and most of them used to read the totals
+    // as if they already were rates: the matchup engine multiplied a season
+    // total by games remaining, which is why every category read "Target" and
+    // ROS projected Towns at 78,905 points.
+    //
+    // So normalization happens once, here, at the boundary:
+    //   stats.<split>        per-game rates  (what everything should read)
+    //   stats.totals.<split> raw totals      (for anything that needs them)
+    //   stats.gp.<split>     games in that split
+    //
+    // Each split is divided by its OWN games played, not the season's. Last-7
+    // totals over the season's 65 games would understate a hot streak by an
+    // order of magnitude.
     if (raw.stats) {
       raw.stats.forEach(function(statSet) {
         var splitName = identifyStatSplit(statSet);
@@ -317,19 +405,29 @@ var ESPNSync = (function() {
           var abbr = ESPN_STAT_MAP[parseInt(espnId)];
           if (abbr) mapped[abbr] = statSet.stats[espnId];
         });
-        player.stats[splitName] = mapped;
 
-        // GP and MPG from season. Stat id 42 is games played; 40 is MINUTES
-        // and was never a valid fallback for it. A player whose GP silently
-        // became their minutes total would have every per-game rate divided
-        // by roughly 30x too much, which now feeds the DURANT ranking
-        // directly.
+        var splitGP = splitGamesPlayed(statSet, mapped);
+        player.stats.totals[splitName] = mapped;
+        player.stats.gp[splitName] = splitGP;
+        player.stats[splitName] = toPerGameStats(mapped, splitGP);
+
+        // Season GP and MPG are promoted to the player for convenience; a lot
+        // of code reads p.gamesPlayed directly.
         if (splitName === 'season') {
-          player.gamesPlayed = statSet.stats['42'] || mapped['GP'] || 0;
-          if (player.gamesPlayed === 0 && statSet.appliedTotal) player.gamesPlayed = Math.round(statSet.appliedTotal / 20) || 0;
-          player.minutesPerGame = statSet.stats['28'] || mapped['MPG'] || 0;
+          player.gamesPlayed = splitGP;
+          player.minutesPerGame = statSet.stats['28'] ||
+            (splitGP > 0 && typeof mapped['MIN'] === 'number' ? mapped['MIN'] / splitGP : 0);
         }
       });
+
+      // Projections stay as totals (they describe a full season, not a
+      // sample), with a per-game companion for the ranking engine's gp=0
+      // fallback path.
+      var projTotals = player.stats.totals.projectedSeason;
+      if (projTotals) {
+        player.stats.projectedSeason = projTotals;
+        player.stats.projectedPerGame = toPerGameStats(projTotals, FULL_SEASON_GAMES);
+      }
     }
 
     // Injury status
@@ -353,7 +451,11 @@ var ESPNSync = (function() {
         id: raw.player.id, name: raw.player.fullName || '',
         positions: [], nbaTeam: ESPN_TEAM_MAP[raw.player.proTeamId] || '???',
         injuryStatus: raw.player.injuryStatus || 'ACTIVE',
-        stats: { season: {}, last30: {}, last7: {} }, onTeamId: 0,
+        stats: {
+          season: {}, last30: {}, last15: {}, last7: {},
+          projectedSeason: {}, projectedMatchup: {}, projectedPerGame: {},
+          totals: {}, gp: {}
+        }, onTeamId: 0, gamesPlayed: 0,
         ownership: raw.player.ownership ? raw.player.ownership.percentOwned || 0 : 0
       };
     }
@@ -497,16 +599,13 @@ var ESPNSync = (function() {
           } else if (game.gameTime || game.time) {
             time = game.gameTime || game.time;
           } else if (rawDate && rawDate.indexOf('T') >= 0) {
-            // Format UTC time to ET approximation (UTC-5 standard / UTC-4 daylight)
-            var utcHour = dateObj.getUTCHours();
-            var utcMin = dateObj.getUTCMinutes();
-            // Rough ET offset: -5 (use -5, close enough for display)
-            var etHour = utcHour - 5;
-            if (etHour < 0) etHour += 24;
-            var ampm = etHour >= 12 ? 'PM' : 'AM';
-            var h = etHour % 12 || 12;
-            var m = utcMin < 10 ? '0' + utcMin : String(utcMin);
-            time = h + ':' + m + ' ' + ampm + ' ET';
+            // Render in the user's own timezone. This used to subtract a flat
+            // 5 hours and label the result "ET", which was wrong for every
+            // user outside Eastern and wrong for everyone during daylight
+            // time. toLocaleTimeString handles both.
+            time = dateObj.toLocaleTimeString([], {
+              hour: 'numeric', minute: '2-digit'
+            });
           }
 
           lookup[teamId].push({
@@ -571,6 +670,10 @@ var ESPNSync = (function() {
         S.espn.connected = true;
         // Phase 2: clear the expired-cookies flag on successful sync.
         S.espn.cookieExpired = false;
+        // Fresh data clears the migration / stale-season prompt.
+        S.needsResync = false;
+        S.resyncReason = '';
+        S.resyncDismissed = false;
         addSyncLog('success', 'Synced ' + S.teams.length + ' teams, ' + S.allPlayers.length + ' players');
         S.analysisCache.lastComputed = null;
         autosave();
@@ -593,38 +696,63 @@ var ESPNSync = (function() {
     if (!S.scheduleLookup) return;
     var todayStr = localDateStr(new Date());
     S.allPlayers.forEach(function(p) {
-      if (!p.nbaTeamId) return;
-      p.schedule = S.scheduleLookup[p.nbaTeamId] || [];
-      var todayGame = p.schedule.find(function(g) { return g.date === todayStr; });
-      if (todayGame) {
-        p.gamesToday = true;
-        p.gameToday = todayGame;
-      } else {
-        p.gamesToday = false;
-        p.gameToday = null;
+      // parsePlayer stores the NBA team under proTeamId. This used to read
+      // p.nbaTeamId, which is never assigned anywhere, so the guard returned
+      // early for every player and all 666 ended up with an empty schedule.
+      // That in turn made gamesRemaining a constant for the whole league.
+      if (!p.proTeamId) return;
+      p.schedule = S.scheduleLookup[p.proTeamId] || [];
+      var todayGame = null;
+      for (var i = 0; i < p.schedule.length; i++) {
+        if (p.schedule[i].date === todayStr) { todayGame = p.schedule[i]; break; }
       }
+      p.gamesToday = !!todayGame;
+      p.gameToday = todayGame;
     });
   }
 
+  // Last day of the NBA regular season, as a local YYYY-MM-DD string. ESPN's
+  // seasonId is the calendar year the season ends in, so the 2026-27 season
+  // carries seasonId 2027 and ends in April 2027. Mid-April is close enough:
+  // this only bounds a game count that the real schedule already limits.
+  function seasonEndDateStr() {
+    var endYear = (S.league && S.league.seasonId) || new Date().getFullYear();
+    return String(endYear) + '-04-15';
+  }
+
+  // Count real games between today and a cutoff, comparing local YYYY-MM-DD
+  // strings. Never parse these with new Date('YYYY-MM-DD'): that reads as UTC
+  // midnight, so in US Central the comparison drops today's games after 7pm.
+  function countGamesInRange(schedule, fromStr, toStr) {
+    if (!schedule || !schedule.length) return 0;
+    var n = 0;
+    for (var i = 0; i < schedule.length; i++) {
+      var d = schedule[i].date;
+      if (!d) continue;
+      if (d >= fromStr && d <= toStr) n++;
+    }
+    return n;
+  }
+
   function enrichGamesRemaining() {
-    // NBA teams play ~3.5 games per week on average
-    // Estimate games remaining in matchup period per player
     var matchupDates = getMatchupDates();
-    var daysLeft = matchupDates.daysLeft;
-    var gamesPerDay = 3.5 / 7; // ~0.5 games per day per team
+    var todayStr = localDateStr(new Date());
+    var endStr = matchupDates.end ? localDateStr(matchupDates.end) : todayStr;
+    // Fallback only for players with no schedule at all: NBA teams average
+    // ~3.5 games a week.
+    var estFallback = Math.round((matchupDates.daysLeft || 0) * (3.5 / 7));
+    var seasonEndStr = seasonEndDateStr();
 
     S.allPlayers.forEach(function(p) {
-      // Estimate: daysLeft * gamesPerDay, rounded
-      var est = Math.round(daysLeft * gamesPerDay);
-      // If player has a known schedule array, use that instead
       if (p.schedule && p.schedule.length) {
-        var remaining = p.schedule.filter(function(g) {
-          var gDate = new Date(g.date);
-          return gDate >= new Date() && gDate <= matchupDates.end;
-        }).length;
-        if (remaining > 0) est = remaining;
+        p.gamesRemaining = countGamesInRange(p.schedule, todayStr, endStr);
+        // Rest-of-season count. Referenced by ROS projections, which until
+        // now read an undefined value.
+        p.gamesRemainingROS = countGamesInRange(p.schedule, todayStr, seasonEndStr);
+      } else {
+        p.gamesRemaining = estFallback;
+        p.gamesRemainingROS = 0;
       }
-      p.gamesRemaining = est;
     });
 
     // Update matchup games remaining totals
@@ -642,18 +770,33 @@ var ESPNSync = (function() {
   }
 
   // --- PER-GAME STAT HELPER ---
+  // stats.<split> is already per-game as of the parse-time normalization, so
+  // this no longer divides. It still rounds for display and still returns
+  // null when the split has no games, so callers can render a blank rather
+  // than a misleading 0.0.
   function getPerGameStats(player, period) {
     // period: 'season' | 'last7' | 'last15' | 'last30'
     var stats = player.stats && player.stats[period] ? player.stats[period] : {};
-    var gp = player.stats && player.stats[period + 'GP'] ? player.stats[period + 'GP'] : (player.gamesPlayed || 0);
-    if (!gp || gp === 0) return null; // blank, not zero
+    var gp = splitGP(player, period);
+    if (!gp) return null; // blank, not zero
     var perGame = {};
     Object.keys(stats).forEach(function(cat) {
       if (stats[cat] != null) {
-        perGame[cat] = parseFloat((stats[cat] / gp).toFixed(1));
+        perGame[cat] = typeof stats[cat] === 'number' ?
+          parseFloat(stats[cat].toFixed(1)) : stats[cat];
       }
     });
     return perGame;
+  }
+
+  // Games played in a split, falling back to the season count for splits that
+  // predate the stats.gp bookkeeping.
+  function splitGP(player, period) {
+    if (!player || !player.stats) return 0;
+    if (player.stats.gp && typeof player.stats.gp[period] === 'number') {
+      return player.stats.gp[period];
+    }
+    return player.gamesPlayed || 0;
   }
 
   // --- FETCH STATS FOR A SINGLE SCORING PERIOD (DAY) ---
@@ -714,6 +857,9 @@ var ESPNSync = (function() {
     _lastLeagueData: _lastLeagueData,
     parsePlayer: parsePlayer,
     getPerGameStats: getPerGameStats,
+    splitGP: splitGP,
+    toPerGameStats: toPerGameStats,
+    migrateStatsToPerGame: migrateStatsToPerGame,
     fetchScoringPeriodStats: fetchScoringPeriodStats
   };
 })();

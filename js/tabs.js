@@ -2397,17 +2397,13 @@ function renderPopupSchedule(p) {
     var dayLabel = date.toLocaleDateString('en-US', {weekday: 'short'});
     var hasGame = false;
 
+    // Only ever show real games. This used to fall through to a hash of the
+    // team's name to invent game days, which rendered a confident-looking
+    // schedule that was entirely fictional.
     if (p.schedule && p.schedule.length) {
       hasGame = p.schedule.some(function(g) { return g.date === localDateStr(date); });
     } else if (d === 0 && p.gamesToday) {
       hasGame = true;
-    } else {
-      var teamHash = 0;
-      var team = p.nbaTeam || '';
-      for (var c = 0; c < team.length; c++) teamHash += team.charCodeAt(c);
-      var gameDays = [(teamHash % 7), ((teamHash + 2) % 7), ((teamHash + 4) % 7)];
-      if (teamHash % 3 === 0) gameDays.push((teamHash + 5) % 7);
-      hasGame = gameDays.indexOf(d) >= 0;
     }
 
     html += '<div style="flex:1;text-align:center;padding:6px 2px;border-radius:6px;';

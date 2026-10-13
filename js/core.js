@@ -26,7 +26,20 @@ function getOrderedCategories() {
 }
 
 // --- ESPN MAPPINGS ---
-var ESPN_STAT_MAP = {0:'PTS',1:'BLK',2:'STL',3:'AST',6:'REB',17:'3PM',19:'FG%',20:'FT%',11:'TO',37:'DD',39:'TD',40:'OREB',41:'DREB',16:'FGM',13:'FTM',15:'FGA',14:'FTA'};
+// ESPN stat id -> category abbreviation.
+//
+// Ids 13-16 and 40-41 were previously mapped wrong. Verified against Jokic in
+// a real snapshot: the old map produced FGM 480 on FGA 399 (more makes than
+// attempts), and its "FTM/FTA" of 644/1132 came out to .5689, which was
+// exactly his stored FG%. Id 40 held 2265, which is 65 games x 34.85 minutes,
+// i.e. total minutes rather than offensive rebounds.
+//
+// Correct: 13=FGM, 14=FGA, 15=FTM, 16=FTA, 40=MIN, 41=GS, 42=GP. OREB and
+// DREB are dropped rather than guessed; their ids are unconfirmed.
+//
+// The five scored categories (0, 1, 2, 3, 6) were always correct, so this
+// only affects display columns.
+var ESPN_STAT_MAP = {0:'PTS',1:'BLK',2:'STL',3:'AST',6:'REB',17:'3PM',19:'FG%',20:'FT%',11:'TO',37:'DD',39:'TD',13:'FGM',14:'FGA',15:'FTM',16:'FTA',40:'MIN',41:'GS',42:'GP'};
 var ESPN_STAT_REVERSE = {};
 Object.keys(ESPN_STAT_MAP).forEach(function(k){ ESPN_STAT_REVERSE[ESPN_STAT_MAP[k]] = parseInt(k); });
 
@@ -70,10 +83,26 @@ var LEAGUE_MENU = [
   { id: 'settings', label: 'Settings & Data', icon: '\u{2699}\u{FE0F}' }
 ];
 
+// --- SEASON ---
+// ESPN's seasonId is the calendar year the season ENDS in: the 2025-26
+// season is seasonId 2026. This was hardcoded to 2026, so once the real
+// calendar passed into the 2026-27 season the app kept querying last season
+// and showed matchup 21 of 21 with the playoffs already clinched.
+//
+// The NBA season starts in October, so from September onward we are in the
+// season that ends next calendar year.
+var APP_VERSION = '3.9.0';
+var SEASON_START_MONTH = 8; // September, zero-indexed
+
+function computeSeasonId(now) {
+  var d = now || new Date();
+  return d.getMonth() >= SEASON_START_MONTH ? d.getFullYear() + 1 : d.getFullYear();
+}
+
 // --- STATE ---
 function initState() {
   return {
-    version: '3.0.0',
+    version: APP_VERSION,
     initialized: false,
     setupComplete: false,
     currentTab: 0,
@@ -85,7 +114,7 @@ function initState() {
       syncLog: [], syncMethod: 'proxy'
     },
     league: {
-      name: '', seasonId: 2026, segmentId: 0, teamCount: 0,
+      name: '', seasonId: computeSeasonId(), segmentId: 0, teamCount: 0,
       scoringType: '', categories: [], rosterSlots: [],
       startingSlots: 0, benchSlots: 0, irSlots: 0,
       acquisitionLimit: -1, matchupPeriodLength: 7,
@@ -133,8 +162,10 @@ function loadState() {
     var raw = localStorage.getItem('larry_state');
     if (raw) {
       var loaded = JSON.parse(raw);
+      var priorVersion = loaded.version || '3.0.0';
       S = mergeDeep(initState(), loaded);
-      S.version = '3.0.0';
+      migrateState(priorVersion);
+      S.version = APP_VERSION;
     } else {
       S = initState();
     }
@@ -142,6 +173,80 @@ function loadState() {
     console.error('State load failed:', e);
     S = initState();
   }
+}
+
+// One-time upgrades for state saved by an older build. Keyed on the version
+// that produced the stored object, and written to be safe to run twice.
+function migrateState(priorVersion) {
+  if (priorVersion === APP_VERSION) return;
+
+  // 3.9.0: stats.<split> changed from season TOTALS to per-game rates, and
+  // the ESPN stat id map was corrected. Converting the stored totals keeps
+  // the app usable before the next sync; the corrected FG/FT columns only
+  // arrive with fresh data, so we also ask for a resync.
+  var players = S.allPlayers || [];
+  var migrated = 0;
+  for (var i = 0; i < players.length; i++) {
+    if (ESPNSync.migrateStatsToPerGame(players[i])) migrated++;
+  }
+  // S.teams[].players and S.myTeam.players are separate deserialized copies.
+  for (var t = 0; t < (S.teams || []).length; t++) {
+    var roster = S.teams[t].players || [];
+    for (var r = 0; r < roster.length; r++) ESPNSync.migrateStatsToPerGame(roster[r]);
+  }
+  var mine = (S.myTeam && S.myTeam.players) || [];
+  for (var m = 0; m < mine.length; m++) ESPNSync.migrateStatsToPerGame(mine[m]);
+
+  if (migrated > 0) {
+    S.needsResync = true;
+    S.resyncReason = 'Stat handling was corrected. Sync to refresh shooting ' +
+      'percentages and real game schedules.';
+  }
+  // Ranks and projections were computed from the old shape.
+  S.analysisCache = S.analysisCache || {};
+  S.analysisCache.durantComputedAt = null;
+  S.analysisCache.lastComputed = null;
+  console.log('Migrated state from ' + priorVersion + ' to ' + APP_VERSION +
+    ' (' + migrated + ' players)');
+}
+
+// True when the stored season no longer matches the calendar. Drives the
+// resync banner so the app stops silently showing last season.
+function seasonIsStale() {
+  if (!S || !S.league || !S.league.seasonId) return false;
+  return S.league.seasonId !== computeSeasonId();
+}
+
+// Which resync prompt to show, if any. Season drift wins because it makes
+// everything else on screen wrong.
+function resyncBannerMessage() {
+  if (!S || S.resyncDismissed) return '';
+  if (seasonIsStale()) {
+    return 'This data is from the ' + S.league.seasonId + ' season. Sync to load ' +
+      'the ' + computeSeasonId() + ' season.';
+  }
+  if (S.needsResync) {
+    return S.resyncReason || 'Your saved data needs a refresh. Sync to update it.';
+  }
+  return '';
+}
+
+function renderResyncBanner(message) {
+  return '<div class="banner banner-warning" style="display:flex;align-items:center;' +
+    'gap:8px;padding:10px 12px;margin-bottom:8px;background:var(--bg-input);' +
+    'border-left:3px solid var(--warning,#f59e0b);border-radius:8px">' +
+    '<div style="flex:1;font-size:13px">' + esc(message) + '</div>' +
+    '<button class="btn btn-sm btn-primary" style="min-height:44px" ' +
+    'onclick="dismissResyncBanner();ESPNSync.syncAll()">Sync</button>' +
+    '<button class="btn btn-sm btn-secondary" style="min-height:44px" ' +
+    'aria-label="Dismiss" onclick="dismissResyncBanner();render()">Later</button>' +
+    '</div>';
+}
+
+function dismissResyncBanner() {
+  S.resyncDismissed = true;
+  S.needsResync = false;
+  autosave();
 }
 
 function saveState() {
@@ -318,6 +423,13 @@ function safeRender(container) {
       // about the cookie-expired state.
       if (S.espn && S.espn.cookieExpired && typeof renderEspnExpiredBanner === 'function') {
         container.insertAdjacentHTML('afterbegin', renderEspnExpiredBanner());
+      }
+      // Same idea for stale data: either the stored season no longer matches
+      // the calendar, or a migration reshaped stats that only a sync can
+      // fully refresh.
+      var resyncMsg = resyncBannerMessage();
+      if (resyncMsg) {
+        container.insertAdjacentHTML('afterbegin', renderResyncBanner(resyncMsg));
       }
     }
   } catch (e) {
