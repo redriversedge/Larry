@@ -1079,6 +1079,48 @@ function getMatchupDates() {
   return { start: start, end: end, daysLeft: Math.max(0, Math.ceil((end - now) / (1000*60*60*24))) };
 }
 
+// The real matchup window, written by enrichGamesRemaining from ESPN's week
+// map. Prefer this over getMatchupDates() for anything user-facing: opening
+// week runs Tuesday to Sunday and playoff matchups run two full weeks, so a
+// Monday-to-Sunday assumption is wrong at both ends of the season.
+//
+// Falls back to the calendar week when a sync has not run yet.
+function getMatchupWindow() {
+  var m = (S && S.matchup) || {};
+  var startStr = m.startDate || m.windowStart;
+  var endStr = m.endDate || m.windowEnd;
+  if (!startStr || !endStr) {
+    var dates = getMatchupDates();
+    return {
+      startStr: localDateStr(dates.start),
+      endStr: localDateStr(dates.end),
+      daysLeft: dates.daysLeft,
+      label: '',
+      source: 'calendar'
+    };
+  }
+  var todayStr = localDateStr(new Date());
+  // Count whole days from today (or from the start, if it has not begun)
+  // through the end, inclusive. String compare, never new Date(str).
+  var fromStr = todayStr > startStr ? todayStr : startStr;
+  var days = 0;
+  if (fromStr <= endStr) {
+    var parts = fromStr.split('-');
+    var cur = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+    while (localDateStr(cur) <= endStr && days < 40) {
+      days++;
+      cur.setDate(cur.getDate() + 1);
+    }
+  }
+  return {
+    startStr: startStr,
+    endStr: endStr,
+    daysLeft: days,
+    label: startStr + ' to ' + endStr,
+    source: m.windowSource || 'schedule'
+  };
+}
+
 function ordinal(n) {
   var s = ['th','st','nd','rd'];
   var v = n % 100;

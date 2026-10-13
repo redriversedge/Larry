@@ -94,6 +94,27 @@ describe("larry-move: fixtures cover the cases the roadmap names", () => {
     expect(block).toMatch(/IR SLOTS: 1 total, 0 filled/);
   });
 
+  it("tells the model the real matchup window, not a calendar week", () => {
+    // Opening week runs Tue through Sun and playoff matchups run two full
+    // weeks, so Larry cannot infer the runway for a streaming add from the
+    // date alone.
+    const block = buildDataBlock({
+      league: { categories: ["PTS"] },
+      matchup: { opponentName: "Opp", startDate: "2026-10-20", endDate: "2026-10-25" },
+      myRoster: [{ name: "A", perGame: { PTS: 10 } }],
+    });
+    expect(block).toContain("MATCHUP RUNS: 2026-10-20 through 2026-10-25");
+    expect(block).toMatch(/not a Monday-to-Sunday week/);
+  });
+
+  it("omits the window line when the dates are missing", () => {
+    const block = buildDataBlock({
+      league: { categories: ["PTS"] },
+      matchup: { opponentName: "Opp" },
+    });
+    expect(block).not.toMatch(/MATCHUP RUNS/);
+  });
+
   it("flags who plays today, which is the whole point of a daily card", () => {
     const block = buildDataBlock(fixture("lineup-only.json"));
     expect(block).toContain("PLAYS TODAY");

@@ -196,6 +196,16 @@ function buildDataBlock(ctx) {
     ' | ' + num(m.daysLeft, 0) + ' days left' +
     ' | my games left ' + num(m.myGamesLeft, 0) +
     ' | their games left ' + num(m.oppGamesLeft, 0));
+  // The matchup window is a span of ESPN weeks, not a calendar week:
+  // opening week runs Tuesday to Sunday and playoff matchups run two full
+  // weeks. Without the dates Larry cannot reason about how much runway a
+  // streaming add has.
+  const winStart = clean(m.startDate, 10);
+  const winEnd = clean(m.endDate, 10);
+  if (winStart && winEnd) {
+    lines.push('  MATCHUP RUNS: ' + winStart + ' through ' + winEnd +
+      ' (this is the scoring window, not a Monday-to-Sunday week)');
+  }
   if (m.myScores && typeof m.myScores === 'object') {
     cats.forEach((cat) => {
       const mine = (m.myScores || {})[cat];

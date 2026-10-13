@@ -193,6 +193,12 @@ function buildLarryMovePayload() {
     matchup: {
       period: S.league.currentMatchupPeriod || 0,
       daysLeft: dates.daysLeft || 0,
+      // The real matchup window, which is a span of ESPN weeks and not a
+      // Monday-to-Sunday calendar week. Opening week is short (Tue through
+      // Sun) and playoff matchups run two weeks, so "how many days are
+      // left" is not something Larry can infer from the date alone.
+      startDate: S.matchup.startDate || '',
+      endDate: S.matchup.endDate || '',
       opponentName: S.matchup.opponentName || '',
       myScores: S.matchup.myScores || {},
       oppScores: S.matchup.oppScores || {},

@@ -58,6 +58,40 @@ function loadESPNSync(state: any) {
   return fn(...names.map((n) => globals[n]));
 }
 
+// core.js is a plain script of top-level functions over a module-scope S.
+function loadCore(state: any) {
+  const src = fs.readFileSync(path.join(ROOT, "js/core.js"), "utf8");
+  const sandbox: any = {};
+  sandbox.window = sandbox;
+  const mkEl = () => ({
+    innerHTML: "", textContent: "", style: { setProperty() {}, cssText: "" },
+    classList: { add() {}, remove() {}, toggle() {} }, setAttribute() {},
+    querySelector: () => null, querySelectorAll: () => [], appendChild() {},
+  });
+  const store = () => ({
+    _d: {} as Record<string, string>,
+    getItem(k: string) { return this._d[k] ?? null; },
+    setItem(k: string, v: string) { this._d[k] = String(v); },
+    removeItem(k: string) { delete this._d[k]; },
+  });
+  const globals: Record<string, any> = {
+    window: sandbox, globalThis: sandbox, console,
+    document: {
+      getElementById: () => mkEl(), querySelector: () => null,
+      querySelectorAll: () => [], addEventListener() {}, createElement: mkEl,
+      body: mkEl(), documentElement: mkEl(),
+    },
+    localStorage: store(), sessionStorage: store(),
+    navigator: { userAgent: "node" }, location: { href: "", reload() {} },
+    setTimeout, clearTimeout, fetch: undefined,
+  };
+  const names = Object.keys(globals);
+  const fn = new Function(...names, src +
+    "\n; S = arguments[arguments.length - 1];" +
+    "\n; return { getMatchupWindow: getMatchupWindow, getMatchupDates: getMatchupDates };");
+  return fn(...names.map((n) => globals[n]), state);
+}
+
 function baseState(seasonId = 2026): any {
   return {
     league: { seasonId, categories: [], teamCount: 12, schedule: [] },
@@ -288,66 +322,173 @@ describe("games remaining from a real schedule", () => {
 });
 
 describe("matchup windows", () => {
-  // A matchup window is not a calendar week. Two ways that bit:
-  //  - Preseason, the current calendar week has no NBA games at all, so
-  //    every player showed 0 games even though matchup 1 is coming.
-  //  - Playoff matchups span two scoring periods, so a calendar week
-  //    covers half of one.
+  // A matchup window is a span of WEEKS, not a span of scoring periods.
+  //
+  // ESPN's scoringPeriods are single days: period 1 is opening night
+  // (Tue Oct 20 2026), 2 is Oct 21, up to 174 on Apr 11 2027. But
+  // scheduleSettings.matchupPeriods maps a matchup to WEEK numbers:
+  // {"1":[1], ... "18":[18,19]}. Reading those as scoring periods made
+  // matchup 1 one day long and the two-week playoff matchups two days long,
+  // so only 168 of 1000 players had any game and each had exactly 1.
+  //
+  // These tests use the real 2026-27 opening night so the arithmetic is
+  // pinned to a date that can be checked against ESPN.
+  const OPENING = "2026-10-20"; // Tuesday
+
+  // A full 174-day scoring period calendar from opening night, which is
+  // what ESPN actually publishes.
+  function dayStr(offset: number): string {
+    const d = new Date(2026, 9, 20);
+    d.setDate(d.getDate() + offset);
+    const p = (n: number) => String(n).padStart(2, "0");
+    return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
+  }
+
   function stateWithSchedule(over: any = {}) {
     const s = baseState(2027);
-    s.league.matchupPeriods = { "1": [1], "2": [2], "18": [18, 19] };
+    s.league.matchupPeriods = {
+      "1": [1], "2": [2], "3": [3], "17": [17], "18": [18, 19], "19": [20, 21],
+    };
     s.league.currentMatchupPeriod = 0; // preseason
+    s.league.firstScoringPeriod = 1;
+    // Denver: plays Oct 20 (opening night), Oct 22 and Oct 24, then Oct 27.
+    // Three of those are inside opening week, which is the whole point.
     s.scheduleLookup = {
-      2: [
-        { date: "2026-10-20", scoringPeriodId: 1 },
-        { date: "2026-10-22", scoringPeriodId: 1 },
-        { date: "2026-10-27", scoringPeriodId: 2 },
-        { date: "2027-02-16", scoringPeriodId: 18 },
-        { date: "2027-02-23", scoringPeriodId: 19 },
+      7: [
+        { date: "2026-10-22", scoringPeriodId: 3 },
+        { date: "2026-10-24", scoringPeriodId: 5 },
+        { date: "2026-10-27", scoringPeriodId: 8 },
+        { date: "2026-11-01", scoringPeriodId: 13 },
       ],
       13: [
-        { date: "2026-10-21", scoringPeriodId: 1 },
-        { date: "2027-02-18", scoringPeriodId: 18 },
+        { date: "2026-10-20", scoringPeriodId: 1 },
+        { date: "2026-10-21", scoringPeriodId: 2 },
+        { date: "2026-10-26", scoringPeriodId: 7 },
       ],
     };
     return Object.assign(s, over);
   }
 
-  it("maps a playoff matchup to both of its scoring periods", () => {
+  it("finds opening night from the first scoring period", () => {
     const state = stateWithSchedule();
     const ESPNSync = loadESPNSync(state);
-    // Exercised through the window helpers, which are what callers use.
-    state.league.currentMatchupPeriod = 18;
-    ESPNSync.enrichGamesRemaining();
-    // Matchup 18 spans periods 18 and 19, so the window has to reach the
-    // Feb 23 game, not stop at the end of the first week.
-    expect(state.matchup.windowStart).toBe("2027-02-16");
-    expect(state.matchup.windowEnd).toBe("2027-02-23");
-    expect(state.matchup.windowSource).toBe("schedule");
+    expect(ESPNSync.openingNightStr()).toBe(OPENING);
   });
 
-  it("uses matchup 1's window before the season starts", () => {
+  it("reads matchupPeriods values as weeks", () => {
+    const state = stateWithSchedule();
+    const ESPNSync = loadESPNSync(state);
+    expect(ESPNSync.matchupWeeks(1)).toEqual([1]);
+    expect(ESPNSync.matchupWeeks(18)).toEqual([18, 19]);
+    // Unmapped matchup: one week per matchup is ESPN's default.
+    expect(ESPNSync.matchupWeeks(99)).toEqual([99]);
+  });
+
+  it("runs week 1 from opening night through the first Sunday", () => {
+    const state = stateWithSchedule();
+    const ESPNSync = loadESPNSync(state);
+    // Tue Oct 20 through Sun Oct 25. The short opening week is the one ESPN
+    // does not start on a Monday.
+    expect(ESPNSync.weekRangeFrom(OPENING, 1))
+      .toEqual({ startStr: "2026-10-20", endStr: "2026-10-25" });
+  });
+
+  it("runs every later week Monday to Sunday", () => {
+    const state = stateWithSchedule();
+    const ESPNSync = loadESPNSync(state);
+    expect(ESPNSync.weekRangeFrom(OPENING, 2))
+      .toEqual({ startStr: "2026-10-26", endStr: "2026-11-01" });
+    expect(ESPNSync.weekRangeFrom(OPENING, 3))
+      .toEqual({ startStr: "2026-11-02", endStr: "2026-11-08" });
+    // Every week from 2 on starts on a Monday and ends on a Sunday.
+    for (let w = 2; w <= 24; w++) {
+      const r = ESPNSync.weekRangeFrom(OPENING, w);
+      const start = new Date(2026, 9, 20);
+      start.setDate(start.getDate() + 6 + (w - 2) * 7);
+      expect(r.startStr).toBe(dayStr(6 + (w - 2) * 7));
+      expect(start.getDay()).toBe(1); // Monday
+      const end = new Date(2026, 9, 20);
+      end.setDate(end.getDate() + 12 + (w - 2) * 7);
+      expect(end.getDay()).toBe(0); // Sunday
+      expect(r.endStr).toBe(dayStr(12 + (w - 2) * 7));
+    }
+  });
+
+  it("spans a two-week playoff matchup across both weeks", () => {
+    const state = stateWithSchedule();
+    const ESPNSync = loadESPNSync(state);
+    const win = ESPNSync.matchupWindowFor(18, OPENING);
+    const w18 = ESPNSync.weekRangeFrom(OPENING, 18);
+    const w19 = ESPNSync.weekRangeFrom(OPENING, 19);
+    expect(win.startStr).toBe(w18.startStr);
+    expect(win.endStr).toBe(w19.endStr);
+    // Two full Monday-to-Sunday weeks is 14 days, not the 2 days the old
+    // scoring-period reading produced.
+    const a = new Date(2026, 9, 20);
+    a.setDate(a.getDate() + 6 + (18 - 2) * 7);
+    const b = new Date(2026, 9, 20);
+    b.setDate(b.getDate() + 12 + (19 - 2) * 7);
+    expect(Math.round((b.getTime() - a.getTime()) / 86400000) + 1).toBe(14);
+    expect(a.getDay()).toBe(1); // starts Monday
+    expect(b.getDay()).toBe(0); // ends Sunday
+  });
+
+  it("uses matchup 1's full opening week before the season starts", () => {
     const state = stateWithSchedule();
     const ESPNSync = loadESPNSync(state);
     ESPNSync.enrichGamesRemaining();
     expect(state.matchup.windowMatchupPeriodId).toBe(1);
     expect(state.matchup.windowStart).toBe("2026-10-20");
-    expect(state.matchup.windowEnd).toBe("2026-10-22");
+    expect(state.matchup.windowEnd).toBe("2026-10-25");
+    expect(state.matchup.windowSource).toBe("schedule");
   });
 
-  it("counts a future window from its start, not from today", () => {
-    // Today is before opening night, so counting "from today to window end"
-    // would still work, but counting from the window start is what makes
-    // the preseason number meaningful rather than zero.
+  it("publishes the window as startDate and endDate for the UI", () => {
+    // These two were never assigned, so the dashboard and Timeline had
+    // nothing to print.
+    const state = stateWithSchedule();
+    const ESPNSync = loadESPNSync(state);
+    ESPNSync.enrichGamesRemaining();
+    expect(state.matchup.startDate).toBe("2026-10-20");
+    expect(state.matchup.endDate).toBe("2026-10-25");
+  });
+
+  it("gives Jokic his two opening-week games, not zero", () => {
+    // The live symptom. Denver plays Oct 22 and Oct 24, both inside week 1.
+    // The old one-day window (Oct 20 only) counted neither.
     const state = stateWithSchedule();
     state.allPlayers = [
-      { id: 1, proTeamId: 2, schedule: state.scheduleLookup[2] },
+      { id: 1, proTeamId: 7, schedule: state.scheduleLookup[7] },
       { id: 2, proTeamId: 13, schedule: state.scheduleLookup[13] },
     ];
     const ESPNSync = loadESPNSync(state);
     ESPNSync.enrichGamesRemaining();
-    expect(state.allPlayers[0].gamesRemaining).toBe(2); // Oct 20 and 22
-    expect(state.allPlayers[1].gamesRemaining).toBe(1); // Oct 21
+    expect(state.allPlayers[0].gamesRemaining).toBe(2); // Oct 22, Oct 24
+    expect(state.allPlayers[1].gamesRemaining).toBe(2); // Oct 20, Oct 21
+  });
+
+  it("picks the matchup whose window contains a given date", () => {
+    const state = stateWithSchedule();
+    const ESPNSync = loadESPNSync(state);
+    expect(ESPNSync.matchupForDateStr("2026-10-20", OPENING)).toBe(1);
+    expect(ESPNSync.matchupForDateStr("2026-10-25", OPENING)).toBe(1);
+    expect(ESPNSync.matchupForDateStr("2026-10-26", OPENING)).toBe(2);
+    expect(ESPNSync.matchupForDateStr("2026-11-01", OPENING)).toBe(2);
+    expect(ESPNSync.matchupForDateStr("2026-11-02", OPENING)).toBe(3);
+    // A date past the last mapped matchup belongs to none of them.
+    expect(ESPNSync.matchupForDateStr("2027-08-01", OPENING)).toBe(0);
+  });
+
+  it("prefers ESPN's current matchup period over its own arithmetic", () => {
+    // During the season ESPN tells us the answer directly, and that cannot
+    // drift from our week math the way a date lookup could.
+    const state = stateWithSchedule();
+    state.league.currentMatchupPeriod = 3;
+    const ESPNSync = loadESPNSync(state);
+    ESPNSync.enrichGamesRemaining();
+    expect(state.matchup.windowMatchupPeriodId).toBe(3);
+    expect(state.matchup.windowStart).toBe("2026-11-02");
+    expect(state.matchup.windowEnd).toBe("2026-11-08");
   });
 
   it("falls back to the calendar week when there is no schedule", () => {
@@ -355,6 +496,64 @@ describe("matchup windows", () => {
     const ESPNSync = loadESPNSync(state);
     ESPNSync.enrichGamesRemaining();
     expect(state.matchup.windowSource).toBe("calendar");
+  });
+
+  it("does not parse date strings as UTC midnight", () => {
+    // new Date('2026-10-20') is UTC midnight, which is Oct 19 in Central.
+    // Week arithmetic built on that shifts every window a day early.
+    const state = stateWithSchedule();
+    const ESPNSync = loadESPNSync(state);
+    expect(ESPNSync.weekRangeFrom("2026-10-20", 2).startStr).toBe("2026-10-26");
+    // Crossing a DST boundary must not drop or add a day either. US DST
+    // ended Nov 1 2026, so week 2 (Oct 26 to Nov 1) straddles it.
+    expect(ESPNSync.weekRangeFrom(OPENING, 2).endStr).toBe("2026-11-01");
+    expect(ESPNSync.weekRangeFrom(OPENING, 3).startStr).toBe("2026-11-02");
+  });
+});
+
+describe("getMatchupWindow (what the UI prints)", () => {
+  it("counts days left inside the real window, not the calendar week", () => {
+    const state = baseState(2027);
+    state.matchup = { startDate: "2026-10-20", endDate: "2026-10-25" };
+    const core = loadCore(state);
+    const win = core.getMatchupWindow();
+    expect(win.startStr).toBe("2026-10-20");
+    expect(win.endStr).toBe("2026-10-25");
+    expect(win.label).toBe("2026-10-20 to 2026-10-25");
+    expect(win.source).toBe("schedule");
+    // Today is well before opening night, so the whole 6-day window counts.
+    expect(win.daysLeft).toBe(6);
+  });
+
+  it("spans 14 days for a two-week playoff matchup", () => {
+    const state = baseState(2027);
+    state.matchup = { startDate: "2027-03-08", endDate: "2027-03-21" };
+    const core = loadCore(state);
+    expect(core.getMatchupWindow().daysLeft).toBe(14);
+  });
+
+  it("reports zero once the window has passed", () => {
+    const state = baseState(2027);
+    state.matchup = { startDate: "2020-01-01", endDate: "2020-01-07" };
+    const core = loadCore(state);
+    expect(core.getMatchupWindow().daysLeft).toBe(0);
+  });
+
+  it("falls back to the calendar week before the first sync", () => {
+    const state = baseState(2027);
+    state.matchup = {};
+    const core = loadCore(state);
+    const win = core.getMatchupWindow();
+    expect(win.source).toBe("calendar");
+    expect(win.label).toBe("");
+    expect(win.daysLeft).toBeLessThanOrEqual(7);
+  });
+
+  it("accepts the window under its older field names", () => {
+    const state = baseState(2027);
+    state.matchup = { windowStart: "2026-10-20", windowEnd: "2026-10-25" };
+    const core = loadCore(state);
+    expect(core.getMatchupWindow().startStr).toBe("2026-10-20");
   });
 });
 

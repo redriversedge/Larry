@@ -903,59 +903,156 @@ var ESPNSync = (function() {
   // --- MATCHUP WINDOWS ---
   //
   // "Games this week" has to mean "games in my current matchup", which is
-  // not the same as the calendar week:
+  // not the same thing as the calendar week. Before opening night the
+  // calendar week contains no NBA games at all, so every player showed 0.
   //
-  //  - Before the season starts there is no current week, but matchup 1 has
-  //    a window and that is what the user cares about. Today's calendar week
-  //    contains no NBA games at all, so every player showed 0.
-  //  - Playoff matchups span two scoring periods. This league's settings map
-  //    matchup 18 to weeks [18, 19], so a calendar week covers half of it.
+  // ESPN has two period concepts and they are very easy to confuse:
   //
-  // The schedule entries already carry scoringPeriodId and local dates, so
-  // the window can be derived from the schedule itself.
-  function scoringPeriodsForMatchup(matchupPeriodId) {
+  //   SCORING PERIOD  a single DAY. Period 1 is opening night (Tue Oct 20
+  //                   2026), 2 is Oct 21, 3 is Oct 22, up to 174 on
+  //                   Apr 11 2027.
+  //   MATCHUP PERIOD  one head-to-head matchup. scheduleSettings
+  //                   .matchupPeriods maps each one to the list of WEEKS it
+  //                   covers: {"1":[1], "2":[2], ... "18":[18,19]}.
+  //
+  // Those week numbers were previously read as scoring periods. Because a
+  // scoring period is a single day, matchup 1 came out one day long (Oct 20
+  // instead of Oct 20 to 25) and the two-week playoff matchups came out two
+  // days long. Live symptom: 168 of 1000 players had exactly 1 game this
+  // matchup and Jokic had 0 despite playing Oct 22 and Oct 24.
+  //
+  // So the chain is weeks -> day range -> count games by local date string.
+
+  // Local YYYY-MM-DD to a local Date. Never new Date('YYYY-MM-DD'): that
+  // parses as UTC midnight, which lands on the previous day in US Central.
+  function parseDateStr(str) {
+    var parts = String(str || '').split('-');
+    if (parts.length !== 3) return null;
+    var y = Number(parts[0]), m = Number(parts[1]), d = Number(parts[2]);
+    if (!isFinite(y) || !isFinite(m) || !isFinite(d)) return null;
+    return new Date(y, m - 1, d);
+  }
+
+  function addDaysStr(str, n) {
+    var d = parseDateStr(str);
+    if (!d) return null;
+    d.setDate(d.getDate() + n);
+    return localDateStr(d);
+  }
+
+  // The matchup period's weeks. Values are week numbers, not scoring periods.
+  function matchupWeeks(matchupPeriodId) {
     var map = S.league && S.league.matchupPeriods;
     if (map) {
       var entry = map[String(matchupPeriodId)];
       if (entry && entry.length) {
-        return entry.map(function(x) { return Number(x); });
+        var out = [];
+        for (var i = 0; i < entry.length; i++) {
+          var n = Number(entry[i]);
+          if (isFinite(n) && n > 0) out.push(n);
+        }
+        if (out.length) return out;
       }
     }
-    // No map: one scoring period per matchup.
-    return [Number(matchupPeriodId)];
+    // No map: one week per matchup, which is ESPN's default schedule.
+    var only = Number(matchupPeriodId);
+    return isFinite(only) && only > 0 ? [only] : [];
   }
 
-  // Min and max local date across every team's games in these scoring
-  // periods. Returns null when the schedule has nothing for them.
-  function dateRangeForScoringPeriods(periods) {
+  // Opening night as a local date string: the first scoring period's date.
+  // Games carry scoringPeriodId, so prefer that; the earliest game on the
+  // whole calendar is the same date and covers a missing id.
+  function openingNightStr() {
     if (!S.scheduleLookup) return null;
-    var wanted = {};
-    for (var i = 0; i < periods.length; i++) wanted[periods[i]] = true;
-    var min = null, max = null;
+    var first = (S.league && Number(S.league.firstScoringPeriod)) || 1;
+    var exact = null, earliest = null;
     var teamIds = Object.keys(S.scheduleLookup);
     for (var t = 0; t < teamIds.length; t++) {
-      var games = S.scheduleLookup[teamIds[t]];
+      var games = S.scheduleLookup[teamIds[t]] || [];
       for (var g = 0; g < games.length; g++) {
-        if (!wanted[games[g].scoringPeriodId]) continue;
         var d = games[g].date;
         if (!d) continue;
-        if (min === null || d < min) min = d;
-        if (max === null || d > max) max = d;
+        if (earliest === null || d < earliest) earliest = d;
+        if (Number(games[g].scoringPeriodId) === first) {
+          if (exact === null || d < exact) exact = d;
+        }
       }
     }
-    return min ? { startStr: min, endStr: max } : null;
+    return exact || earliest;
+  }
+
+  // A fantasy week as a local date range.
+  //
+  // Week 1 is the short opening week: opening night through the first Sunday
+  // on or after it, so Tue Oct 20 2026 gives Oct 20 to Oct 25. Every later
+  // week is the following Monday through Sunday.
+  //
+  // ASSUMPTION: ESPN starts week 2 on the first Monday after opening night
+  // rather than folding the short opening week into week 2. Worth one check
+  // against the ESPN matchup page on opening night.
+  function weekRangeFrom(openingStr, weekNum) {
+    if (!openingStr) return null;
+    var n = Number(weekNum);
+    if (!isFinite(n) || n < 1) return null;
+    var opening = parseDateStr(openingStr);
+    if (!opening) return null;
+    var week1End = addDaysStr(openingStr, (7 - opening.getDay()) % 7);
+    if (n === 1) return { startStr: openingStr, endStr: week1End };
+    var startStr = addDaysStr(week1End, 1 + (n - 2) * 7);
+    return { startStr: startStr, endStr: addDaysStr(startStr, 6) };
+  }
+
+  // The matchup's window: first day of its first week through the last day
+  // of its last week, so a two-week playoff matchup spans 14 days.
+  function matchupWindowFor(matchupPeriodId, openingStr) {
+    var weeks = matchupWeeks(matchupPeriodId);
+    if (!weeks.length) return null;
+    var startStr = null, endStr = null;
+    for (var i = 0; i < weeks.length; i++) {
+      var r = weekRangeFrom(openingStr, weeks[i]);
+      if (!r || !r.startStr || !r.endStr) continue;
+      if (startStr === null || r.startStr < startStr) startStr = r.startStr;
+      if (endStr === null || r.endStr > endStr) endStr = r.endStr;
+    }
+    return startStr ? { startStr: startStr, endStr: endStr } : null;
+  }
+
+  // Which matchup contains this date. Only needed when ESPN has not told us
+  // the current matchup period.
+  function matchupForDateStr(dateStr, openingStr) {
+    var map = (S.league && S.league.matchupPeriods) || null;
+    if (!map) return 0;
+    var ids = Object.keys(map);
+    for (var i = 0; i < ids.length; i++) {
+      var win = matchupWindowFor(ids[i], openingStr);
+      if (win && dateStr >= win.startStr && dateStr <= win.endStr) {
+        return Number(ids[i]);
+      }
+    }
+    return 0;
   }
 
   // The window to count games against: the current matchup if one is
   // running, otherwise matchup 1 (preseason).
   function activeMatchupWindow() {
-    var current = (S.league && S.league.currentMatchupPeriod) || 0;
-    var target = current > 0 ? current : 1;
-    var range = dateRangeForScoringPeriods(scoringPeriodsForMatchup(target));
-    if (range) {
+    var openingStr = openingNightStr();
+    var todayStr = localDateStr(new Date());
+    // ESPN's own answer first. During the season currentMatchupPeriod is
+    // authoritative and cannot drift from our week arithmetic.
+    var target = (S.league && Number(S.league.currentMatchupPeriod)) || 0;
+    if (!(target > 0)) {
+      // Before opening night there is no current matchup and matchup 1 is
+      // what the user wants to see. Mid-season with the value missing, use
+      // whichever matchup's window contains today.
+      target = (openingStr && todayStr > openingStr)
+        ? (matchupForDateStr(todayStr, openingStr) || 1)
+        : 1;
+    }
+    var win = matchupWindowFor(target, openingStr);
+    if (win) {
       return {
-        startStr: range.startStr,
-        endStr: range.endStr,
+        startStr: win.startStr,
+        endStr: win.endStr,
         matchupPeriodId: target,
         source: 'schedule'
       };
@@ -1004,6 +1101,11 @@ var ESPNSync = (function() {
     S.matchup.windowEnd = win.endStr;
     S.matchup.windowSource = win.source;
     S.matchup.windowMatchupPeriodId = win.matchupPeriodId;
+    // The dashboard, Timeline and Larry's Move read these two. They were
+    // never assigned, so every surface that wanted to print the matchup
+    // date range printed nothing.
+    S.matchup.startDate = win.startStr;
+    S.matchup.endDate = win.endStr;
 
     // Count from today, or from the window start when the window is still
     // in the future (preseason: matchup 1 begins on opening night).
@@ -1162,6 +1264,15 @@ var ESPNSync = (function() {
     clearSeasonScopedState: clearSeasonScopedState,
     loadNbaSchedule: loadNbaSchedule,
     enrichPlayerSchedules: enrichPlayerSchedules,
-    countGamesInRange: countGamesInRange
+    countGamesInRange: countGamesInRange,
+    // Matchup window arithmetic. Exported so the week-to-day-range mapping
+    // can be pinned directly; reading ESPN's week numbers as scoring periods
+    // silently broke every weekly number in the app.
+    matchupWeeks: matchupWeeks,
+    openingNightStr: openingNightStr,
+    weekRangeFrom: weekRangeFrom,
+    matchupWindowFor: matchupWindowFor,
+    matchupForDateStr: matchupForDateStr,
+    activeMatchupWindow: activeMatchupWindow
   };
 })();

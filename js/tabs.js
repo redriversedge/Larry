@@ -573,7 +573,6 @@ function renderScheduleAdvantage() {
   var oppGames = adv.opp;
 
   var diff = myGames - oppGames;
-  var matchupDates = getMatchupDates();
   var html = '<div class="card"><div class="card-header">Schedule Advantage</div>';
   html += '<div class="sched-adv">';
   html += '<div class="sched-adv-team"><div class="adv-count">' + myGames + '</div><div class="adv-label">Your Games</div></div>';
@@ -581,9 +580,15 @@ function renderScheduleAdvantage() {
   html += '<div class="sched-adv-team"><div class="adv-count">' + oppGames + '</div><div class="adv-label">Opp Games</div></div>';
   html += '</div>';
 
-  // Days remaining callout
+  // Days remaining callout. Uses the real matchup window, not the calendar
+  // week: opening week is Tuesday to Sunday and playoff matchups run two
+  // weeks, so "days left" from a Mon-Sun assumption is wrong at both ends.
+  var win = getMatchupWindow();
   html += '<div style="text-align:center;padding:8px;font-size:0.8rem;color:var(--text-secondary)">';
-  html += matchupDates.daysLeft + ' days remaining in matchup period';
+  html += win.daysLeft + ' days remaining in matchup period';
+  if (win.label) {
+    html += '<div class="text-xs muted" style="margin-top:2px">' + esc(win.label) + '</div>';
+  }
   if (Math.abs(diff) >= 3) {
     html += '<div style="color:' + (diff > 0 ? 'var(--accent-green)' : 'var(--accent-red)') + ';font-weight:700;margin-top:4px">';
     html += (diff > 0 ? 'Significant schedule advantage!' : 'Schedule disadvantage - consider streaming.');
@@ -2494,13 +2499,15 @@ function renderPopupNews(p) {
 
 function renderPopupSchedule(p) {
   var html = '';
-  var matchupDates = getMatchupDates();
+  var popupWin = getMatchupWindow();
 
-  // Games remaining this period
+  // Games remaining this period. The count is real now (it comes from the
+  // NBA schedule inside the real matchup window), so drop the "Est." hedge.
   html += '<div style="text-align:center;padding:12px 0;border-bottom:1px solid var(--border)">';
   html += '<div style="font-size:1.5rem;font-weight:700">' + (p.gamesRemaining || 0) + '</div>';
-  html += '<div class="text-xs muted">Est. games remaining this matchup period</div>';
-  html += '<div class="text-xs muted">' + matchupDates.daysLeft + ' days left in period</div>';
+  html += '<div class="text-xs muted">Games remaining this matchup period</div>';
+  html += '<div class="text-xs muted">' + popupWin.daysLeft + ' days left' +
+    (popupWin.label ? ', ' + esc(popupWin.label) : '') + '</div>';
   html += '</div>';
 
   // 7-day schedule grid
