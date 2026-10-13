@@ -9,7 +9,6 @@ var _popupTab = 'stats';
 
 // --- PLAYERS TAB STATE ---
 var _playersSearchTerm = '';
-var _playersSearchTimer = null;
 var _playersStatView = 'season';
 var _playersPositionFilter = 'ALL';
 var _playersAvailFilter = 'available';
@@ -526,8 +525,16 @@ function renderMatchupScore(cats) {
   // Team of the Week (v3: moved to matchup)
   html += renderTeamOfWeek(cats);
 
-  // Opponent Insight (from Opponent Scout + News & Injuries)
-  html += renderOpponentInsight(cats);
+  // Opponent Insight was removed in phase 7: it duplicated the Opponent
+  // Scout page in a smaller box. Link there instead.
+  if (S.matchup && S.matchup.opponentTeamId) {
+    html += '<div class="card"><div style="padding:12px;display:flex;' +
+      'align-items:center;gap:10px;flex-wrap:wrap">' +
+      '<span class="text-sm">Scouting ' + esc(S.matchup.opponentName || 'your opponent') + '?</span>' +
+      '<button class="btn btn-sm btn-secondary" style="min-height:44px" ' +
+      'onclick="openLeagueSub(\'opponentScout\')">Open Opponent Scout</button>' +
+      '</div></div>';
+  }
 
   return html;
 }
@@ -685,59 +692,6 @@ function renderTeamOfWeek(cats) {
   return html;
 }
 
-function renderOpponentInsight(cats) {
-  var oppTeam = S.teams.find(function(t) { return t.teamId === S.matchup.opponentTeamId; });
-  if (!oppTeam || !oppTeam.players) return '';
-
-  // Strengths & weaknesses from z-scores.
-  // oppTeam.players are roster stubs - look up enriched player data in S.allPlayers
-  // which has z-scores computed by computeDURANT.
-  var oppCatTotals = [];
-  cats.forEach(function(cat) {
-    var sum = 0;
-    (oppTeam.players || []).forEach(function(stub) {
-      if (stub.slotId >= 12) return; // skip bench and IR
-      // Find enriched player in S.allPlayers
-      var enriched = S.allPlayers.find(function(ap) { return ap.id === stub.id; });
-      var p = enriched || stub;
-      sum += (p.zScores ? p.zScores[cat.abbr] || 0 : 0);
-    });
-    oppCatTotals.push({ cat: cat, z: sum });
-  });
-  oppCatTotals.sort(function(a, b) { return b.z - a.z; });
-
-  var html = '<div class="card"><div class="card-header" onclick="this.nextElementSibling.classList.toggle(\'hidden\')">Opponent Insight <span class="text-xs muted">\u25BC</span></div>';
-  html += '<div class="hidden">';
-
-  // Strengths & weaknesses
-  html += '<div class="opponent-insight">';
-  html += '<div class="insight-group"><div class="insight-group-title" style="color:var(--accent-green)">Their strengths</div>';
-  oppCatTotals.slice(0, 3).forEach(function(ct) {
-    html += '<span class="insight-cat strong" style="border-left:2px solid ' + ct.cat.color + '">' + ct.cat.abbr + ' (' + fmt(ct.z, 1) + ')</span>';
-  });
-  html += '</div>';
-  html += '<div class="insight-group"><div class="insight-group-title" style="color:var(--accent-red)">Their weaknesses</div>';
-  oppCatTotals.slice(-3).reverse().forEach(function(ct) {
-    html += '<span class="insight-cat weak" style="border-left:2px solid ' + ct.cat.color + '">' + ct.cat.abbr + ' (' + fmt(ct.z, 1) + ')</span>';
-  });
-  html += '</div></div>';
-
-  // Opponent injuries
-  var oppInjured = (oppTeam.players || []).filter(function(p) {
-    return p.injuryStatus && p.injuryStatus !== 'ACTIVE' && p.injuryStatus !== 'HEALTHY';
-  });
-  if (oppInjured.length) {
-    var oppOut = oppInjured.filter(function(p) { return Engines.isUnavailable(p); });
-    html += '<div class="opp-injury-mini">';
-    html += '<span class="injury-count">' + oppInjured.length + '</span> opponent player' + (oppInjured.length > 1 ? 's' : '') + ' injured';
-    if (oppOut.length) html += ' (<span style="color:var(--accent-red)">' + oppOut.length + ' OUT</span>)';
-    html += '</div>';
-  }
-
-  html += '<div style="padding:4px 0"><a style="font-size:0.75rem;color:var(--accent-blue);cursor:pointer;text-decoration:none" onclick="openLeagueSub(\'opponentScout\')">Full opponent scouting report \u276F</a></div>';
-  html += '</div></div>';
-  return html;
-}
 
 function renderMatchupProjections(cats) {
   var myPlayers = (S.myTeam.players || []).filter(function(p) { return p.slotId < 12; });
@@ -920,27 +874,23 @@ function doManualSync(btn) {
 }
 
 // Trade search was re-rendering the results on every keystroke, which is
-// both wasteful and the classic way to lose the mobile keyboard. Same 250ms
-// debounce as the Players search, and it never rewrites the input element.
-var _tradeSearchTimer = null;
+// both wasteful and the classic way to lose the mobile keyboard. Now on the
+// shared debounce, and it never rewrites the input element.
+var _debouncedTradeResults = debounce(function() { renderTradeResults(); }, 250);
 function handleTradeSearch(value) {
   _tradeSearchTerm = value;
-  if (_tradeSearchTimer) clearTimeout(_tradeSearchTimer);
-  _tradeSearchTimer = setTimeout(function() {
-    renderTradeResults();
-  }, 250);
+  _debouncedTradeResults();
 }
 
-// v3 FIX: Debounced search that does NOT dismiss keyboard
+// Debounced search that does NOT dismiss the keyboard: only the list
+// re-renders, never the input element.
+var _debouncedPlayersList = debounce(function() { renderPlayersList(); }, 250);
 function handlePlayersSearch(value) {
   _playersSearchTerm = value;
   // A new search is a new result set, so start the page count over rather
   // than keeping whatever "show more" depth the previous query reached.
   _playersShowCount = 100;
-  if (_playersSearchTimer) clearTimeout(_playersSearchTimer);
-  _playersSearchTimer = setTimeout(function() {
-    renderPlayersList();
-  }, 250);
+  _debouncedPlayersList();
 }
 
 // The Players table label used to be hard-coded to "Availability Score",
@@ -1267,20 +1217,27 @@ function renderLeagueSubPage(container) {
 
   try {
     switch(page) {
-      case 'standings': html += renderStandings(); break;
+      case 'standings': html += renderStandingsPage(); break;
       case 'trades': html += renderTradeCenter(); break;
       case 'teamAnalyzer': html += renderTeamAnalyzer(); break;
+      case 'opponentScout': html += renderOpponentScout(); break;
+      case 'streaming': html += renderStreamingPage(); break;
+      case 'watchlist': html += renderWatchlistPage(); break;
       case 'statsTrends': html += renderStatsTrends(); break;
       case 'projections': html += renderROSProjections(); break;
       case 'schedule': html += renderSchedulePage(); break;
-      case 'draftCenter': html += renderDraftCenter(); break;
-      case 'projectedStandings': html += renderProjectedStandings(); break;
-      case 'opponentScout': html += renderOpponentScout(); break;
       case 'news': html += renderNewsInjuries(); break;
-      case 'playoffs': html += renderPlayoffProjector(); break;
       case 'timeline': html += renderSeasonTimeline(); break;
-      case 'notifications': html += renderNotifications(); break;
       case 'settings': html += renderSettingsPage(); break;
+      // Old routes from before the phase 7 merge. Someone's bookmarked
+      // leagueSubPage can still be sitting in localStorage.
+      case 'projectedStandings':
+      case 'playoffs':
+        html += renderStandingsPage(page === 'playoffs' ? 'playoff' : 'projected'); break;
+      case 'draftCenter':
+      case 'notifications':
+        html += '<div class="empty-state"><p>This page was removed. ' +
+          'Try Standings or the Roster dashboard.</p></div>'; break;
       default: html += '<div class="empty-state"><p>Coming soon.</p></div>';
     }
   } catch(e) {
@@ -1295,6 +1252,167 @@ function renderLeagueSubPage(container) {
 
 
 // ========== LEAGUE SUB-PAGES ==========
+
+// --- WATCHLIST (phase 8) ---
+// S.watchlist has been written by toggleWatchlist from the player popup for
+// a long time, but nothing ever displayed it. Starring a player wrote to
+// localStorage and then vanished.
+function renderWatchlistPage() {
+  var ids = S.watchlist || [];
+  if (!ids.length) {
+    return '<div class="empty-state"><p>Nothing on your watchlist yet.</p>' +
+      '<p class="text-xs muted">Open any player and tap Watch to add them.</p></div>';
+  }
+
+  var players = [];
+  for (var i = 0; i < ids.length; i++) {
+    for (var j = 0; j < (S.allPlayers || []).length; j++) {
+      if (S.allPlayers[j].id === ids[i]) { players.push(S.allPlayers[j]); break; }
+    }
+  }
+  if (!players.length) {
+    return '<div class="empty-state"><p>Your watchlist players are not in the ' +
+      'current player pool. Sync to refresh.</p></div>';
+  }
+
+  Engines.ensureDURANT(S.allPlayers || []);
+  players.sort(function(a, b) { return (b.durantScore || 0) - (a.durantScore || 0); });
+
+  var cats = getOrderedCategories();
+  var html = '<div class="card"><div class="table-scroll">' +
+    '<table class="data-table compact"><thead><tr>' +
+    '<th style="text-align:left;min-width:120px">Player</th>' +
+    '<th class="stat-col">Status</th><th class="stat-col">Games</th>';
+  cats.forEach(function(cat) {
+    html += '<th class="stat-col" style="color:' + cat.color + '">' + cat.abbr + '</th>';
+  });
+  html += '<th class="stat-col"></th></tr></thead><tbody>';
+
+  players.forEach(function(p) {
+    var owner = p.onTeamId === 0 ? 'FA' : (p.onTeamId === S.myTeam.teamId ? 'Mine' : 'Rostered');
+    html += '<tr>';
+    html += '<td style="cursor:pointer" onclick="openPlayerPopup(' + p.id + ')">' +
+      renderPlayerCell(p) + '</td>';
+    html += '<td class="stat-col text-xs">' + statusBadge(p.injuryStatus) + ' ' + esc(owner) + '</td>';
+    html += '<td class="stat-col">' + (p.gamesRemaining || 0) + '</td>';
+    var pg = ESPNSync.getPerGameStats(p, 'season');
+    cats.forEach(function(cat) {
+      var v = pg ? pg[cat.abbr] : null;
+      html += '<td class="stat-col">' + (v != null ? fmt(v, 1) : '') + '</td>';
+    });
+    html += '<td class="stat-col"><button class="btn btn-sm btn-secondary" ' +
+      'style="min-height:44px" aria-label="Remove from watchlist" ' +
+      'onclick="toggleWatchlist(' + p.id + ');render()">Remove</button></td>';
+    html += '</tr>';
+  });
+
+  html += '</tbody></table></div></div>';
+  return html;
+}
+
+// --- STREAMING (phase 8) ---
+// The waiver question is not "who is best" but "who is available, healthy,
+// playing the most games left this week, and helps a category still in
+// play". That is a different sort from the Players tab and deserves its
+// own page.
+function renderStreamingPage() {
+  var strat = (S.matchup && S.matchup.strategy) || {};
+  var targets = strat.targets || [];
+  var cats = getOrderedCategories();
+
+  var fas = (S.allPlayers || []).filter(function(p) {
+    return p.onTeamId === 0 && Engines.isValidAddCandidate(p);
+  });
+  if (!fas.length) {
+    return '<div class="empty-state"><p>No free agents available. Sync to refresh.</p></div>';
+  }
+
+  Engines.ensureDURANT(S.allPlayers || []);
+
+  // Rank by games left this week first, value second. A slightly worse
+  // player with three games beats a better one with one.
+  fas.forEach(function(p) {
+    var targetHelp = 0;
+    for (var i = 0; i < targets.length; i++) {
+      targetHelp += (p.zScores ? p.zScores[targets[i]] || 0 : 0);
+    }
+    p._streamScore = (p.gamesRemaining || 0) * 10 +
+      (p.durantScore || 0) * 0.5 + targetHelp * 5;
+  });
+  fas.sort(function(a, b) { return b._streamScore - a._streamScore; });
+
+  var html = '';
+  if (targets.length) {
+    html += '<div class="card"><div style="padding:10px 12px" class="text-sm">' +
+      'Highlighting <strong>' + esc(targets.join(', ')) + '</strong>, the categories ' +
+      'still in play this week.</div></div>';
+  }
+
+  html += '<div class="card"><div class="table-scroll">' +
+    '<table class="data-table compact"><thead><tr>' +
+    '<th style="text-align:left;min-width:120px">Player</th>' +
+    '<th class="stat-col">Games</th><th class="stat-col">Today</th>';
+  cats.forEach(function(cat) {
+    var isTarget = targets.indexOf(cat.abbr) >= 0;
+    html += '<th class="stat-col"' + (isTarget ? ' style="color:' + cat.color +
+      ';text-decoration:underline"' : ' style="color:' + cat.color + ';opacity:0.55"') +
+      '>' + cat.abbr + '</th>';
+  });
+  html += '<th class="stat-col">Own</th></tr></thead><tbody>';
+
+  fas.slice(0, 40).forEach(function(p) {
+    html += '<tr>';
+    html += '<td style="cursor:pointer" onclick="openPlayerPopup(' + p.id + ')">' +
+      renderPlayerCell(p) + '</td>';
+    html += '<td class="stat-col"><strong>' + (p.gamesRemaining || 0) + '</strong></td>';
+    html += '<td class="stat-col">' + (p.gamesToday ? '\u{1F7E2}' : '-') + '</td>';
+    var pg = ESPNSync.getPerGameStats(p, 'season');
+    cats.forEach(function(cat) {
+      var isTarget = targets.indexOf(cat.abbr) >= 0;
+      var v = pg ? pg[cat.abbr] : null;
+      html += '<td class="stat-col"' + (isTarget ? '' : ' style="opacity:0.55"') + '>' +
+        (v != null ? fmt(v, 1) : '') + '</td>';
+    });
+    html += '<td class="stat-col text-xs muted">' + fmt(p.percentOwned || 0, 0) + '%</td>';
+    html += '</tr>';
+  });
+
+  html += '</tbody></table></div></div>';
+  return html;
+}
+
+// Standings, Projected Standings and Playoff Projector were three separate
+// menu entries answering one question: where do I stand and where am I
+// heading. Phase 7 merges them into one page with a Current / Projected /
+// Playoff toggle, reusing the existing renderers unchanged.
+var _standingsView = 'current';
+
+function setStandingsView(view) {
+  _standingsView = view;
+  render();
+}
+
+function renderStandingsPage(forceView) {
+  if (forceView) _standingsView = forceView;
+  var views = [
+    { id: 'current', label: 'Current' },
+    { id: 'projected', label: 'Projected' },
+    { id: 'playoff', label: 'Playoff' }
+  ];
+  var html = '<div class="sub-tab-bar" role="tablist" aria-label="Standings view">';
+  views.forEach(function(v) {
+    var active = _standingsView === v.id;
+    html += '<button class="sub-tab' + (active ? ' active' : '') + '" role="tab" ' +
+      'aria-selected="' + (active ? 'true' : 'false') + '" ' +
+      'onclick="setStandingsView(\'' + v.id + '\')">' + v.label + '</button>';
+  });
+  html += '</div>';
+
+  if (_standingsView === 'projected') html += renderProjectedStandings();
+  else if (_standingsView === 'playoff') html += renderPlayoffProjector();
+  else html += renderStandings();
+  return html;
+}
 
 function renderStandings() {
   if (!S.teams.length) return '<div class="empty-state"><p>No standings data.</p></div>';
@@ -1543,78 +1661,6 @@ function renderSchedulePage() {
   return html;
 }
 
-function renderDraftCenter() {
-  var cats = getOrderedCategories();
-  var players = (S.allPlayers || []).slice();
-  if (!players.length) return '<div class="empty-state"><p>No player data.</p></div>';
-
-  Engines.ensureDURANT(S.allPlayers);
-  // Draft value is season-long, so tier on the base score. Availability and
-  // opportunity boost are week-to-week concerns and do not belong in a
-  // draft board.
-  players.sort(function(a,b) { return (b.durantScore || 0) - (a.durantScore || 0); });
-
-  // Assign tiers and projected rounds
-  players.forEach(function(p, i) {
-    var rank = i + 1;
-    if (rank <= Math.ceil(players.length * 0.05)) p.tier = 'Elite';
-    else if (rank <= Math.ceil(players.length * 0.15)) p.tier = 'Great';
-    else if (rank <= Math.ceil(players.length * 0.35)) p.tier = 'Good';
-    else if (rank <= Math.ceil(players.length * 0.60)) p.tier = 'Average';
-    else p.tier = 'Below Avg';
-
-    p.projectedRound = Math.ceil(rank / S.league.teamCount) || 1;
-  });
-
-  var maxRound = Math.ceil(players.length / Math.max(S.league.teamCount, 1));
-
-  // Filters
-  var html = '<div class="filter-bar"><div class="filter-row">';
-  html += '<select class="filter-select" onchange="_draftTierFilter=this.value;openLeagueSub(\'draftCenter\')">';
-  html += '<option value="all"' + (_draftTierFilter === 'all' ? ' selected' : '') + '>All Tiers</option>';
-  ['Elite','Great','Good','Average','Below Avg'].forEach(function(tier) {
-    html += '<option value="' + tier + '"' + (_draftTierFilter === tier ? ' selected' : '') + '>' + tier + '</option>';
-  });
-  html += '</select>';
-
-  html += '<select class="filter-select" onchange="_draftRoundFilter=this.value;openLeagueSub(\'draftCenter\')">';
-  html += '<option value="all"' + (_draftRoundFilter === 'all' ? ' selected' : '') + '>All Rounds</option>';
-  for (var r = 1; r <= Math.min(maxRound, 15); r++) {
-    html += '<option value="' + r + '"' + (_draftRoundFilter === String(r) ? ' selected' : '') + '>Round ' + r + '</option>';
-  }
-  html += '</select>';
-  html += '</div></div>';
-
-  // Apply filters
-  var filtered = players.filter(function(p) {
-    if (_draftTierFilter !== 'all' && p.tier !== _draftTierFilter) return false;
-    if (_draftRoundFilter !== 'all' && String(p.projectedRound) !== _draftRoundFilter) return false;
-    return true;
-  });
-
-  html += '<div class="text-xs muted" style="margin-bottom:6px">' + filtered.length + ' players</div>';
-  html += '<div class="card"><div class="table-scroll"><table class="data-table compact">';
-  html += '<thead><tr><th>#</th><th style="text-align:left">Player</th><th>Tier</th><th>Rd</th>';
-  cats.slice(0,5).forEach(function(cat) { html += '<th style="color:' + cat.color + '">' + cat.abbr + '</th>'; });
-  html += '</tr></thead><tbody>';
-
-  var tierColors = {Elite:'var(--accent-gold)',Great:'var(--accent-green)',Good:'var(--accent-blue)',Average:'var(--text-secondary)','Below Avg':'var(--accent-red)'};
-  filtered.slice(0, 150).forEach(function(p, i) {
-    html += '<tr class="' + (p.onTeamId === S.myTeam.teamId ? 'my-team-row' : '') + '">';
-    html += '<td>' + (p.durantRank || i+1) + '</td>';
-    html += '<td style="text-align:left;cursor:pointer" onclick="openPlayerPopup(' + p.id + ')">' + esc(p.name) + '</td>';
-    html += '<td style="color:' + (tierColors[p.tier] || 'inherit') + ';font-size:0.7rem">' + p.tier + '</td>';
-    html += '<td>' + p.projectedRound + '</td>';
-    var pgStats = ESPNSync.getPerGameStats(p, 'season');
-    cats.slice(0,5).forEach(function(cat) {
-      var val = pgStats ? (pgStats[cat.abbr] !== undefined ? pgStats[cat.abbr] : null) : null;
-      html += '<td>' + (val !== null ? fmt(val, 1) : '') + '</td>';
-    });
-    html += '</tr>';
-  });
-  html += '</tbody></table></div></div>';
-  return html;
-}
 
 // ========== PROJECTED STANDINGS ==========
 
@@ -2125,89 +2171,6 @@ function renderTradeAnalysis() {
 
 // ========== NOTIFICATIONS ==========
 
-function renderNotifications() {
-  var html = '';
-  var notifs = S.notifications || [];
-
-  html += '<div class="card"><div class="card-header">Notifications</div>';
-
-  if (!notifs.length) {
-    // Generate some helpful notifications based on current state
-    var autoNotifs = [];
-    var myPlayers = S.myTeam.players || [];
-
-    // Check for injured starters
-    myPlayers.forEach(function(p) {
-      if (p.slotId < 12 && p.injuryStatus && p.injuryStatus !== 'ACTIVE' && p.injuryStatus !== 'HEALTHY') {
-        autoNotifs.push({
-          type: 'warning',
-          message: esc(p.name) + ' is ' + (p.injuryStatus || '').replace(/_/g, ' ') + ' and currently in your starting lineup.',
-          action: 'openPlayerPopup(' + p.id + ')'
-        });
-      }
-    });
-
-    // Check matchup status
-    var mr = S.matchup.myRecord || {wins:0,losses:0,ties:0};
-    if (mr.wins + mr.losses + mr.ties > 0) {
-      var status = mr.wins > mr.losses ? 'winning' : (mr.wins < mr.losses ? 'losing' : 'tied');
-      autoNotifs.push({
-        type: status === 'losing' ? 'warning' : 'info',
-        message: 'Current matchup: ' + mr.wins + '-' + mr.losses + '-' + mr.ties + ' (' + status + ')',
-        action: 'switchTab(1)'
-      });
-    }
-
-    // Check for strong free agents
-    if (S.allPlayers.length) {
-      var freeAgents = S.allPlayers.filter(function(p) { return p.onTeamId === 0; });
-      freeAgents.sort(function(a, b) { return (b.effectiveDURANT || 0) - (a.effectiveDURANT || 0); });
-      var topFA = freeAgents[0];
-      var worstStarter = myPlayers.filter(function(p) { return p.slotId < 12; }).sort(function(a, b) {
-        return (a.effectiveDURANT || 0) - (b.effectiveDURANT || 0);
-      })[0];
-      if (topFA && worstStarter && (topFA.durantScore || 0) > (worstStarter.durantScore || 0) + 3) {
-        autoNotifs.push({
-          type: 'info',
-          message: esc(topFA.name) + ' (DURANT: ' + fmt(topFA.durantScore, 1) + ') is available and better than ' + esc(worstStarter.name) + ' (DURANT: ' + fmt(worstStarter.durantScore, 1) + ').',
-          action: 'openPlayerPopup(' + topFA.id + ')'
-        });
-      }
-    }
-
-    // Matchup days remaining
-    var matchupDates = getMatchupDates();
-    autoNotifs.push({
-      type: 'info',
-      message: matchupDates.daysLeft + ' day' + (matchupDates.daysLeft !== 1 ? 's' : '') + ' remaining in current matchup period.',
-      action: ''
-    });
-
-    if (!autoNotifs.length) {
-      html += '<div class="empty-state"><p>No notifications right now. Check back later.</p></div>';
-    } else {
-      autoNotifs.forEach(function(n) {
-        var icon = n.type === 'warning' ? '\u{26A0}\u{FE0F}' : '\u{2139}\u{FE0F}';
-        html += '<div class="mini-row" style="' + (n.action ? 'cursor:pointer' : '') + ';padding:8px" ' + (n.action ? 'onclick="' + n.action + '"' : '') + '>';
-        html += '<span style="flex:1">' + icon + ' ' + n.message + '</span>';
-        html += '</div>';
-      });
-    }
-  } else {
-    notifs.forEach(function(n, i) {
-      var icon = n.type === 'warning' ? '\u{26A0}\u{FE0F}' : (n.type === 'error' ? '\u{1F534}' : '\u{2139}\u{FE0F}');
-      html += '<div class="mini-row" style="padding:8px;' + (n.read ? 'opacity:0.6' : '') + '">';
-      html += '<span style="flex:1">' + icon + ' ' + esc(n.message || '') + '</span>';
-      html += '<span class="text-xs muted">' + (n.timestamp ? timeSince(n.timestamp) : '') + '</span>';
-      html += '</div>';
-    });
-
-    html += '<button class="btn btn-sm btn-secondary" style="margin-top:8px" onclick="S.notifications=[];S.notifBadgeCount=0;autosave();render()">Clear All</button>';
-  }
-
-  html += '</div>';
-  return html;
-}
 
 
 function renderSettingsPage() {

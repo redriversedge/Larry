@@ -99,110 +99,6 @@ var Engines = (function() {
 
   // ========== ENGINE 2: MONTE CARLO (v3 FIX: forward projection) ==========
 
-  function monteCarloMatchup(myPlayers, oppPlayers, gamesRemainingMap, simulations) {
-    simulations = simulations || 5000;
-    var cats = getOrderedCategories();
-
-    // If no games remaining data at all, use a reasonable default
-    var hasAnyGames = false;
-    if (gamesRemainingMap) {
-      Object.keys(gamesRemainingMap).forEach(function(k) {
-        if (gamesRemainingMap[k] > 0) hasAnyGames = true;
-      });
-    }
-    if (!hasAnyGames) {
-      // Fallback: estimate 2 games remaining per player
-      myPlayers.concat(oppPlayers).forEach(function(p) {
-        if (!gamesRemainingMap) gamesRemainingMap = {};
-        gamesRemainingMap[p.id] = 2;
-      });
-    }
-    var results = {};
-    cats.forEach(function(cat) { results[cat.abbr] = { wins: 0, losses: 0, ties: 0 }; });
-
-    // v3 FIX: Use current matchup scores as base, then project REMAINING games
-    var currentMyScores = S.matchup.myScores || {};
-    var currentOppScores = S.matchup.oppScores || {};
-
-    function playerVariance(p, cat) {
-      var season = p.stats && p.stats.season ? p.stats.season[cat.abbr] : null;
-      var l7 = p.stats && p.stats.last7 ? p.stats.last7[cat.abbr] : null;
-      // An empty last7 used to leave l7 undefined and return NaN here, which
-      // then propagated through every simulated score for that category.
-      if (season == null || !isFinite(season) || season === 0) return 0.3;
-      if (l7 == null || !isFinite(l7)) return 0.3;
-      return Math.min(0.8, Math.abs(l7 - season) / Math.max(Math.abs(season), 0.1));
-    }
-
-    function gaussianRandom() {
-      var u1 = Math.random(), u2 = Math.random();
-      return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
-    }
-
-    for (var sim = 0; sim < simulations; sim++) {
-      cats.forEach(function(cat) {
-        // v3: Start from current scores, add projected remaining production
-        var myTotal = currentMyScores[cat.abbr] || 0;
-        var oppTotal = currentOppScores[cat.abbr] || 0;
-
-        // Project remaining games for my players
-        myPlayers.forEach(function(p) {
-          if (p.slotId === 13) return; // Skip IR
-          var avg = p.stats && p.stats.season ? (p.stats.season[cat.abbr] || 0) : 0;
-          var gamesLeft = (gamesRemainingMap && gamesRemainingMap[p.id]) ? gamesRemainingMap[p.id] : 0;
-          if (gamesLeft <= 0 || avg === 0) return;
-
-          var v = playerVariance(p, cat);
-          for (var g = 0; g < gamesLeft; g++) {
-            var noise = 1 + gaussianRandom() * v;
-            myTotal += avg * Math.max(0, noise);
-          }
-        });
-
-        // Project remaining games for opponent players
-        oppPlayers.forEach(function(p) {
-          if (p.slotId === 13) return;
-          var avg = p.stats && p.stats.season ? (p.stats.season[cat.abbr] || 0) : 0;
-          var gamesLeft = (gamesRemainingMap && gamesRemainingMap[p.id]) ? gamesRemainingMap[p.id] : 0;
-          if (gamesLeft <= 0 || avg === 0) return;
-
-          var v = playerVariance(p, cat);
-          for (var g = 0; g < gamesLeft; g++) {
-            var noise = 1 + gaussianRandom() * v;
-            oppTotal += avg * Math.max(0, noise);
-          }
-        });
-
-        // Compare
-        if (cat.isPercent) {
-          // For percentages, compare directly
-          if (myTotal > oppTotal) results[cat.abbr].wins++;
-          else if (myTotal < oppTotal) results[cat.abbr].losses++;
-          else results[cat.abbr].ties++;
-        } else if (cat.isNegative) {
-          if (myTotal < oppTotal) results[cat.abbr].wins++;
-          else if (myTotal > oppTotal) results[cat.abbr].losses++;
-          else results[cat.abbr].ties++;
-        } else {
-          if (myTotal > oppTotal) results[cat.abbr].wins++;
-          else if (myTotal < oppTotal) results[cat.abbr].losses++;
-          else results[cat.abbr].ties++;
-        }
-      });
-    }
-
-    // Convert to probabilities
-    var probs = {};
-    cats.forEach(function(cat) {
-      var r = results[cat.abbr];
-      probs[cat.abbr] = {
-        win: Math.round(r.wins / simulations * 100),
-        lose: Math.round(r.losses / simulations * 100),
-        tie: Math.round(r.ties / simulations * 100)
-      };
-    });
-    return probs;
-  }
 
 
   // ========== ENGINE 3: DURANT RANKING (v2) ==========
@@ -975,24 +871,6 @@ var Engines = (function() {
 
   // ========== ENGINE 7: CATEGORY VOLATILITY ==========
 
-  function categoryVolatility(players) {
-    var cats = getOrderedCategories();
-    var vol = {};
-    cats.forEach(function(cat) {
-      var diffs = [];
-      players.forEach(function(p) {
-        var season = p.stats && p.stats.season ? p.stats.season[cat.abbr] : null;
-        var l7 = p.stats && p.stats.last7 ? p.stats.last7[cat.abbr] : null;
-        if (season !== null && l7 !== null && season !== 0) {
-          diffs.push(Math.abs(l7 - season) / Math.max(Math.abs(season), 0.1));
-        }
-      });
-      var avg = diffs.length ? diffs.reduce(function(a,b){return a+b;},0) / diffs.length : 0;
-      var label = avg > 0.3 ? 'High' : (avg > 0.15 ? 'Medium' : 'Low');
-      vol[cat.abbr] = { value: avg, label: label };
-    });
-    return vol;
-  }
 
 
   // ========== ENGINE 8: STREAK DETECTION ==========
@@ -1420,11 +1298,9 @@ var Engines = (function() {
     trendLabel: trendLabel,
     normalCDF: normalCDF,
     categoryWinProb: categoryWinProb,
-    monteCarloMatchup: monteCarloMatchup,
     generateRecommendations: generateRecommendations,
     analyzeTrade: analyzeTrade,
     puntAnalysis: puntAnalysis,
-    categoryVolatility: categoryVolatility,
     detectStreaks: detectStreaks,
     rosProjections: rosProjections,
     risersAndFallers: risersAndFallers,

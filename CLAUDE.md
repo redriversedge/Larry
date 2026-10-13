@@ -45,6 +45,14 @@ REPO_MAP.md             -- Phase 0 audit: file tree + key-file summaries
 - **Injury awareness**: Players with OUT, SUSPENSION, or IR status are filtered from add recommendations and free agent suggestions in chat. Injury status shown on tiles, roster rows, and chat context. Never recommend injured players as pickups.
 - **Cookie linking (Phase 2+)**: ESPN's `espn_s2` and `SWID` cookies live in `S.espn` (localStorage). Two paths: (a) manual paste in wizard step 3, (b) Larry Link bookmarklet on fantasy.espn.com that base64-encodes the cookies into a URL fragment and redirects through `/link` (handled by `public/link.html` + `dist/larry-cookies.js`) which writes to `S.espn` and bounces to the app. No server-side cookie storage; cookies stay client-side only. 401 from ESPN sets `S.espn.cookieExpired` and `safeRender` shows a banner with a Reconnect button routing to `/connect`.
 
+## Netlify Functions
+
+- `espn-proxy.js` -- ESPN API CORS proxy
+- `larry-chat.js` -- Chat. Builds the system prompt **server-side**; the client sends structured context only. Every ESPN-sourced string is sanitized into a delimited `<data>` block labelled untrusted, because team names are written by other managers in the league. Origin allowlist, per-IP rate limit, payload caps.
+- `larry-move.js` -- Larry's Move. Same trust model, plus a forced `report_move` tool and server-side validation of the result before the client renders it.
+
+Both read the model from `process.env.ANTHROPIC_MODEL` (default `claude-sonnet-5`). Never pin a model id in code: `claude-sonnet-4-20250514` was hardcoded here and silently 404'd for months after it retired.
+
 ## Analysis Engines (js/engines.js)
 
 All engines live in the `Engines` IIFE module.
@@ -173,7 +181,7 @@ The chat is strategy-aware. It references target categories when discussing pick
 
 ## Reference Docs
 
-- `docs/HANDOFF.md` -- Active 8-phase roadmap (data correctness, ranking v2, engine and UI fixes, chat hardening, Larry's Move). Phase 2 is done; phase 1 is next.
+- `docs/HANDOFF.md` -- The 8-phase roadmap this app was rebuilt against. **All 8 phases are complete.** Kept for the rationale behind each change; the "current bugs" it describes are fixed.
 - `docs/RANKING_V2_SPEC.md` -- Ranking v2 algorithm, measurements and acceptance criteria
 - `tools/proto.py` -- Reference implementation of ranking v2. `tools/rank-v2-vs-experts.ts` asserts the TypeScript engine reproduces it.
 - `LARRY_PLAN.md` -- Earlier improvement roadmap (Phases 0 through 7), superseded by `docs/HANDOFF.md`

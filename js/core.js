@@ -69,17 +69,30 @@ var TABS = [
   { id: 'league', label: 'League', icon: '\u{1F3C0}' }
 ];
 
+// Phase 7 of docs/HANDOFF.md reshaped this menu.
+//
+// Removed: Draft Center (its tiers were computed from weekly value, so
+// "projected round" was meaningless mid-season), and Notifications (the
+// page rendered S.notifications, which nothing ever writes to; the one
+// genuinely useful alert now lives on the Roster dashboard).
+//
+// Merged: Standings, Projected Standings and Playoff Projector were three
+// pages answering one question. They are now one page with a toggle.
+//
+// Added: statsTrends, schedule and opponentScout had full renderers that
+// no menu entry pointed at, so they were unreachable dead code.
 var LEAGUE_MENU = [
   { id: 'standings', label: 'Standings', icon: '\u{1F3C6}' },
   { id: 'trades', label: 'Trade Center', icon: '\u{1F4E6}' },
   { id: 'teamAnalyzer', label: 'Team Analyzer', icon: '\u{1F50D}' },
-  { id: 'projectedStandings', label: 'Projected Standings', icon: '\u{1F3AF}' },
+  { id: 'opponentScout', label: 'Opponent Scout', icon: '\u{1F575}' },
+  { id: 'streaming', label: 'Streaming', icon: '\u{26A1}' },
+  { id: 'watchlist', label: 'Watchlist', icon: '\u{2B50}' },
+  { id: 'statsTrends', label: 'Stats & Trends', icon: '\u{1F4C8}' },
   { id: 'projections', label: 'ROS Projections', icon: '\u{1F52E}' },
+  { id: 'schedule', label: 'Schedule', icon: '\u{1F4C5}' },
   { id: 'news', label: 'News & Injuries', icon: '\u{1F4F0}' },
-  { id: 'draftCenter', label: 'Draft Center', icon: '\u{1F3C6}' },
-  { id: 'playoffs', label: 'Playoff Projector', icon: '\u{1F3C5}' },
   { id: 'timeline', label: 'Season Timeline', icon: '\u{23F3}' },
-  { id: 'notifications', label: 'Notifications', icon: '\u{1F514}' },
   { id: 'settings', label: 'Settings & Data', icon: '\u{2699}\u{FE0F}' }
 ];
 
@@ -322,12 +335,12 @@ function updateNav() {
   if (!nav) return;
   var btns = nav.querySelectorAll('.nav-tab');
   btns.forEach(function(btn, i) { btn.classList.toggle('active', i === S.currentTab); });
+  // The Notifications page and its badge were removed in phase 7:
+  // S.notifications is never written to, so the count was always zero.
+  // The one alert worth having (a free agent better than your worst
+  // starter) lives on the Roster dashboard.
   var badge = document.getElementById('notif-badge');
-  if (badge) {
-    var count = S.notifications.filter(function(n) { return !n.read; }).length;
-    badge.textContent = count;
-    badge.style.display = count > 0 ? 'flex' : 'none';
-  }
+  if (badge) badge.style.display = 'none';
 }
 
 function buildNav() {
@@ -984,6 +997,26 @@ function pct(n) {
 function esc(str) {
   if (!str) return '';
   return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+// Shared debounce. Players search, trade search and chat each had their own
+// timer variable and their own copy of this; one of them had a different
+// delay for no reason.
+//
+// Note for search inputs: debounce the RE-RENDER, never re-render the input
+// element itself. Replacing a focused input is what dismisses the mobile
+// keyboard mid-typing.
+function debounce(fn, wait) {
+  var timer = null;
+  return function() {
+    var args = arguments;
+    var self = this;
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(function() {
+      timer = null;
+      fn.apply(self, args);
+    }, wait || 250);
+  };
 }
 
 function localDateStr(date) {
