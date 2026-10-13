@@ -2,6 +2,13 @@
   publish = "."
   functions = "netlify/functions"
 
+# Note on function timeouts: Netlify's synchronous limit is 10s and is not
+# raisable on the free tier, so rather than declaring a timeout here that
+# may be silently ignored, larry-chat aborts its own Claude request at 9s.
+# That way a slow reply returns a real error message instead of a bare 502.
+# If this site moves to a paid plan, add a [functions] timeout here and
+# raise the matching constant in the function.
+
 [[headers]]
   for = "/*"
   [headers.values]

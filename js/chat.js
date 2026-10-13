@@ -5,6 +5,7 @@
 
 var _chatHistory = [];
 var _chatSending = false;
+var _chatError = '';
 
 function renderChat(container) {
   var html = '<div class="chat-container">';
@@ -13,11 +14,51 @@ function renderChat(container) {
   html += '<div class="chat-header">';
   html += '<div class="larry-chat-avatar small">' + getLarryAvatar(20) + '</div>';
   html += '<div class="chat-title">Larry AI</div>';
-  html += '<button class="btn btn-sm" onclick="_chatHistory=[];render()" title="Clear chat">\u{1F5D1}</button>';
+  html += '<button class="btn btn-sm" style="min-height:44px" aria-label="Clear chat" ' +
+    'onclick="clearChat()" title="Clear chat">\u{1F5D1}</button>';
   html += '</div>';
 
   // Messages
   html += '<div class="chat-messages" id="chat-messages">';
+  html += chatMessagesHtml();
+  html += '</div>';
+
+  // Input area
+  html += '<div class="chat-input-area">';
+  html += '<input type="text" class="chat-input" id="chat-input" aria-label="Ask Larry a question" placeholder="Ask Larry..." ';
+  html += 'onkeydown="if(event.key===\'Enter\')sendChat()">';
+  html += '<button class="chat-send-btn" style="min-height:44px" aria-label="Send" onclick="sendChat()" ' + (_chatSending ? 'disabled' : '') + '>\u{27A4}</button>';
+  html += '</div>';
+
+  html += '</div>';
+  container.innerHTML = html;
+  scrollChatToBottom();
+}
+
+// Only the message list. Re-rendering the whole tab replaced the input
+// element, which on mobile closes the keyboard mid-conversation.
+function renderChatMessages() {
+  var msgs = document.getElementById('chat-messages');
+  if (!msgs) { render(); return; }
+  msgs.innerHTML = chatMessagesHtml();
+  var sendBtn = document.querySelector('.chat-send-btn');
+  if (sendBtn) sendBtn.disabled = _chatSending;
+  scrollChatToBottom();
+}
+
+function scrollChatToBottom() {
+  var msgs = document.getElementById('chat-messages');
+  if (msgs) msgs.scrollTop = msgs.scrollHeight;
+}
+
+function clearChat() {
+  _chatHistory = [];
+  _chatError = '';
+  render();
+}
+
+function chatMessagesHtml() {
+  var html = '';
 
   if (!_chatHistory.length) {
     // Welcome + quick asks
@@ -55,21 +96,23 @@ function renderChat(container) {
     html += '<div class="typing-dots"><span>.</span><span>.</span><span>.</span></div></div>';
   }
 
-  html += '</div>';
+  // Errors render here rather than being pushed into _chatHistory, so they
+  // are never replayed to the model as if Larry had said them.
+  if (_chatError) {
+    html += '<div class="chat-bubble assistant" role="alert" style="border-left:3px solid var(--accent-red,#ef4444)">';
+    html += '<div class="chat-avatar">' + getLarryAvatar(16) + ' Larry</div>';
+    html += esc(_chatError);
+    html += '<div style="margin-top:8px"><button class="btn btn-sm btn-secondary" ' +
+      'style="min-height:44px" onclick="dismissChatError()">Dismiss</button></div>';
+    html += '</div>';
+  }
 
-  // Input area
-  html += '<div class="chat-input-area">';
-  html += '<input type="text" class="chat-input" id="chat-input" placeholder="Ask Larry..." ';
-  html += 'onkeydown="if(event.key===\'Enter\')sendChat()">';
-  html += '<button class="chat-send-btn" onclick="sendChat()" ' + (_chatSending ? 'disabled' : '') + '>\u{27A4}</button>';
-  html += '</div>';
+  return html;
+}
 
-  html += '</div>';
-  container.innerHTML = html;
-
-  // Scroll to bottom
-  var msgs = document.getElementById('chat-messages');
-  if (msgs) msgs.scrollTop = msgs.scrollHeight;
+function dismissChatError() {
+  _chatError = '';
+  renderChatMessages();
 }
 
 function formatChatMessage(text) {
@@ -80,65 +123,84 @@ function formatChatMessage(text) {
     .replace(/\n/g, '<br>');
 }
 
+// Build STRUCTURED context for the server to render.
+//
+// This used to return a pre-formatted prompt string that the client also
+// wrapped in a full system prompt and shipped to the function, which then
+// forwarded it to Claude verbatim. That made the endpoint an open LLM proxy
+// and put raw ESPN text (team names written by other managers) directly
+// into the prompt. The client now sends only typed fields; the function
+// sanitizes them and does all the prompt construction.
 function buildChatContext() {
   var cats = getOrderedCategories();
-  var context = 'LEAGUE: ' + S.league.name + ' (' + S.league.scoringType + ', ' + S.league.teamCount + ' teams)\n';
-  context += 'CATEGORIES: ' + cats.map(function(c){return c.abbr;}).join(', ') + '\n';
-
-  // My team
-  var rec = S.myTeam.record || {wins:0,losses:0,ties:0};
-  context += 'MY TEAM: ' + S.myTeam.name + ' (' + rec.wins + '-' + rec.losses + '-' + rec.ties + ')\n';
-
-  // Matchup
-  var mr = S.matchup.myRecord || {wins:0,losses:0,ties:0};
-  context += 'MATCHUP: vs ' + S.matchup.opponentName + ' (' + mr.wins + '-' + mr.losses + '-' + mr.ties + ')\n';
-
-  // Category ranks
-  if (cats.length && S.teams.length) {
-    context += 'MY CAT RANKS: ';
-    cats.forEach(function(cat) {
-      context += cat.abbr + ' #' + Engines.getTeamCatRank(cat.abbr) + ', ';
-    });
-    context += '\n';
-  }
-
-  // Matchup strategy
+  var rec = S.myTeam.record || { wins: 0, losses: 0, ties: 0 };
   var strat = S.matchup.strategy || {};
-  if (strat.summary) {
-    context += 'MATCHUP STRATEGY: ' + strat.summary + '\n';
-    if (strat.targets && strat.targets.length) context += 'TARGET CATEGORIES: ' + strat.targets.join(', ') + ' (focus pickups and streaming here)\n';
-    if (strat.locks && strat.locks.length) context += 'LOCK CATEGORIES: ' + strat.locks.join(', ') + ' (safe, maintain)\n';
-    if (strat.punts && strat.punts.length) context += 'PUNT CATEGORIES: ' + strat.punts.join(', ') + ' (not worth chasing this week)\n';
+
+  function playerPayload(p) {
+    return {
+      name: p.name,
+      pos: p.positions || [],
+      team: p.nbaTeam,
+      injury: p.injuryStatus,
+      value: p.durantScore || 0,
+      gamesLeft: p.gamesRemaining || 0,
+      owned: p.percentOwned || 0
+    };
   }
 
-  // Roster with z-scores and injury status
   // .slice() so building chat context does not reorder the real roster.
   var myPlayers = (S.myTeam.players || []).slice();
-  if (myPlayers.length) {
-    context += 'ROSTER:\n';
-    myPlayers.sort(function(a,b) { return (b.durantScore||0) - (a.durantScore||0); });
-    myPlayers.forEach(function(p) {
-      var status = (p.injuryStatus && p.injuryStatus !== 'ACTIVE') ? ', Status: ' + p.injuryStatus : '';
-      context += '  ' + p.name + ' (' + p.positions.join('/') + ', ' + p.nbaTeam + status + ', DURANT: ' + fmt(p.durantScore||0,1) + ', Z: ' + fmt(p.zScores?p.zScores.total:0,2) + ', Slot: ' + p.slot + ')\n';
-    });
-  }
+  myPlayers.sort(function(a, b) { return (b.durantScore || 0) - (a.durantScore || 0); });
 
-  // Top free agents (exclude injured OUT/SUSPENSION/IR)
+  // Reuse the engine's own filter so chat and the Roster tiles agree about
+  // who is addable, rather than chat keeping a separate list of statuses.
   var freeAgents = (S.allPlayers || []).filter(function(p) {
-    if (p.onTeamId !== 0) return false;
-    var inj = p.injuryStatus || 'ACTIVE';
-    return inj !== 'OUT' && inj !== 'SUSPENSION' && inj !== 'IR';
+    return p.onTeamId === 0 && Engines.isValidAddCandidate(p);
   });
-  freeAgents.sort(function(a,b) { return (b.durantScore||0) - (a.durantScore||0); });
-  if (freeAgents.length) {
-    context += 'TOP FREE AGENTS:\n';
-    freeAgents.slice(0, 10).forEach(function(p) {
-      var status = (p.injuryStatus && p.injuryStatus !== 'ACTIVE') ? ', Status: ' + p.injuryStatus : '';
-      context += '  ' + p.name + ' (' + p.positions.join('/') + ', ' + p.nbaTeam + status + ', DURANT: ' + fmt(p.durantScore||0,1) + ', Own: ' + fmt(p.percentOwned||0,0) + '%)\n';
+  freeAgents.sort(function(a, b) { return (b.durantScore || 0) - (a.durantScore || 0); });
+
+  var matchupCats = cats.map(function(cat) {
+    return {
+      cat: cat.abbr,
+      my: (S.matchup.myScores || {})[cat.abbr] || 0,
+      opp: (S.matchup.oppScores || {})[cat.abbr] || 0,
+      winProb: strat.winProb ? strat.winProb[cat.abbr] : undefined
+    };
+  });
+
+  // Hand over the engine's actual add/drop output so Larry and the Roster
+  // tiles cannot contradict each other.
+  var engineRecs = [];
+  try {
+    var recs = Engines.generateRecommendations(S.myTeam.players || [], S.allPlayers || []);
+    engineRecs = recs.slice(0, 5).map(function(r) {
+      return { action: r.action, improvement: r.improvement || 0 };
     });
+  } catch (e) {
+    engineRecs = [];
   }
 
-  return context;
+  return {
+    leagueName: S.league.name,
+    scoringType: S.league.scoringType,
+    teamCount: S.league.teamCount,
+    categories: cats.map(function(c) { return c.abbr; }),
+    teamName: S.myTeam.name,
+    record: rec.wins + '-' + rec.losses + '-' + rec.ties,
+    matchup: {
+      opponent: S.matchup.opponentName,
+      daysLeft: (getMatchupDates() || {}).daysLeft || 0,
+      categories: matchupCats
+    },
+    strategy: {
+      targets: strat.targets || [],
+      locks: strat.locks || [],
+      punts: strat.punts || []
+    },
+    roster: myPlayers.map(playerPayload),
+    freeAgents: freeAgents.slice(0, 15).map(playerPayload),
+    recommendations: engineRecs
+  };
 }
 
 async function sendChat(presetMsg) {
@@ -149,43 +211,53 @@ async function sendChat(presetMsg) {
   if (input) input.value = '';
   _chatHistory.push({ role: 'user', content: message });
   _chatSending = true;
-  render();
+  _chatError = '';
+  // Message list only, so the input keeps focus and the mobile keyboard
+  // stays open while Larry is thinking.
+  renderChatMessages();
 
   try {
-    var context = buildChatContext();
-    var systemPrompt = 'You are Larry, an expert fantasy basketball analyst owl. You are helping a manager in a ' + S.league.scoringType + ' league with ' + S.league.teamCount + ' teams. Be specific, data-driven, and actionable. Reference actual player names, stats, and z-scores from the context. Keep responses concise but thorough. Use ** for emphasis on key points.\n\nINJURY RULES:\n- NEVER recommend picking up a player with status OUT, SUSPENSION, or IR. They cannot contribute.\n- If a roster player is OUT/IR, flag them as a potential drop or IR stash candidate.\n- Players with GTD or DAY_TO_DAY status are risky starts; mention the risk.\n- Always check and mention injury status before recommending any player.\n\nMATCHUP STRATEGY RULES:\n- When recommending pickups or streams, prioritize TARGET categories over overall value.\n- Reference the specific target/lock/punt categories from the matchup strategy.\n- Tailor all advice to winning THIS week\'s matchup, not general season value.\n- If a player helps target categories, say so explicitly.\n\nCURRENT DATA:\n' + context;
-
     var messages = [];
     _chatHistory.forEach(function(msg) {
       messages.push({ role: msg.role, content: msg.content });
     });
 
+    // No `system` field. The function builds the prompt; see the comment at
+    // the top of netlify/functions/larry-chat.js.
     var response = await fetch('/.netlify/functions/larry-chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        system: systemPrompt,
+        context: buildChatContext(),
         messages: messages
       })
     });
 
     if (!response.ok) {
-      var errBody = await response.text();
-      throw new Error('Chat API error ' + response.status + ': ' + errBody);
+      var detail = '';
+      try {
+        var errJson = await response.json();
+        detail = errJson && errJson.error ? errJson.error : '';
+      } catch (parseErr) {
+        detail = '';
+      }
+      throw new Error(detail || ('Chat API error ' + response.status));
     }
 
     var data = await response.json();
     var reply = data.content || data.reply || 'Sorry, I had trouble processing that. Try again?';
 
     _chatHistory.push({ role: 'assistant', content: reply });
-  } catch(e) {
+    _chatError = '';
+  } catch (e) {
     console.error('Chat error:', e);
-    _chatHistory.push({
-      role: 'assistant',
-      content: 'Sorry, I hit an error: ' + e.message + '. Make sure the ANTHROPIC_API_KEY is set in your Netlify environment variables.'
-    });
+    // Show the error in the UI, do NOT push it into _chatHistory. Error
+    // text in the history gets replayed to the model as a real assistant
+    // turn on every subsequent message, which both wastes tokens and
+    // teaches it that apologising about API keys is a normal reply.
+    _chatError = e.message || 'Something went wrong.';
   }
 
   _chatSending = false;
-  render();
+  renderChatMessages();
 }

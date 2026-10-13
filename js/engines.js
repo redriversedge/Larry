@@ -542,17 +542,35 @@ var Engines = (function() {
   }
 
   function v2ToLegacyRecs(output, myPlayers) {
-    // Map RankedPlayer -> the legacy rec shape so the existing
-    // renderAddDropTiles() does not need to change. We pick a drop target
-    // (worst bench player by effectiveDURANT) just so the UI fields are
-    // populated; the v2 engine itself does not currently propose drops.
-    var sortedMy = (myPlayers || []).slice().sort(function(a,b) {
+    // Map RankedPlayer -> the legacy rec shape so renderAddDropTiles() does
+    // not need to change. The v2 engine does not propose drops, so we pick
+    // drop targets here.
+    var sortedMy = (myPlayers || []).slice().sort(function(a, b) {
       return (a.effectiveDURANT || 0) - (b.effectiveDURANT || 0);
     });
-    var drop = sortedMy.find(function(p) { return p.slotId === 12; }) || sortedMy[0] || null;
+
+    // CLAUDE.md: never suggest dropping a top-60% player. The legacy path
+    // enforces this; the v2 path did not, so with the flag on Larry would
+    // happily tell you to cut a starter. Droppable = bottom 40%, bench
+    // first.
+    var cutoff = Math.floor(sortedMy.length * 0.4);
+    var droppable = [];
+    for (var i = 0; i < sortedMy.length; i++) {
+      if (i >= cutoff && cutoff > 0) break;
+      if (sortedMy[i].slotId === 13) continue; // IR cannot simply be dropped
+      droppable.push(sortedMy[i]);
+    }
+    // Prefer bench players when any are available.
+    var bench = droppable.filter(function(p) { return p.slotId === 12; });
+    if (bench.length) droppable = bench;
+    if (!droppable.length && sortedMy.length) droppable = [sortedMy[0]];
+
     var top = (output.ranked || []).slice(0, 5);
     return top.map(function(rp, idx) {
       var why = (rp.breakdown.why || []).join(' ');
+      // Distinct drop per suggestion where the roster allows it, matching
+      // the legacy path's behavior rather than naming one player five times.
+      var drop = droppable.length ? droppable[idx % droppable.length] : null;
       return {
         type: 'pickup',
         priority: idx === 0 ? 'high' : 'medium',
@@ -567,9 +585,33 @@ var Engines = (function() {
     });
   }
 
+  // Signature of a recommendation set, so we do not pay for an identical
+  // explanation twice.
+  function v2RecSignature(payload) {
+    try {
+      return JSON.stringify(payload).slice(0, 2000);
+    } catch (e) {
+      return '';
+    }
+  }
+
+  var _v2RationaleSig = '';
+  var _v2RationaleInFlight = false;
+
   function v2FetchRationale(payload) {
     if (typeof fetch !== 'function') return;
-    fetch('/api/recommend-explain', {
+
+    // This fired on every render of the Add/Drop card, so scrolling the
+    // Roster tab repeatedly billed an LLM call for the same five players.
+    // Memoize on the rec-set signature and never run two at once.
+    var sig = v2RecSignature(payload);
+    if (!sig || sig === _v2RationaleSig || _v2RationaleInFlight) return;
+    _v2RationaleSig = sig;
+    _v2RationaleInFlight = true;
+
+    // The old path was /api/recommend-explain, which Netlify does not route
+    // anywhere: every call 404'd and the .catch swallowed it silently.
+    fetch('/.netlify/functions/recommend-explain', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
@@ -593,7 +635,8 @@ var Engines = (function() {
           }
         }
       })
-      .catch(function() { /* ignore */ });
+      .catch(function() { /* best effort; the card renders fine without it */ })
+      .then(function() { _v2RationaleInFlight = false; });
   }
 
   function v2GenerateRecommendations(myPlayers, allPlayers) {
@@ -602,18 +645,34 @@ var Engines = (function() {
       console.warn('LarryEngine v2 not loaded; falling back to v1');
       return null;
     }
-    var ctx = v2BuildContext(myPlayers, allPlayers);
-    var output = Eng.recommend(ctx);
-    var recs = v2ToLegacyRecs(output, myPlayers);
-    var payload = Eng.buildExplainPayload(output.ranked.slice(0, 5), output.teamNeeds);
-    v2FetchRationale(payload);
-    return recs;
+    // Returning null anywhere here hands control back to the legacy path.
+    // Previously an exception inside recommend() propagated out and killed
+    // the whole Roster render instead of degrading to v1.
+    try {
+      var ctx = v2BuildContext(myPlayers, allPlayers);
+      var output = Eng.recommend(ctx);
+      if (!output || !output.ranked || !output.ranked.length) {
+        console.warn('LarryEngine v2 returned no recommendations; falling back to v1');
+        return null;
+      }
+      var recs = v2ToLegacyRecs(output, myPlayers);
+      if (!recs.length) return null;
+      try {
+        v2FetchRationale(Eng.buildExplainPayload(output.ranked.slice(0, 5), output.teamNeeds));
+      } catch (explainErr) {
+        // The rationale is decoration; never let it break the recs.
+      }
+      return recs;
+    } catch (e) {
+      console.warn('LarryEngine v2 failed; falling back to v1:', e.message);
+      return null;
+    }
   }
 
   function generateRecommendations(myPlayers, allPlayers) {
     if (v2Enabled()) {
       var v2Recs = v2GenerateRecommendations(myPlayers, allPlayers);
-      if (v2Recs) return v2Recs;
+      if (v2Recs && v2Recs.length) return v2Recs;
     }
     // Re-compute effectiveDURANT here using the full allPlayers pool.
     // computeDURANT may be called on a subset; we need the full pool for an
