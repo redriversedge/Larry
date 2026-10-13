@@ -11,16 +11,31 @@
 // the schema here before the client ever sees it.
 const https = require('https');
 
-const MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-5';
-const MAX_TOKENS = Number(process.env.ANTHROPIC_MOVE_MAX_TOKENS) || 1500;
+// ANTHROPIC_MOVE_MODEL lets this one call use a different (e.g. faster)
+// model than chat without touching code.
+const MODEL = process.env.ANTHROPIC_MOVE_MODEL ||
+  process.env.ANTHROPIC_MODEL || 'claude-sonnet-5';
+
+// Netlify's synchronous function limit is 10s and is not raisable on the
+// free tier, so the whole job has to finish inside it. Generation time is
+// the dominant cost, not prompt size, which makes max_tokens the main lever:
+// at 1500 a full three-action answer took about 9s and failed roughly half
+// the time. 900 plus the tighter per-field caps in the tool schema below
+// brings a typical answer in around 5-6s.
+const MAX_TOKENS = Number(process.env.ANTHROPIC_MOVE_MAX_TOKENS) || 900;
+const CLAUDE_TIMEOUT_MS = 8500;
 
 const MAX_BODY_BYTES = 256 * 1024;
 const MAX_FIELD_CHARS = 60;
-const MAX_ROSTER = 20;
-const MAX_FREE_AGENTS = 15;
-const MAX_OPP = 15;
+const MAX_ROSTER = 18;
+// Trimmed from 15: beyond the top handful these are noise, and every line
+// is prompt the model has to read before it starts writing.
+const MAX_FREE_AGENTS = 10;
+const MAX_OPP = 13;
 const MAX_ACTIONS = 3;
 const MAX_HEADLINE = 160;
+const MAX_DETAIL = 320;
+const MAX_LIST_NOTES = 2;
 
 const ALLOWED_ORIGINS = [
   'https://larrybball.netlify.app',
@@ -291,7 +306,7 @@ const REPORT_MOVE_TOOL = {
             type: { type: 'string', enum: ['lineup', 'add_drop', 'ir', 'hold', 'stream'] },
             action: { type: 'string', description: 'The action, e.g. "Start Pritchard over Kuminga tonight".' },
             reason: { type: 'string', description: 'One line, plain English, no jargon.' },
-            detail: { type: 'string', description: '2-4 sentences with the numbers behind it.' },
+            detail: { type: 'string', description: 'One or two sentences with the numbers behind it. Keep it under 300 characters.' },
             players: {
               type: 'object',
               properties: {
@@ -309,12 +324,12 @@ const REPORT_MOVE_TOOL = {
           winning: { type: 'array', items: { type: 'string' } },
           losing: { type: 'array', items: { type: 'string' } },
           close: { type: 'array', items: { type: 'string' } },
-          summary: { type: 'string', description: 'Two sentences on where the matchup stands.' },
+          summary: { type: 'string', description: 'One or two sentences on where the matchup stands.' },
         },
         required: ['summary'],
       },
-      risks: { type: 'array', items: { type: 'string' }, description: 'What could go wrong with this plan.' },
-      wouldChangeIf: { type: 'array', items: { type: 'string' }, description: 'What would change the call.' },
+      risks: { type: 'array', items: { type: 'string' }, description: 'At most 2 short notes on what could go wrong.' },
+      wouldChangeIf: { type: 'array', items: { type: 'string' }, description: 'At most 2 short notes on what would change the call.' },
       confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
     },
     required: ['headline', 'noMove', 'matchupRead', 'confidence'],
@@ -356,7 +371,7 @@ function validateMove(input) {
   }
 
   const mr = input.matchupRead && typeof input.matchupRead === 'object' ? input.matchupRead : {};
-  const summary = clean(mr.summary, 500);
+  const summary = clean(mr.summary, 400);
   if (!summary) return null;
 
   return {
@@ -519,7 +534,14 @@ function callClaude(apiKey, payload) {
       });
     });
     req.on('error', reject);
-    req.setTimeout(9000, () => { req.destroy(); reject(new Error('Claude API timed out')); });
+    req.setTimeout(CLAUDE_TIMEOUT_MS, () => {
+      req.destroy();
+      const err = new Error('Claude API timed out');
+      // 504 so the client can tell a timeout from a real failure and
+      // retry it automatically.
+      err.statusCode = 504;
+      reject(err);
+    });
     req.write(payload);
     req.end();
   });

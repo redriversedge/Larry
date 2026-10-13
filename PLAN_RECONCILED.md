@@ -2,7 +2,7 @@
 
 This document maps every prescriptive path and architectural assumption from `LARRY_PLAN.md` to the current state of this repo. It also flags decisions where the plan and the repo conflict.
 
-> **Plan authors note (LARRY_PLAN.md, lines 29–31):** "The research that produced this plan could not directly fetch the GitHub repo. Wherever a file is named (e.g. `netlify/functions/recommend.ts`), treat it as a **prescriptive target path** for Claude Code to create or rename to, not a claim that the file exists today. The first task in Phase 0 below is a 30-minute repo audit script you (or Claude Code) should run to map current paths to the prescribed ones." — this document is that map.
+> **Plan authors note (LARRY_PLAN.md, lines 29–31):** "The research that produced this plan could not directly fetch the GitHub repo. Wherever a file is named (e.g. `netlify/functions/recommend.ts`), treat it as a **prescriptive target path** for Claude Code to create or rename to, not a claim that the file exists today. The first task in Phase 0 below is a 30-minute repo audit script you (or Claude Code) should run to map current paths to the prescribed ones." , this document is that map.
 
 ---
 
@@ -29,8 +29,8 @@ Every prescriptive path the plan names, mapped to what exists today.
 |---|---|---|---|
 | `larry/` (project root) | exists | repo root | Repo is at `Sterling/Larry/` locally; remote is `github.com/redriversedge/Larry`. |
 | `netlify.toml` | exists | `netlify.toml` | 9 lines; minimal. Will need `[functions.projections-rebuild]` schedule block in Phase 1. |
-| `package.json` | **missing** | — | Does not exist. See "Conflict: TypeScript migration" below. |
-| `tsconfig.json` | **missing** | — | Plan Phase 0 task 3 wants this with `strict: true` + `noUncheckedIndexedAccess: true`. Blocked on TS decision. |
+| `package.json` | **missing** | , | Does not exist. See "Conflict: TypeScript migration" below. |
+| `tsconfig.json` | **missing** | , | Plan Phase 0 task 3 wants this with `strict: true` + `noUncheckedIndexedAccess: true`. Blocked on TS decision. |
 | `README.md` | exists (stub) | `README.md` | 51 bytes, two lines. Phase 0 task 5 adds a Netlify build badge. |
 | `LARRY_PLAN.md` | exists | `LARRY_PLAN.md` | The plan being executed. |
 | `REPO_MAP.md` | created this phase | `REPO_MAP.md` | Phase 0 deliverable. |
@@ -40,13 +40,13 @@ Every prescriptive path the plan names, mapped to what exists today.
 
 | Plan path | Status | Actual path | Notes |
 |---|---|---|---|
-| `netlify/functions/espn-link.ts` | to create (Phase 2) | — | Bookmarklet receiver + AES-GCM. |
-| `netlify/functions/espn-proxy.ts` | exists as `.js` | `netlify/functions/espn-proxy.js` | 85 lines. Already implements cookie-authed read proxy — matches the plan's "internal: read-only ESPN reads with user cookies." Will need rename to `.ts` if TS migration goes ahead. |
-| `netlify/functions/recommend.ts` | to create (Phase 1) | — | Plan's main per-user recommendation endpoint. |
-| `netlify/functions/projections-rebuild.ts` | to create (Phase 1) | — | Scheduled Function for nightly Marcel rebuild. |
-| `netlify/functions/matchup.ts` | to create (Phase 4) | — | Weekly matchup analyzer. |
-| `netlify/functions/trade.ts` | to create (Phase 4) | — | Trade analyzer endpoint. |
-| `netlify/functions/chat.ts` | exists as `larry-chat.js` | `netlify/functions/larry-chat.js` | 153 lines. Already a Claude proxy. Filename differs from the plan (`chat.ts` vs `larry-chat.js`). Already accepts a structured `context` payload — closer to the plan's "explanation layer only" target than the plan suggests. **Note:** hard-coded model id is `claude-sonnet-4-20250514`, which is outdated; current Sonnet is 4.6 (`claude-sonnet-4-6`). Refresh in Phase 1. |
+| `netlify/functions/espn-link.ts` | to create (Phase 2) | , | Bookmarklet receiver + AES-GCM. |
+| `netlify/functions/espn-proxy.ts` | exists as `.js` | `netlify/functions/espn-proxy.js` | 85 lines. Already implements cookie-authed read proxy , matches the plan's "internal: read-only ESPN reads with user cookies." Will need rename to `.ts` if TS migration goes ahead. |
+| `netlify/functions/recommend.ts` | to create (Phase 1) | , | Plan's main per-user recommendation endpoint. |
+| `netlify/functions/projections-rebuild.ts` | to create (Phase 1) | , | Scheduled Function for nightly Marcel rebuild. |
+| `netlify/functions/matchup.ts` | to create (Phase 4) | , | Weekly matchup analyzer. |
+| `netlify/functions/trade.ts` | to create (Phase 4) | , | Trade analyzer endpoint. |
+| `netlify/functions/chat.ts` | exists as `larry-chat.js` | `netlify/functions/larry-chat.js` | 153 lines. Already a Claude proxy. Filename differs from the plan (`chat.ts` vs `larry-chat.js`). Already accepts a structured `context` payload , closer to the plan's "explanation layer only" target than the plan suggests. **Note:** hard-coded model id is `claude-sonnet-4-20250514`, which is outdated; current Sonnet is 4.6 (`claude-sonnet-4-6`). Refresh in Phase 1. |
 
 ### Source tree (`src/`)
 
@@ -54,8 +54,8 @@ The plan prescribes a `src/` tree. **None of `src/` exists today.** All frontend
 
 | Plan path | Status | Actual path | Notes |
 |---|---|---|---|
-| `src/engine/marcel.ts` | to create (Phase 1) | — | New module. |
-| `src/engine/minutes.ts` | to create (Phase 1) | — | New module. |
+| `src/engine/marcel.ts` | to create (Phase 1) | , | New module. |
+| `src/engine/minutes.ts` | to create (Phase 1) | , | New module. |
 | `src/engine/zscore.ts` | to create (Phase 1) | partial logic in `js/engines.js` | Z-scores already computed in `Engines` IIFE; G-score is new. |
 | `src/engine/teamFit.ts` | to create (Phase 1) | partial logic in `js/engines.js` | Engine 12 (Matchup Strategy) already classifies categories Lock/Target/Punt and weights matchup-fit; not the same shape as the plan's `α(round) / α(matchup)` schedule but covers similar intent. |
 | `src/engine/recommend.ts` | to create (Phase 1) | partial logic in `js/engines.js` | Engine 4 (Recommendations) already exists, blends 40% DURANT + 60% matchup fit, filters injured. The plan's deterministic ranking + Claude-narration split needs to be reconciled with this. |
@@ -63,31 +63,31 @@ The plan prescribes a `src/` tree. **None of `src/` exists today.** All frontend
 | `src/engine/constants.ts` | to create (Phase 1) | scattered | Magic numbers currently inlined across `js/engines.js`. |
 | `src/engine/prompts/coach.v1.md` | to create (Phase 1) | inline string in `larry-chat.js` (lines 63–76) | Versioning the prompt is a Phase-1 deliverable. |
 | `src/data/espn.ts` | to create | partial logic in `js/espn.js` | ESPN client logic already exists (701 lines). |
-| `src/data/nba.ts` | to create | — | No NBA stats source today (DURANT uses ESPN-derived per-game). |
-| `src/data/cache.ts` | to create | — | No Netlify Blobs usage today. |
-| `src/db/schema.sql` | to create (Phase 1+) | — | No database today. |
-| `src/ui/tabs/{Roster,Matchup,Players,Larry,League}.tsx` | to create (Phase 3) | partial in `js/tabs.js` | All five tabs already exist as ES5 functions inside `js/tabs.js` (2408 lines). Plan calls for renaming "Larry" tab to "Coach" — see Part 3.1. |
-| `src/ui/components/RecCard.tsx` | to create (Phase 3) | — | New. |
+| `src/data/nba.ts` | to create | , | No NBA stats source today (DURANT uses ESPN-derived per-game). |
+| `src/data/cache.ts` | to create | , | No Netlify Blobs usage today. |
+| `src/db/schema.sql` | to create (Phase 1+) | , | No database today. |
+| `src/ui/tabs/{Roster,Matchup,Players,Larry,League}.tsx` | to create (Phase 3) | partial in `js/tabs.js` | All five tabs already exist as ES5 functions inside `js/tabs.js` (2408 lines). Plan calls for renaming "Larry" tab to "Coach" , see Part 3.1. |
+| `src/ui/components/RecCard.tsx` | to create (Phase 3) | , | New. |
 | `src/ui/onboarding/EspnLink.tsx` | to create (Phase 2) | manual paste flow in core/espn | Phase 2 replaces. |
-| `src/shared/types.ts` | to create (Phase 1) | — | No types today (vanilla JS). |
-| `src/shared/crypto.ts` | to create (Phase 2) | — | New. AES-GCM helpers. |
+| `src/shared/types.ts` | to create (Phase 1) | , | No types today (vanilla JS). |
+| `src/shared/crypto.ts` | to create (Phase 2) | , | New. AES-GCM helpers. |
 
 ### Public assets
 
 | Plan path | Status | Actual path | Notes |
 |---|---|---|---|
-| `public/bookmarklet.html` | to create (Phase 2) | — | Phase 2 deliverable. |
+| `public/bookmarklet.html` | to create (Phase 2) | , | Phase 2 deliverable. |
 | `public/manifest.webmanifest` | exists at root | `manifest.json` | Already a PWA manifest; rename or relocate is cosmetic. |
 
 ### Tests
 
 | Plan path | Status | Actual path | Notes |
 |---|---|---|---|
-| `tests/sanity.test.ts` | to create (Phase 0) | — | **Blocked** — see "Conflict: vitest" below. |
-| `tests/engine/marcel.test.ts` | to create (Phase 1) | — | |
-| `tests/engine/zscore.test.ts` | to create (Phase 1) | — | |
-| `tests/engine/recommend.test.ts` | to create (Phase 1) | — | The "two rosters → two top 3s" regression test. |
-| `tests/golden/*.json` | to create (Phase 1) | — | Backtest fixtures. |
+| `tests/sanity.test.ts` | to create (Phase 0) | , | **Blocked** , see "Conflict: vitest" below. |
+| `tests/engine/marcel.test.ts` | to create (Phase 1) | , | |
+| `tests/engine/zscore.test.ts` | to create (Phase 1) | , | |
+| `tests/engine/recommend.test.ts` | to create (Phase 1) | , | The "two rosters → two top 3s" regression test. |
+| `tests/golden/*.json` | to create (Phase 1) | , | Backtest fixtures. |
 
 ---
 
@@ -95,7 +95,7 @@ The plan prescribes a `src/` tree. **None of `src/` exists today.** All frontend
 
 These are places where the plan and the repo disagree on a load-bearing assumption. Per the plan's own ground rule #6, do not silently "go with the repo" or silently "go with the plan." Decide explicitly.
 
-### 1. TypeScript migration vs. "no build step" rule (Phase 0, task 3) — **RESOLVED: Hybrid (D)**
+### 1. TypeScript migration vs. "no build step" rule (Phase 0, task 3) , **RESOLVED: Hybrid (D)**
 
 **Plan (Part 5.1, Phase 0 task 3):** "If the repo is JS, migrate. … Set `'strict': true`, `'noUncheckedIndexedAccess': true`. Add `tsx`/`tsup` for function bundling."
 
@@ -103,7 +103,7 @@ These are places where the plan and the repo disagree on a load-bearing assumpti
 - "Vanilla JS multi-file app. **No framework, no build step, no bundler.** Files deploy directly to Netlify."
 - "All JS uses `var` (ES5 style for maximum compatibility). **No `let`/`const`, no arrow functions, no template literals.**"
 - "Global modules use IIFE pattern: `var ModuleName = (function() { ... return { publicAPI }; })();`"
-- `netlify.toml` has no `command =` line; `publish = "."` — the published site is the repo root, served as static files.
+- `netlify.toml` has no `command =` line; `publish = "."` , the published site is the repo root, served as static files.
 
 **Why this matters:** TypeScript requires either (a) a compile step (which `CLAUDE.md` forbids) or (b) JSDoc-only types with `// @ts-check` headers (which is plausibly compatible with the no-build rule and gives Claude Code a typed surface without changing the runtime artifact). The plan does not consider option (b).
 
@@ -128,7 +128,7 @@ These are places where the plan and the repo disagree on a load-bearing assumpti
 
 ### 2. vitest in a no-Node-toolchain repo (Phase 0, task 4)
 
-vitest requires `package.json`, `node_modules`, and a runtime. None exist today. The fix is mechanical (`npm init -y`, `npm i -D vitest`) but the act of adding `package.json` itself is the architectural change — once it's in, the project is no longer "no toolchain." Tied to the decision above:
+vitest requires `package.json`, `node_modules`, and a runtime. None exist today. The fix is mechanical (`npm init -y`, `npm i -D vitest`) but the act of adding `package.json` itself is the architectural change , once it's in, the project is no longer "no toolchain." Tied to the decision above:
 
 - If we go (A) or (B) above, `package.json` is fine.
 - If we go (C) [defer], we should also defer vitest to Phase 1.
@@ -141,15 +141,15 @@ vitest requires `package.json`, `node_modules`, and a runtime. None exist today.
 **Repo:** `js/engines.js` is 880 lines and already implements **12 named analysis engines**, including z-scores, DURANT composite ranking, Monte Carlo win probability, matchup-aware recommendations (Engine 4: 40% DURANT + 60% matchup fit, with injury filter), Monte Carlo, ROS projections, and a Lock/Target/Punt matchup strategy classifier (Engine 12). The system-prompt builder in `netlify/functions/larry-chat.js` *already* receives per-user roster + matchup + free agents.
 
 **Implication:** the "same suggestions for everyone" diagnosis in the plan (Part 1.1) is plausible but unverified against this repo. Three scenarios:
-- (a) The bug is real and it's a *client* issue — `js/chat.js` may not be populating the `context` payload correctly per user.
-- (b) The bug is real and it's a *ranking* issue — Engine 4's matchup-fit blend may collapse to similar tops across users.
-- (c) The bug is fixed or stale — the user's diagnosis predates recent engine work.
+- (a) The bug is real and it's a *client* issue , `js/chat.js` may not be populating the `context` payload correctly per user.
+- (b) The bug is real and it's a *ranking* issue , Engine 4's matchup-fit blend may collapse to similar tops across users.
+- (c) The bug is fixed or stale , the user's diagnosis predates recent engine work.
 
 Phase 1 should start by **reproducing the bug against two rosters in a real league**, not by replacing the engine wholesale. The plan's prescription (rebuild as Marcel + G-score + α-fit) may still be the right move, but reproducing first prevents replacing a working engine with a less-tested one.
 
 **Recommendation:** treat Part 2 of the plan as a **target architecture** for the engine, not a refutation of what's there. The migration-without-breaking-existing-features section (Part 2.6) is exactly right; lean on it.
 
-### 4. Branching: plan says off `main`, `CLAUDE.md` says off `dev` — and `dev` is stale relative to `main`
+### 4. Branching: plan says off `main`, `CLAUDE.md` says off `dev` , and `dev` is stale relative to `main`
 
 **Plan:** "Use `feat/phase-0-audit`, `feat/phase-1-engine`, … Merge to `main` only after the phase's 'Done when' criterion is verified."
 
@@ -157,7 +157,7 @@ Phase 1 should start by **reproducing the bug against two rosters in a real leag
 
 **Decision (2026-05-01):** follow `CLAUDE.md`. Phase merge target is `dev`, not `main`. So `feat/phase-0-audit` → `dev` → `main` (for deploy).
 
-**Critical sub-finding: `dev` and `main` are inverted.** `git log --oneline dev..main` returns 31 commits; `git log --oneline main..dev` returns 0. **`main` is 31 commits ahead of `dev`**, including major engine work (effectiveDURANT, Engine 12 Matchup Strategy, opportunity boost, availability score, schedule grid, add/drop tile UI, ROS projections, schedule advantage logic, free-agent pool size, etc.). This means CLAUDE.md's stated workflow ("dev → main") has not been followed in practice — recent work has landed directly on `main`, leaving `dev` behind.
+**Critical sub-finding: `dev` and `main` are inverted.** `git log --oneline dev..main` returns 31 commits; `git log --oneline main..dev` returns 0. **`main` is 31 commits ahead of `dev`**, including major engine work (effectiveDURANT, Engine 12 Matchup Strategy, opportunity boost, availability score, schedule grid, add/drop tile UI, ROS projections, schedule advantage logic, free-agent pool size, etc.). This means CLAUDE.md's stated workflow ("dev → main") has not been followed in practice , recent work has landed directly on `main`, leaving `dev` behind.
 
 **Implication for Phase 0 onwards:**
 - Branching `feat/phase-0-audit` off `dev` would put the entire effort on **stale code** (missing all 31 commits of recent engine work).
@@ -186,7 +186,7 @@ A March-2026 phase plan exists in `docs/plans/`. Its phase numbering does **not*
 
 **Plan (Part 4):** cookies stored in `localStorage` is "the #1 security issue." Plan replaces with AES-GCM encrypted server-side blob via `/api/espn-link`.
 
-**Repo:** confirmed — `espn_s2` and `SWID` are kept in browser `localStorage` under the `S` state object. Phase 2 work as-described in the plan applies cleanly.
+**Repo:** confirmed , `espn_s2` and `SWID` are kept in browser `localStorage` under the `S` state object. Phase 2 work as-described in the plan applies cleanly.
 
 ### 8. Outdated Claude model id
 
@@ -196,9 +196,9 @@ A March-2026 phase plan exists in `docs/plans/`. Its phase numbering does **not*
 
 ## What was done in this Phase 0 session
 
-- Created branch `feat/phase-0-audit` off `main` (correct base — `dev` is stale; see conflict #4).
+- Created branch `feat/phase-0-audit` off `main` (correct base , `dev` is stale; see conflict #4).
 - Wrote `REPO_MAP.md` with file tree + key-file summaries.
-- Wrote `PLAN_RECONCILED.md` (this file) — every prescriptive path mapped, eight architectural conflicts surfaced and resolved.
+- Wrote `PLAN_RECONCILED.md` (this file) , every prescriptive path mapped, eight architectural conflicts surfaced and resolved.
 - Added `package.json`, `tsconfig.json`, `vitest.config.ts`, `tests/sanity.test.ts` per chosen path (D) Hybrid TypeScript. Build pipeline deferred to Phase 1.
 - Added Netlify build badge to `README.md` (placeholder for site API ID).
 - Updated `CLAUDE.md` with the hybrid TS rule (ES5 `js/*.js` legacy, modern TS in `src/`).

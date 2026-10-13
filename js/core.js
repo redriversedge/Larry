@@ -6,6 +6,9 @@
 var S = null;
 var SAVE_TIMER = null;
 var SYNC_TIMER = null;
+// Set while a sync is running, so the service-worker update handler knows
+// not to reload the page out from under it.
+var SYNC_IN_PROGRESS = false;
 var AUTO_REFRESH_TIMER = null;
 
 // --- STAT ORDER: enforced everywhere ---
@@ -155,6 +158,18 @@ function initState() {
     watchlist: [],
     notifications: [],
     notifBadgeCount: 0,
+    // NBA schedule, fetched once per season from proTeamSchedules_wl and
+    // keyed by proTeamId. scheduleSeasonId guards the cache so a rollover
+    // refetches instead of reusing last season's dates.
+    scheduleLookup: {},
+    scheduleSeasonId: 0,
+    // Set when a rollover probe finds ESPN has not created the new
+    // season's league yet, so the banner can say that instead of telling
+    // the user to sync again.
+    seasonNotOpen: false,
+    needsResync: false,
+    resyncReason: '',
+    resyncDismissed: false,
     prefs: {
       theme: 'larry-dark',
       defaultStatView: 'season', chartTheme: 'dark',
@@ -164,7 +179,8 @@ function initState() {
     chatHistory: [],
     analysisCache: {
       zScores: null, projections: null, tradeTargets: null,
-      puntAnalysis: null, lastComputed: null
+      puntAnalysis: null, lastComputed: null,
+      durantComputedAt: null, durantPlayerCount: 0, larryMove: null
     },
     draft: { active: false, picks: [], myPicks: [], draftedIds: [], puntCats: [] }
   };
@@ -235,6 +251,13 @@ function seasonIsStale() {
 function resyncBannerMessage() {
   if (!S || S.resyncDismissed) return '';
   if (seasonIsStale()) {
+    // A probe already established that ESPN has not created the new
+    // season's league yet, so telling the user to sync is useless advice;
+    // syncing is exactly what discovered this.
+    if (S.seasonNotOpen) {
+      return "ESPN hasn't opened your " + computeSeasonId() + ' league yet. ' +
+        'Showing the ' + S.league.seasonId + ' season until it does.';
+    }
     return 'This data is from the ' + S.league.seasonId + ' season. Sync to load ' +
       'the ' + computeSeasonId() + ' season.';
   }
@@ -244,16 +267,25 @@ function resyncBannerMessage() {
   return '';
 }
 
+// True when the banner's action button would accomplish nothing.
+function resyncBannerIsInformational() {
+  return !!(S && S.seasonNotOpen && seasonIsStale());
+}
+
 function renderResyncBanner(message) {
-  return '<div class="banner banner-warning" style="display:flex;align-items:center;' +
+  var html = '<div class="banner banner-warning" style="display:flex;align-items:center;' +
     'gap:8px;padding:10px 12px;margin-bottom:8px;background:var(--bg-input);' +
     'border-left:3px solid var(--warning,#f59e0b);border-radius:8px">' +
-    '<div style="flex:1;font-size:13px">' + esc(message) + '</div>' +
-    '<button class="btn btn-sm btn-primary" style="min-height:44px" ' +
-    'onclick="dismissResyncBanner();ESPNSync.syncAll()">Sync</button>' +
-    '<button class="btn btn-sm btn-secondary" style="min-height:44px" ' +
+    '<div style="flex:1;font-size:13px">' + esc(message) + '</div>';
+  // Only offer Sync when syncing would actually change something.
+  if (!resyncBannerIsInformational()) {
+    html += '<button class="btn btn-sm btn-primary" style="min-height:44px" ' +
+      'onclick="dismissResyncBanner();ESPNSync.syncAll()">Sync</button>';
+  }
+  html += '<button class="btn btn-sm btn-secondary" style="min-height:44px" ' +
     'aria-label="Dismiss" onclick="dismissResyncBanner();render()">Later</button>' +
     '</div>';
+  return html;
 }
 
 function dismissResyncBanner() {
@@ -1207,8 +1239,49 @@ function initApp() {
     updateSyncIndicator();
   }
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js').catch(function(e) { console.warn('SW failed:', e); });
+    registerServiceWorker();
   }
+}
+
+// The service worker calls skipWaiting() and clients.claim(), so a new
+// build takes control of the page immediately. But the page itself keeps
+// running the JS it already parsed, so the app went on using the old code
+// until the next cold launch. On an iPhone home-screen install that can be
+// days. Listening for controllerchange and reloading once closes the gap.
+function registerServiceWorker() {
+  var reloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', function() {
+    if (reloaded) return;
+    reloaded = true;
+    // A reload mid-edit would be rude, so only do it automatically when
+    // there is nothing in flight the user would lose.
+    if (SYNC_IN_PROGRESS || (typeof _chatSending !== 'undefined' && _chatSending) ||
+        (typeof _larryMoveLoading !== 'undefined' && _larryMoveLoading)) {
+      showUpdateToast();
+      return;
+    }
+    location.reload();
+  });
+  navigator.serviceWorker.register('/sw.js').catch(function(e) {
+    console.warn('SW failed:', e);
+  });
+}
+
+function showUpdateToast() {
+  var el = document.getElementById('update-toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'update-toast';
+    el.setAttribute('role', 'status');
+    el.style.cssText = 'position:fixed;left:12px;right:12px;bottom:76px;z-index:9000;' +
+      'background:var(--bg-input,#12122a);border:1px solid var(--border,#333);' +
+      'border-radius:10px;padding:10px 12px;display:flex;align-items:center;' +
+      'gap:10px;font-size:13px;box-shadow:0 4px 16px rgba(0,0,0,0.4)';
+    document.body.appendChild(el);
+  }
+  el.innerHTML = '<span style="flex:1">A new version of Larry is ready.</span>' +
+    '<button class="btn btn-sm btn-primary" style="min-height:44px" ' +
+    'onclick="location.reload()">Reload</button>';
 }
 
 document.addEventListener('DOMContentLoaded', initApp);

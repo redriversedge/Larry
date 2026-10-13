@@ -100,6 +100,11 @@ function larryMoveIrEligible(p) {
 }
 
 function buildLarryMovePayload() {
+  // Same reason as buildChatContext: a sync clears the rank cache and only
+  // render paths recompute it, so tapping the Move button first after a
+  // sync sent undefined ranks.
+  Engines.ensureDURANT(S.allPlayers || []);
+
   var cats = getOrderedCategories();
   var myPlayers = (S.myTeam.players || []).slice();
   var strat = (S.matchup && S.matchup.strategy) || {};
@@ -208,16 +213,11 @@ function requestLarryMove(force) {
   _larryMoveError = '';
   renderLarryMoveCard();
 
-  fetch('/.netlify/functions/larry-move', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  }).then(function(res) {
-    return res.json().then(function(data) {
-      if (!res.ok) throw new Error(data && data.error ? data.error : 'Request failed');
-      return data;
-    });
-  }).then(function(data) {
+  // One automatic retry. The call sits close to Netlify's 10s synchronous
+  // ceiling, so an occasional timeout is expected rather than a real
+  // failure, and the retry usually lands (the server caches by payloadHash,
+  // so a retry after a slow success is free).
+  postLarryMove(payload, 1).then(function(data) {
     if (!data || !data.move) throw new Error('Larry did not return an answer.');
     S.analysisCache = S.analysisCache || {};
     S.analysisCache.larryMove = {
@@ -233,6 +233,31 @@ function requestLarryMove(force) {
   }).then(function() {
     _larryMoveLoading = false;
     renderLarryMoveCard();
+  });
+}
+
+function postLarryMove(payload, retriesLeft) {
+  return fetch('/.netlify/functions/larry-move', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  }).then(function(res) {
+    return res.json().catch(function() { return null; }).then(function(data) {
+      if (res.ok) return data;
+      // 504 is our own timeout, 502/500 a transient upstream failure. Those
+      // are worth one more attempt; a 400 or 429 is not.
+      var retryable = res.status === 504 || res.status === 502 || res.status === 500;
+      if (retryable && retriesLeft > 0) {
+        return postLarryMove(payload, retriesLeft - 1);
+      }
+      var err = new Error(
+        res.status === 504
+          ? 'Larry took too long. Tap Retry to try again.'
+          : (data && data.error ? data.error : 'Request failed')
+      );
+      err.status = res.status;
+      throw err;
+    });
   });
 }
 

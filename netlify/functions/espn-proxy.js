@@ -2,10 +2,26 @@
 // Proxies requests to ESPN Fantasy API with auth cookies
 const https = require('https');
 
+// The only season-scoped views this proxy will fetch. Season endpoints need
+// no cookies, so anything reachable here is reachable by anyone who finds
+// the function URL; keep the list to exactly what the app uses.
+const SEASON_VIEW_ALLOWLIST = ['proTeamSchedules_wl'];
+
+function requestedViews(event) {
+  const out = [];
+  const mv = event.multiValueQueryStringParameters;
+  if (mv && mv.view) {
+    mv.view.forEach((v) => out.push(String(v)));
+  } else if (event.queryStringParameters && event.queryStringParameters.view) {
+    out.push(String(event.queryStringParameters.view));
+  }
+  return out;
+}
+
 exports.handler = async function(event) {
   const headers = {
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'Content-Type, x-espn-league-id, x-espn-s2, x-espn-swid, x-espn-season, x-fantasy-filter',
+    'Access-Control-Allow-Headers': 'Content-Type, x-espn-league-id, x-espn-s2, x-espn-swid, x-espn-season, x-espn-scope, x-fantasy-filter',
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     'Content-Type': 'application/json'
   };
@@ -18,7 +34,37 @@ exports.handler = async function(event) {
     const leagueId = event.headers['x-espn-league-id'];
     const espnS2 = event.headers['x-espn-s2'];
     const swid = event.headers['x-espn-swid'];
-    const season = event.headers['x-espn-season'] || '2026';
+    const rawSeason = event.headers['x-espn-season'];
+    // Digits only, so a header cannot inject path segments.
+    const season = /^\d{4}$/.test(String(rawSeason || '')) ? String(rawSeason) : '';
+    if (!season) {
+      return { statusCode: 400, headers, body: JSON.stringify({ error: 'Missing or invalid x-espn-season' }) };
+    }
+
+    // Season-level mode: no league id, no cookies, for endpoints that are
+    // public. Used for the NBA schedule (proTeamSchedules_wl), which the
+    // league-scoped scoreboard view does not return.
+    //
+    // The view is checked against an allowlist. Without that this proxy
+    // would be an open relay to any ESPN season endpoint, callable by
+    // anyone who found the URL.
+    const scope = event.headers['x-espn-scope'] || 'league';
+    if (scope === 'season') {
+      const views = requestedViews(event);
+      if (!views.length || !views.every((v) => SEASON_VIEW_ALLOWLIST.indexOf(v) >= 0)) {
+        return {
+          statusCode: 400, headers,
+          body: JSON.stringify({ error: 'view not permitted in season scope' }),
+        };
+      }
+      const seasonUrl = `https://lm-api-reads.fantasy.espn.com/apis/v3/games/fba/seasons/${season}` +
+        '?' + views.map((v) => 'view=' + encodeURIComponent(v)).join('&');
+      const seasonData = await makeRequest(seasonUrl, {
+        'Accept': 'application/json',
+        'User-Agent': 'Mozilla/5.0',
+      });
+      return { statusCode: 200, headers, body: seasonData };
+    }
 
     if (!leagueId || !espnS2 || !swid) {
       return { statusCode: 400, headers, body: JSON.stringify({ error: 'Missing ESPN credentials' }) };

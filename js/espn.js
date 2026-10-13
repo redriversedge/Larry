@@ -8,7 +8,9 @@ var ESPNSync = (function() {
   var PROXY_URL = '/.netlify/functions/espn-proxy';
 
   // --- FETCH THROUGH PROXY ---
-  async function fetchESPN(views, extraParams) {
+  // seasonOverride lets the rollover probe ask ESPN about a season other
+  // than the one currently in state, without writing it to state first.
+  async function fetchESPN(views, extraParams, seasonOverride) {
     var params = new URLSearchParams();
     if (views) views.forEach(function(v) { params.append('view', v); });
     if (extraParams) Object.keys(extraParams).forEach(function(k) { params.set(k, extraParams[k]); });
@@ -18,7 +20,7 @@ var ESPNSync = (function() {
       'x-espn-league-id': S.espn.leagueId,
       'x-espn-s2': S.espn.espnS2,
       'x-espn-swid': S.espn.swid,
-      'x-espn-season': String(S.league.seasonId)
+      'x-espn-season': String(seasonOverride || S.league.seasonId)
     };
 
     var resp = await fetch(url, { headers: headers });
@@ -28,9 +30,114 @@ var ESPNSync = (function() {
       if (resp.status === 401 && typeof setEspnExpired === 'function') {
         setEspnExpired(true);
       }
-      throw new Error('ESPN API returned ' + resp.status);
+      var err = new Error('ESPN API returned ' + resp.status);
+      err.status = resp.status;
+      throw err;
     }
     return await resp.json();
+  }
+
+  // Season-scoped fetch: no league id, no cookies. Only views on the
+  // proxy's allowlist are permitted.
+  async function fetchSeasonView(view, seasonId) {
+    var url = PROXY_URL + '?view=' + encodeURIComponent(view);
+    var resp = await fetch(url, {
+      headers: {
+        'x-espn-scope': 'season',
+        'x-espn-season': String(seasonId || S.league.seasonId)
+      }
+    });
+    if (!resp.ok) {
+      var err = new Error('ESPN season fetch returned ' + resp.status);
+      err.status = resp.status;
+      throw err;
+    }
+    return await resp.json();
+  }
+
+  // --- SEASON ROLLOVER ---
+  //
+  // computeSeasonId() only ever seeded initState(). An existing install kept
+  // S.league.seasonId at last season forever: every fetch sent that season,
+  // ESPN answered for that season, and parseLeagueSettings wrote the same
+  // value straight back. Nothing ever asked for the new season, so the
+  // "sync to load 2027" banner could never clear no matter how many times
+  // you tapped Sync.
+  //
+  // The fix is to probe before syncing. Pure decision logic, no I/O, so it
+  // is testable.
+  function rollOverDecision(storedSeason, computedSeason, probeStatus) {
+    if (!storedSeason || storedSeason === computedSeason) {
+      return { action: 'keep', season: computedSeason || storedSeason };
+    }
+    if (probeStatus === 200) {
+      return { action: 'adopt', season: computedSeason };
+    }
+    if (probeStatus === 404) {
+      // The new season's league does not exist yet. ESPN creates it when the
+      // manager renews, which can be weeks after the calendar rolls over.
+      return {
+        action: 'not-open',
+        season: storedSeason,
+        reason: "ESPN hasn't opened your " + computedSeason + ' league yet.'
+      };
+    }
+    // Anything else (401, 500, offline) is not evidence about the season.
+    return { action: 'keep', season: storedSeason };
+  }
+
+  // Everything that belongs to one season and must not survive a rollover.
+  // S.espn (credentials), S.prefs and S.watchlist are deliberately kept.
+  function clearSeasonScopedState() {
+    S.matchup = {};
+    S.myTeam.players = [];
+    S.myTeam.record = null;
+    (S.teams || []).forEach(function(t) { t.players = []; });
+    S.teams = [];
+    S.allPlayers = [];
+    S.freeAgents = [];
+    S.scheduleLookup = {};
+    S.analysisCache = {
+      zScores: null, monteCarlo: null, durant: null, recommendations: null,
+      puntAnalysis: null, lastComputed: null,
+      durantComputedAt: null, durantPlayerCount: 0, larryMove: null
+    };
+    S.needsResync = false;
+    S.resyncReason = '';
+    S.resyncDismissed = false;
+    S.league.schedule = [];
+  }
+
+  // Probe the computed season before syncing. Returns the season to use.
+  async function resolveSeason() {
+    var stored = S.league.seasonId;
+    var computed = computeSeasonId();
+    if (stored === computed) return { season: stored, rolled: false };
+
+    var status = 0;
+    try {
+      // mSettings is the cheapest view that proves the league exists.
+      await fetchESPN(['mSettings'], null, computed);
+      status = 200;
+    } catch (e) {
+      status = e.status || 0;
+    }
+
+    var decision = rollOverDecision(stored, computed, status);
+    if (decision.action === 'adopt') {
+      addSyncLog('success', 'Rolling over to the ' + computed + ' season');
+      clearSeasonScopedState();
+      S.league.seasonId = computed;
+      return { season: computed, rolled: true };
+    }
+    if (decision.action === 'not-open') {
+      S.needsResync = true;
+      S.resyncReason = decision.reason;
+      S.resyncDismissed = false;
+      S.seasonNotOpen = true;
+      return { season: stored, rolled: false };
+    }
+    return { season: decision.season, rolled: false };
   }
 
   // --- MAIN FETCH: LEAGUE DATA ---
@@ -525,102 +632,6 @@ var ESPNSync = (function() {
     });
   }
 
-  // --- BUILD SCHEDULE LOOKUP FROM mScoreboard ---
-  // ESPN returns scoreboard data under data.scoreboard (from mScoreboard view).
-  // data.scoreboard.proGames is an object keyed by proTeamId (string) where each
-  // value is an array of game objects. Each game has:
-  //   - date: ISO date string (e.g. "2026-03-12T00:00:00.000Z")
-  //   - proTeamIds: [awayProTeamId, homeProTeamId]
-  //   - (optionally) startTimeUTCStr or gameTime for tip-off time
-  // Returns: { [proTeamId]: [{ date, opponent, isHome, time }] }
-  function buildScheduleLookup(data) {
-    var lookup = {};
-    try {
-      var sb = data && data.scoreboard;
-      if (!sb) return lookup;
-
-      // Primary structure: scoreboard.proGames keyed by proTeamId string
-      var proGames = sb.proGames || sb.proGamesByScoringPeriod || null;
-
-      // proGamesByScoringPeriod is keyed by scoring period first, then by team
-      // Flatten it if that's what we got
-      if (proGames && !Array.isArray(proGames)) {
-        var firstVal = proGames[Object.keys(proGames)[0]];
-        // If firstVal is also an object (not array of game objects), it's nested by scoring period
-        if (firstVal && !Array.isArray(firstVal) && typeof firstVal === 'object' && !firstVal.proTeamIds) {
-          var flat = {};
-          Object.keys(proGames).forEach(function(periodId) {
-            var periodGames = proGames[periodId];
-            if (periodGames && typeof periodGames === 'object') {
-              Object.keys(periodGames).forEach(function(teamId) {
-                if (!flat[teamId]) flat[teamId] = [];
-                var games = periodGames[teamId];
-                if (Array.isArray(games)) {
-                  games.forEach(function(g) { flat[teamId].push(g); });
-                }
-              });
-            }
-          });
-          proGames = flat;
-        }
-      }
-
-      if (!proGames || typeof proGames !== 'object') return lookup;
-
-      Object.keys(proGames).forEach(function(teamIdStr) {
-        var teamId = parseInt(teamIdStr, 10);
-        var games = proGames[teamIdStr];
-        if (!Array.isArray(games)) return;
-
-        lookup[teamId] = [];
-        games.forEach(function(game) {
-          // date: prefer date field, fallback to startTimestamp
-          var rawDate = game.date || game.gameDate || game.startDate || '';
-          if (!rawDate) return;
-
-          // Normalize to YYYY-MM-DD local date string
-          var dateObj = new Date(rawDate);
-          if (isNaN(dateObj.getTime())) return;
-          var dateStr = localDateStr(dateObj);
-
-          // Determine opponent and home/away
-          // proTeamIds: [awayId, homeId] based on ESPN convention
-          var proTeamIds = game.proTeamIds || [];
-          var awayId = proTeamIds[0] || 0;
-          var homeId = proTeamIds[1] || 0;
-          var isHome = homeId === teamId;
-          var opponentId = isHome ? awayId : homeId;
-          var opponent = ESPN_TEAM_MAP[opponentId] || ('T' + opponentId);
-
-          // Game time: ESPN may provide startTimeUTCStr, or we format from date
-          var time = '';
-          if (game.startTimeUTCStr) {
-            time = game.startTimeUTCStr;
-          } else if (game.gameTime || game.time) {
-            time = game.gameTime || game.time;
-          } else if (rawDate && rawDate.indexOf('T') >= 0) {
-            // Render in the user's own timezone. This used to subtract a flat
-            // 5 hours and label the result "ET", which was wrong for every
-            // user outside Eastern and wrong for everyone during daylight
-            // time. toLocaleTimeString handles both.
-            time = dateObj.toLocaleTimeString([], {
-              hour: 'numeric', minute: '2-digit'
-            });
-          }
-
-          lookup[teamId].push({
-            date: dateStr,
-            opponent: opponent,
-            isHome: isHome,
-            time: time
-          });
-        });
-      });
-    } catch (e) {
-      console.warn('buildScheduleLookup error:', e.message);
-    }
-    return lookup;
-  }
 
   // --- PARSE FREE AGENTS ---
   function parseFreeAgents(data) {
@@ -638,16 +649,106 @@ var ESPNSync = (function() {
     });
   }
 
+  // --- NBA SCHEDULE ---
+  //
+  // The old builder read data.scoreboard.proGames from the league-scoped
+  // mScoreboard view. ESPN does not return that for this league, so
+  // S.scheduleLookup was always empty, every player had schedule: [], and
+  // gamesRemaining fell back to a constant for all 666 players. Everything
+  // downstream (streaming, schedule advantage, ROS projections, Larry's
+  // Move) was running on that estimate.
+  //
+  // proTeamSchedules_wl is a season-level endpoint that returns the real
+  // full-season schedule for all 30 teams. No cookies needed.
+  //
+  // Shape: settings.proTeams[] with { id, abbrev, proGamesByScoringPeriod }
+  // keyed by scoring period, each a list of
+  // { id, date (epoch ms), homeProTeamId, awayProTeamId, scoringPeriodId }.
+  function buildScheduleLookup(data) {
+    var lookup = {};
+    var teams = data && data.settings && data.settings.proTeams;
+    if (!teams || !teams.length) return lookup;
+
+    for (var t = 0; t < teams.length; t++) {
+      var team = teams[t];
+      if (!team || !team.id) continue;
+      var byPeriod = team.proGamesByScoringPeriod;
+      if (!byPeriod) continue;
+
+      var games = [];
+      var periods = Object.keys(byPeriod);
+      for (var p = 0; p < periods.length; p++) {
+        var list = byPeriod[periods[p]];
+        if (!list || !list.length) continue;
+        for (var g = 0; g < list.length; g++) {
+          var game = list[g];
+          if (!game || !game.date) continue;
+          var isHome = game.homeProTeamId === team.id;
+          var oppId = isHome ? game.awayProTeamId : game.homeProTeamId;
+          // Epoch ms -> LOCAL date string. Never toISOString: that yields a
+          // UTC date, which is the previous day for an evening game in US
+          // Central and silently drops today's games after 7pm.
+          var when = new Date(game.date);
+          games.push({
+            date: localDateStr(when),
+            timeLocal: game.startTimeTBD ? '' :
+              when.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+            opponent: ESPN_TEAM_MAP[oppId] || '???',
+            opponentId: oppId,
+            isHome: isHome,
+            scoringPeriodId: game.scoringPeriodId || Number(periods[p]) || 0
+          });
+        }
+      }
+      games.sort(function(a, b) { return a.date < b.date ? -1 : (a.date > b.date ? 1 : 0); });
+      lookup[team.id] = games;
+    }
+    return lookup;
+  }
+
+  // Schedules are the same for everyone and barely change, so fetch once per
+  // season and reuse. Keyed by season so a rollover refetches.
+  async function loadNbaSchedule() {
+    if (S.scheduleLookup && S.scheduleSeasonId === S.league.seasonId &&
+        Object.keys(S.scheduleLookup).length) {
+      return;
+    }
+    try {
+      var data = await fetchSeasonView('proTeamSchedules_wl', S.league.seasonId);
+      var lookup = buildScheduleLookup(data);
+      var teamCount = Object.keys(lookup).length;
+      if (teamCount) {
+        S.scheduleLookup = lookup;
+        S.scheduleSeasonId = S.league.seasonId;
+        addSyncLog('success', 'Loaded NBA schedule for ' + teamCount + ' teams');
+      } else {
+        console.warn('proTeamSchedules_wl returned no usable teams');
+      }
+    } catch (e) {
+      // Not fatal: gamesRemaining falls back to an estimate.
+      console.warn('NBA schedule fetch failed:', e.message);
+      addSyncLog('error', 'Could not load the NBA schedule; using estimates');
+    }
+  }
+
   // --- FULL SYNC ---
   async function syncAll() {
+    if (SYNC_IN_PROGRESS) return;
+    SYNC_IN_PROGRESS = true;
     try {
       updateSyncIndicator('syncing');
+
+      // Decide which season we are in BEFORE fetching anything, or an
+      // existing install can never leave last season.
+      var seasonInfo = await resolveSeason();
+
       var data = await fetchLeague();
       if (data) {
         ESPNSync._lastLeagueData = data;
         parseLeagueSettings(data);
         parseTeams(data);
-        S.scheduleLookup = buildScheduleLookup(data);
+
+        await loadNbaSchedule();
         enrichPlayerSchedules();
         if (S.myTeam.teamId > 0) parseMatchup(data);
 
@@ -663,6 +764,12 @@ var ESPNSync = (function() {
         }
 
         enrichGamesRemaining();
+
+        // Rank before anything reads ranks. The sync clears
+        // durantComputedAt, and only render paths called ensureDURANT, so
+        // opening Larry chat or the Move card first after a sync sent
+        // durantRank and durantScore as undefined.
+        Engines.ensureDURANT(S.allPlayers);
         Engines.computeMatchupStrategy();
         Engines.rosProjections(S.allPlayers);
 
@@ -670,11 +777,17 @@ var ESPNSync = (function() {
         S.espn.connected = true;
         // Phase 2: clear the expired-cookies flag on successful sync.
         S.espn.cookieExpired = false;
-        // Fresh data clears the migration / stale-season prompt.
-        S.needsResync = false;
-        S.resyncReason = '';
-        S.resyncDismissed = false;
-        addSyncLog('success', 'Synced ' + S.teams.length + ' teams, ' + S.allPlayers.length + ' players');
+        // Fresh data clears the migration prompt. The season-not-open
+        // notice is the exception: a successful sync of LAST season does
+        // not mean the new one has opened.
+        if (!S.seasonNotOpen) {
+          S.needsResync = false;
+          S.resyncReason = '';
+          S.resyncDismissed = false;
+        }
+        addSyncLog('success', 'Synced ' + S.teams.length + ' teams, ' +
+          S.allPlayers.length + ' players' +
+          (seasonInfo.rolled ? ' (' + S.league.seasonId + ' season)' : ''));
         S.analysisCache.lastComputed = null;
         autosave();
         updateSyncIndicator('connected');
@@ -684,6 +797,8 @@ var ESPNSync = (function() {
       addSyncLog('error', e.message);
       updateSyncIndicator('error');
       console.error('Sync failed:', e);
+    } finally {
+      SYNC_IN_PROGRESS = false;
     }
   }
 
@@ -860,6 +975,13 @@ var ESPNSync = (function() {
     splitGP: splitGP,
     toPerGameStats: toPerGameStats,
     migrateStatsToPerGame: migrateStatsToPerGame,
-    fetchScoringPeriodStats: fetchScoringPeriodStats
+    fetchScoringPeriodStats: fetchScoringPeriodStats,
+    // Exported for tests and for the banner's Sync button.
+    rollOverDecision: rollOverDecision,
+    buildScheduleLookup: buildScheduleLookup,
+    clearSeasonScopedState: clearSeasonScopedState,
+    loadNbaSchedule: loadNbaSchedule,
+    enrichPlayerSchedules: enrichPlayerSchedules,
+    countGamesInRange: countGamesInRange
   };
 })();

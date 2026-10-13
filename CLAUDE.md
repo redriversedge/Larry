@@ -126,7 +126,7 @@ Files in `js/` deploy straight to the browser with no build step, so whatever is
 
 ## ESPN API
 
-- Endpoint: `https://lm-api-reads.fantasy.espn.com/apis/v3/games/fba/seasons/2026/segments/0/leagues/{leagueId}`
+- Endpoint: `https://lm-api-reads.fantasy.espn.com/apis/v3/games/fba/seasons/{seasonId}/segments/0/leagues/{leagueId}`
 - Views: `mTeam`, `mRoster`, `mMatchup`, `mMatchupScore`, `mSettings`, `kona_player_info`
 - Auth: `Cookie: espn_s2={espn_s2}; SWID={swid}` passed via proxy
 - Position IDs: 1=PG, 2=SG, 3=SF, 4=PF, 5=C, 12=Bench, 13=IR

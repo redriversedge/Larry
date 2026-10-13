@@ -132,6 +132,11 @@ function formatChatMessage(text) {
 // into the prompt. The client now sends only typed fields; the function
 // sanitizes them and does all the prompt construction.
 function buildChatContext() {
+  // A sync clears durantComputedAt and only render paths recompute, so
+  // opening chat first after a sync used to send every durantRank and
+  // durantScore as undefined. Cheap when already current.
+  Engines.ensureDURANT(S.allPlayers || []);
+
   var cats = getOrderedCategories();
   var rec = S.myTeam.record || { wins: 0, losses: 0, ties: 0 };
   var strat = S.matchup.strategy || {};
