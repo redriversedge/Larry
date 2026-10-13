@@ -14,6 +14,36 @@ export const Q_POOL_ITERATIONS = 2;
 // real number.
 export const DEFAULT_ROSTER_SIZE = 13;
 
+// --- Ranking v2 base value (docs/RANKING_V2_SPEC.md, HANDOFF.md phase 2) ---
+
+// Shrink constant for small samples. pg' = w * pg + (1 - w) * poolMean where
+// w = gp / (gp + SHRINK_K). At k=8 a 15-game sample keeps ~65% of its own
+// rate; a 60-game sample keeps ~88%. This is what stops a star who missed
+// most of last season from being ranked as a scrub: under the legacy
+// totals-based z, Trae Young's 269 points over 15 games read as z = -3.0.
+export const SHRINK_K = 8;
+
+// Per-category z clamp. One freak category (a 10-stdev blocks outlier on a
+// tiny sample) must not dominate the sum of five.
+export const Z_CAP = 3.0;
+
+// Minimum games played to join the first-pass pool that seeds the Q-pool
+// iteration. Below this the per-game rate is too noisy to describe the
+// population.
+export const MIN_GP_POOL = 10;
+
+// A full NBA season. Two uses: the divisor turning projectedSeason totals
+// into a per-game rate, and the point past which no shrink applies.
+export const FULL_SEASON_GAMES = 82;
+
+// baseValue (a sum of z-scores, roughly -5 to +8) -> durantScore. The legacy
+// score was zTotal * 10 and several absolute thresholds were tuned against
+// that scale: the +3 free-agent notification gap in tabs.js, the trade
+// acceptance margin and the 40/60 blend in engines.js. Scaling at the legacy
+// boundary keeps those meaningful without touching three unrelated call
+// sites. The engine itself always returns the unscaled baseValue.
+export const DURANT_SCALE = 10;
+
 // G-score variance kappa. final variance term = var_acrossPlayers + kappa *
 // var_weekToWeek. kappa = 1.0 weights player-pool variance and per-player
 // week-to-week noise equally. Empirical kappa per category gets tuned in

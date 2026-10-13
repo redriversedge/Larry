@@ -10,7 +10,23 @@ export {
   toPlayerProjection,
 } from "./projectionSource";
 export { teamNeedVector, computeLeagueAverages, rosterTotal } from "./teamFit";
-export { buildQPool, zVector, gVector, gScore, sumVector } from "./zscore";
+export {
+  applyHaircut,
+  buildQPool,
+  computeBaseValues,
+  gScore,
+  gVector,
+  sumVector,
+  zVector,
+} from "./zscore";
+export type {
+  BaseValueInput,
+  BaseValueOptions,
+  BaseValueResult,
+  BaseValueRow,
+  PoolStats,
+} from "./zscore";
+export { DURANT_SCALE } from "./constants";
 export type {
   Breakdown,
   Category,

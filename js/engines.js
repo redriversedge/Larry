@@ -28,16 +28,16 @@ var Engines = (function() {
       catStats[cat.abbr] = { mean: mean, stdDev: stdDev, scarcity: 1, variance: variance };
     });
 
-    // Scarcity weighting
-    var cvs = [];
+    // Category weighting. This used to scale each z by a "scarcity" factor
+    // derived from the category's coefficient of variation, which quietly
+    // up-weighted BLK and STL because those have the widest relative spread.
+    // In H2H each-category every category is worth exactly one win, so equal
+    // weights are correct. The cv is still reported for display; scarcity is
+    // held at 1 so nothing downstream has to change shape.
     cats.forEach(function(cat) {
       var cs = catStats[cat.abbr];
       cs.cv = cs.mean !== 0 ? cs.stdDev / Math.abs(cs.mean) : 1;
-      cvs.push(cs.cv);
-    });
-    var maxCV = Math.max.apply(null, cvs) || 1;
-    cats.forEach(function(cat) {
-      catStats[cat.abbr].scarcity = 0.5 + 0.5 * (catStats[cat.abbr].cv / maxCV);
+      cs.scarcity = 1;
     });
 
     // Compute z-scores
@@ -201,59 +201,193 @@ var Engines = (function() {
   }
 
 
-  // ========== ENGINE 3: DURANT RANKING ==========
+  // ========== ENGINE 3: DURANT RANKING (v2) ==========
+  //
+  // Base value is a per-game z-score against a starter-quality pool, computed
+  // by window.LarryEngine.computeBaseValues (src/engine/zscore.ts). See
+  // docs/RANKING_V2_SPEC.md. Nothing multiplies the base score: no injury
+  // discount, no games-remaining factor, no trend or scarcity bonus. Those
+  // either made the ranking worse against expert consensus or, in the case of
+  // the injury multiplier, actively inverted it for anyone below zero.
+  //
+  // Measured on the Oct 12 2026 snapshot against the FantasyPros 6-expert
+  // consensus top 150: rank correlation moves from 0.296 to 0.786, and the
+  // OUT stars the old multiplier buried (Doncic 83rd, Giannis 199th, Tatum
+  // 404th) come back to 2nd, 12th and 21st.
+
+  // The five categories src/shared/types.ts CategoryVector understands. A
+  // league scoring 3PM or FG% still ranks on the counting stats it shares
+  // with this list; widening it is engine work, not a mapping change.
+  var V2_CATEGORIES = ['REB', 'AST', 'STL', 'BLK', 'PTS'];
+
+  function v2LeagueCategories() {
+    var cats = getOrderedCategories();
+    var out = [];
+    cats.forEach(function(cat) {
+      if (V2_CATEGORIES.indexOf(cat.abbr) >= 0) out.push(cat.abbr);
+    });
+    return out.length ? out : V2_CATEGORIES.slice();
+  }
+
+  // Single source of truth for turning a legacy player into per-game rates.
+  // Larry's parser stores stats.season as season TOTALS, so we divide by
+  // games played; a player with no games falls back to projectedSeason over a
+  // full year. When HANDOFF phase 1 moves normalization to parse time this
+  // function is the only thing that has to change: set perGame directly and
+  // the engine takes it unmodified.
+  function v2BaseValueInput(p) {
+    var season = (p.stats && p.stats.season) || {};
+    var projected = (p.stats && p.stats.projectedSeason) || {};
+    var seasonTotals = {};
+    var projectedSeason = {};
+    for (var i = 0; i < V2_CATEGORIES.length; i++) {
+      var c = V2_CATEGORIES[i];
+      seasonTotals[c] = typeof season[c] === 'number' ? season[c] : 0;
+      projectedSeason[c] = typeof projected[c] === 'number' ? projected[c] : 0;
+    }
+    return {
+      id: String(p.id),
+      gamesPlayed: p.gamesPlayed || 0,
+      seasonTotals: seasonTotals,
+      projectedSeason: projectedSeason
+    };
+  }
+
+  // Per-game rates for a legacy player object, derived the same way the
+  // ranking derives them. ESPN stat IDs (0=PTS, 1=BLK, 2=STL, 3=AST, 6=REB)
+  // land in p.stats.season as season TOTALS, so divide by games played; a
+  // player with no games falls back to projectedSeason over a full year.
+  function v2PerGame(p) {
+    var perGame = { REB: 0, AST: 0, STL: 0, BLK: 0, PTS: 0 };
+    var season = (p.stats && p.stats.season) || {};
+    var projected = (p.stats && p.stats.projectedSeason) || {};
+    var gp = p.gamesPlayed || 0;
+    for (var i = 0; i < V2_CATEGORIES.length; i++) {
+      var c = V2_CATEGORIES[i];
+      if (gp > 0) {
+        perGame[c] = typeof season[c] === 'number' ? season[c] / gp : 0;
+      } else {
+        perGame[c] = typeof projected[c] === 'number' ? projected[c] / 82 : 0;
+      }
+    }
+    return perGame;
+  }
+
+  function v2RosterSize() {
+    return (S && S.league && S.league.rosterSize) || 13;
+  }
 
   function computeDURANT(players, opts) {
     opts = opts || {};
-    var cats = getOrderedCategories();
+    // Still needed: this is where p.trend and p.frustrationValue come from,
+    // and several tabs read them. The z-scores it writes are overwritten
+    // below with the v2 per-game values.
     computeAllZScores(players, 'season');
 
+    var Eng = window.LarryEngine;
+    if (!Eng || typeof Eng.computeBaseValues !== 'function') {
+      console.warn('LarryEngine not loaded; DURANT falling back to legacy z-total');
+      computeDURANTLegacy(players);
+      return;
+    }
+
+    var cats = v2LeagueCategories();
+    var scale = typeof Eng.DURANT_SCALE === 'number' ? Eng.DURANT_SCALE : 10;
+    var inputs = players.map(v2BaseValueInput);
+    var result = Eng.computeBaseValues(inputs, {
+      categories: cats,
+      rosterSize: v2RosterSize()
+    });
+
+    var rowById = {};
+    result.rows.forEach(function(row) { rowById[row.id] = row; });
+
     players.forEach(function(p) {
-      var zTotal = p.zScores ? p.zScores.total || 0 : 0;
-      var gamesRemaining = p.gamesRemaining || 0;
-      var gp = p.gamesPlayed || 0;
-      var trendBonus = p.trend === 'hot' ? 0.15 : (p.trend === 'cold' ? -0.10 : 0);
-
-      // Scarcity bonus for rare position production
-      var scarcityBonus = 0;
-      cats.forEach(function(cat) {
-        var z = p.zScores ? p.zScores[cat.abbr] || 0 : 0;
-        if (z > 1.5) scarcityBonus += 0.05 * z;
-      });
-
-      // Schedule factor (games remaining vs average)
-      var avgGamesRemaining = 0;
-      var countForAvg = 0;
-      players.forEach(function(pl) {
-        if (pl.gamesRemaining > 0) { avgGamesRemaining += pl.gamesRemaining; countForAvg++; }
-      });
-      avgGamesRemaining = countForAvg > 0 ? avgGamesRemaining / countForAvg : 3;
-      var schedFactor = avgGamesRemaining > 0 ? (gamesRemaining / avgGamesRemaining) : 1;
-      schedFactor = Math.max(0.5, Math.min(1.5, schedFactor));
-
-      // v3 FIX: Weight z-score heavily, factor in games + trend + scarcity
-      p.durantScore = (zTotal * 10 * schedFactor) + (trendBonus * 10) + scarcityBonus;
-
-      // Reliability factor (more games = more reliable)
-      if (gp < 10) p.durantScore *= 0.7;
-      else if (gp < 20) p.durantScore *= 0.85;
-
-      // Injury discount
-      if (p.injuryStatus === 'OUT' || p.injuryStatus === 'SUSPENSION') p.durantScore *= 0.3;
-      else if (p.injuryStatus === 'GTD' || p.injuryStatus === 'DAY_TO_DAY' || p.injuryStatus === 'GAME_TIME_DECISION') p.durantScore *= 0.85;
+      var row = rowById[String(p.id)];
+      if (!row) { p.durantScore = 0; return; }
+      // Scaled by 10 to sit on the same range as the old zTotal * 10 score,
+      // because the +3 free agent gap in tabs.js and the trade acceptance
+      // margin here are absolute numbers tuned against it.
+      p.durantScore = row.baseValue * scale;
+      // Replace the totals-based, scarcity-weighted z-scores with the v2
+      // per-game ones so the Z column, matchupAdjustedValue and the trade
+      // analyzer all read the corrected numbers.
+      var z = { total: 0 };
+      for (var i = 0; i < cats.length; i++) {
+        var c = cats[i];
+        z[c] = row.z[c];
+        z.total += row.z[c];
+      }
+      p.zScores = z;
+      p.perGameStats = row.perGame;
     });
 
     // Rank
     players.sort(function(a,b) { return (b.durantScore || 0) - (a.durantScore || 0); });
     players.forEach(function(p, i) { p.durantRank = i + 1; });
 
-    // Compute effectiveDURANT for all players
+    // Availability stays a separate field. It is read by add/drop, streaming
+    // and lineup logic only; it must never move a player's season-long rank.
     var boostMap = computeOpportunityBoost(players);
     players.forEach(function(p) {
-      var availability = computeAvailabilityScore(p);
+      p.availability = computeAvailabilityScore(p);
       var boost = boostMap[p.proTeamId] || 1.0;
-      p.effectiveDURANT = (p.durantScore || 0) * availability * boost;
+      p.effectiveDURANT = applyDurantHaircut(p.durantScore, p.availability * boost);
     });
+  }
+
+  // Multipliers only ever reduce. Applying a 0.3x to a negative score raised
+  // it, which is how an OUT player on z -4.2 outranked a healthy player on
+  // z -4.1 by 131 places.
+  function applyDurantHaircut(score, factor) {
+    var Eng = window.LarryEngine;
+    if (Eng && typeof Eng.applyHaircut === 'function') return Eng.applyHaircut(score || 0, factor);
+    var s = score || 0;
+    return s > 0 ? s * factor : s;
+  }
+
+  // Pre-v2 scoring, kept only as a fallback for when dist/larry-engine.js
+  // fails to load. Do not extend this; it has the defects documented in
+  // docs/RANKING_V2_SPEC.md.
+  function computeDURANTLegacy(players) {
+    var cats = getOrderedCategories();
+    players.forEach(function(p) {
+      var zTotal = p.zScores ? p.zScores.total || 0 : 0;
+      var trendBonus = p.trend === 'hot' ? 0.15 : (p.trend === 'cold' ? -0.10 : 0);
+      var scarcityBonus = 0;
+      cats.forEach(function(cat) {
+        var z = p.zScores ? p.zScores[cat.abbr] || 0 : 0;
+        if (z > 1.5) scarcityBonus += 0.05 * z;
+      });
+      p.durantScore = (zTotal * 10) + (trendBonus * 10) + scarcityBonus;
+    });
+    players.sort(function(a,b) { return (b.durantScore || 0) - (a.durantScore || 0); });
+    players.forEach(function(p, i) { p.durantRank = i + 1; });
+    var boostMap = computeOpportunityBoost(players);
+    players.forEach(function(p) {
+      p.availability = computeAvailabilityScore(p);
+      var boost = boostMap[p.proTeamId] || 1.0;
+      p.effectiveDURANT = applyDurantHaircut(p.durantScore, p.availability * boost);
+    });
+  }
+
+  // DURANT is a whole-population computation: a Q-pool plus two iterations
+  // over every player Larry knows about. It only changes when the data
+  // changes, but it used to run on seven different render paths, including
+  // every tap of the Roster date navigation. Compute it once per sync and
+  // let renders read the result.
+  function ensureDURANT(players) {
+    if (!players || !players.length) return;
+    if (!S) return;
+    var stamp = (S.espn && S.espn.lastSync) || '';
+    S.analysisCache = S.analysisCache || {};
+    if (S.analysisCache.durantComputedAt === stamp &&
+        S.analysisCache.durantPlayerCount === players.length) {
+      return;
+    }
+    computeDURANT(players);
+    S.analysisCache.durantComputedAt = stamp;
+    S.analysisCache.durantPlayerCount = players.length;
   }
 
 
@@ -334,24 +468,9 @@ var Engines = (function() {
 
   function v2BuildPlayerProjection(p) {
     // Project the legacy player object into the shape src/shared/types.ts
-    // PlayerProjection expects. Larry's parser maps ESPN stat IDs
-    // (0=PTS, 1=BLK, 2=STL, 3=AST, 6=REB) to category abbrs in
-    // p.stats.season as season *totals*. Divide by gamesPlayed for per-game.
-    // For rookies / mid-season pickups with gp=0, fall back to projectedSeason
-    // pro-rated over an 82-game season.
-    var perGame = { REB: 0, AST: 0, STL: 0, BLK: 0, PTS: 0 };
-    var season = (p.stats && p.stats.season) || {};
-    var projected = (p.stats && p.stats.projectedSeason) || {};
-    var gp = p.gamesPlayed || 0;
-    ['REB','AST','STL','BLK','PTS'].forEach(function(c) {
-      if (gp > 0) {
-        var raw = season[c];
-        perGame[c] = typeof raw === 'number' ? raw / gp : 0;
-      } else {
-        var praw = projected[c];
-        perGame[c] = typeof praw === 'number' ? praw / 82 : 0;
-      }
-    });
+    // PlayerProjection expects. The per-game derivation is shared with the
+    // ranking so the two can never disagree about what a player produced.
+    var perGame = v2PerGame(p);
     var positions = (p.positions || []).filter(function(pos) {
       return ['PG','SG','SF','PF','C'].indexOf(pos) >= 0;
     });
@@ -478,9 +597,9 @@ var Engines = (function() {
     var boostMap = computeOpportunityBoost(allPlayers);
 
     allPlayers.forEach(function(p) {
-      var availability = computeAvailabilityScore(p);
+      p.availability = computeAvailabilityScore(p);
       var boost = boostMap[p.proTeamId] || 1.0;
-      p.effectiveDURANT = (p.durantScore || 0) * availability * boost;
+      p.effectiveDURANT = applyDurantHaircut(p.durantScore, p.availability * boost);
     });
 
     var cats = getOrderedCategories();
@@ -1012,6 +1131,7 @@ var Engines = (function() {
   return {
     computeAllZScores: computeAllZScores,
     computeDURANT: computeDURANT,
+    ensureDURANT: ensureDURANT,
     monteCarloMatchup: monteCarloMatchup,
     generateRecommendations: generateRecommendations,
     analyzeTrade: analyzeTrade,

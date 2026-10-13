@@ -2,12 +2,15 @@
 // per-game category profiles so tests can reason about the math without
 // having to read the engine internals.
 
+import type { BaseValueInput } from "../../src/engine/zscore";
 import type {
+  Category,
   CategoryVector,
   PlayerProjection,
   Position,
   RosterContext,
 } from "../../src/shared/types";
+import { CATEGORIES } from "../../src/shared/types";
 
 export function makePlayer(args: {
   id: string;
@@ -27,6 +30,36 @@ export function makePlayer(args: {
     perGame: args.perGame,
     injuryStatus: args.injuryStatus ?? "ACTIVE",
   };
+}
+
+// Build a ranking-v2 input from a per-game profile. Takes the per-game rate
+// the player actually produced and multiplies back up to season totals, which
+// is the shape ESPN gives us today, so tests can reason in per-game terms
+// while exercising the division the engine performs.
+export function makeBaseValueInput(args: {
+  id: string;
+  perGame: CategoryVector;
+  gamesPlayed: number;
+  // When set, emit totals under projectedSeason instead of seasonTotals.
+  // Used for the gp = 0 cases.
+  asProjection?: boolean;
+  // When set, pass the per-game vector straight through instead of encoding
+  // it as totals. This is the shape HANDOFF phase 1 will produce.
+  asPerGame?: boolean;
+  cats?: readonly Category[];
+}): BaseValueInput {
+  const cats = args.cats ?? CATEGORIES;
+  if (args.asPerGame) {
+    return { id: args.id, gamesPlayed: args.gamesPlayed, perGame: args.perGame };
+  }
+  if (args.asProjection) {
+    const projectedSeason: Partial<CategoryVector> = {};
+    for (const c of cats) projectedSeason[c] = args.perGame[c] * 82;
+    return { id: args.id, gamesPlayed: args.gamesPlayed, projectedSeason };
+  }
+  const seasonTotals: Partial<CategoryVector> = {};
+  for (const c of cats) seasonTotals[c] = args.perGame[c] * args.gamesPlayed;
+  return { id: args.id, gamesPlayed: args.gamesPlayed, seasonTotals };
 }
 
 // Build a synthetic 12-team league: 12 teams x 13 players. Stat profiles are

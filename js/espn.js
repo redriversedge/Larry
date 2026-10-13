@@ -319,9 +319,13 @@ var ESPNSync = (function() {
         });
         player.stats[splitName] = mapped;
 
-        // GP and MPG from season
+        // GP and MPG from season. Stat id 42 is games played; 40 is MINUTES
+        // and was never a valid fallback for it. A player whose GP silently
+        // became their minutes total would have every per-game rate divided
+        // by roughly 30x too much, which now feeds the DURANT ranking
+        // directly.
         if (splitName === 'season') {
-          player.gamesPlayed = statSet.stats['42'] || statSet.stats['40'] || mapped['GP'] || 0;
+          player.gamesPlayed = statSet.stats['42'] || mapped['GP'] || 0;
           if (player.gamesPlayed === 0 && statSet.appliedTotal) player.gamesPlayed = Math.round(statSet.appliedTotal / 20) || 0;
           player.minutesPerGame = statSet.stats['28'] || mapped['MPG'] || 0;
         }

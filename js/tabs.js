@@ -181,7 +181,7 @@ function renderRoster(container) {
 
   // Strategy one-liner + Decision Hub (v3: horizontal add/drop tile row)
   if (S.allPlayers.length) {
-    Engines.computeDURANT(S.allPlayers);
+    Engines.ensureDURANT(S.allPlayers);
     var strat = S.matchup.strategy || {};
     if (strat.summary) {
       html += '<div style="padding:8px 12px;margin-bottom:8px;background:var(--bg-input);border-radius:8px;font-size:13px">';
@@ -882,6 +882,14 @@ function handlePlayersSearch(value) {
   }, 250);
 }
 
+// The Players table label used to be hard-coded to "Availability Score",
+// which was never what it sorted on. Report the column actually in use.
+function playersSortLabel() {
+  if (_playersSortCol === 'durantScore') return 'DURANT Rank';
+  if (_playersSortCol === 'name') return 'Name';
+  return _playersSortCol;
+}
+
 function renderPlayersList() {
   var listContainer = document.getElementById('players-list-container');
   if (!listContainer) return;
@@ -894,9 +902,7 @@ function renderPlayersList() {
   }
 
   // Compute rankings if needed
-  if (players.length && (!players[0].durantScore && players[0].durantScore !== 0)) {
-    Engines.computeDURANT(players);
-  }
+  Engines.ensureDURANT(players);
 
   // Filter
   var filtered = players.filter(function(p) {
@@ -924,9 +930,11 @@ function renderPlayersList() {
     return true;
   });
 
-  // Sort by DURANT by default
+  // Sort by DURANT by default. The rank column prints p.durantRank, so this
+  // has to sort on the same field the rank was assigned from; it used to
+  // sort on effectiveDURANT and print durantRank, which disagreed.
   filtered.sort(function(a,b) {
-    if (_playersSortCol === 'durantScore') return (b.effectiveDURANT || 0) - (a.effectiveDURANT || 0);
+    if (_playersSortCol === 'durantScore') return (b.durantScore || 0) - (a.durantScore || 0);
     if (_playersSortCol === 'name') return (a.name || '').localeCompare(b.name || '');
     // Sort by stat
     var aVal, bVal;
@@ -951,7 +959,7 @@ function renderPlayersList() {
   // Render table
   var html = trendingHtml;
   html += '<div class="text-xs muted" style="margin-bottom:6px">' + filtered.length + ' players</div>';
-  html += '<p class="sort-label">Sorted by Availability Score</p>';
+  html += '<p class="sort-label">Sorted by ' + playersSortLabel() + '</p>';
   html += '<div class="table-scroll"><table class="data-table compact">';
   html += '<thead><tr>';
   html += '<th style="text-align:left;min-width:28px">#</th>';
@@ -1008,8 +1016,8 @@ function renderTrendingSection(allPlayers) {
     if (p.trend === 'hot') risers.push(p);
     else if (p.trend === 'cold') fallers.push(p);
   });
-  risers = risers.sort(function(a, b) { return (b.effectiveDURANT || 0) - (a.effectiveDURANT || 0); }).slice(0, 5);
-  fallers = fallers.sort(function(a, b) { return (b.effectiveDURANT || 0) - (a.effectiveDURANT || 0); }).slice(0, 5);
+  risers = risers.sort(function(a, b) { return (b.durantScore || 0) - (a.durantScore || 0); }).slice(0, 5);
+  fallers = fallers.sort(function(a, b) { return (b.durantScore || 0) - (a.durantScore || 0); }).slice(0, 5);
 
   if (!risers.length && !fallers.length) return '<p class="empty-state">Not enough data for trends yet.</p>';
 
@@ -1198,7 +1206,7 @@ function renderStandings() {
 
 function renderTradeCenter() {
   var html = '';
-  if (S.allPlayers.length) Engines.computeDURANT(S.allPlayers);
+  if (S.allPlayers.length) Engines.ensureDURANT(S.allPlayers);
 
   // Search for specific player trades
   html += '<div class="card"><div class="card-header">Trade Finder</div>';
@@ -1345,7 +1353,7 @@ function renderROSProjections() {
   cats.forEach(function(cat) { html += '<th style="color:' + cat.color + '">' + cat.abbr + '</th>'; });
   html += '</tr></thead><tbody>';
 
-  myPlayers.sort(function(a,b) { return (b.effectiveDURANT || 0) - (a.effectiveDURANT || 0); });
+  myPlayers.sort(function(a,b) { return (b.durantScore || 0) - (a.durantScore || 0); });
   myPlayers.forEach(function(p) {
     html += '<tr><td style="text-align:left;cursor:pointer" onclick="openPlayerPopup(' + p.id + ')">' + esc(p.name) + '</td>';
     html += '<td>' + (p.rosGamesLeft || '-') + '</td>';
@@ -1416,8 +1424,11 @@ function renderDraftCenter() {
   var players = (S.allPlayers || []).slice();
   if (!players.length) return '<div class="empty-state"><p>No player data.</p></div>';
 
-  Engines.computeDURANT(players);
-  players.sort(function(a,b) { return (b.effectiveDURANT || 0) - (a.effectiveDURANT || 0); });
+  Engines.ensureDURANT(S.allPlayers);
+  // Draft value is season-long, so tier on the base score. Availability and
+  // opportunity boost are week-to-week concerns and do not belong in a
+  // draft board.
+  players.sort(function(a,b) { return (b.durantScore || 0) - (a.durantScore || 0); });
 
   // Assign tiers and projected rounds
   players.forEach(function(p, i) {
@@ -1490,7 +1501,7 @@ function renderProjectedStandings() {
   var cats = getOrderedCategories();
 
   // Compute DURANT for all players for z-score access
-  if (S.allPlayers.length) Engines.computeDURANT(S.allPlayers);
+  if (S.allPlayers.length) Engines.ensureDURANT(S.allPlayers);
 
   // Current standings with category wins projected
   var teamData = S.teams.map(function(team) {
@@ -1594,7 +1605,7 @@ function renderOpponentScout() {
   if (!oppTeam) return '<div class="empty-state"><p>No current opponent. Check back during an active matchup.</p></div>';
 
   var cats = getOrderedCategories();
-  if (S.allPlayers.length) Engines.computeDURANT(S.allPlayers);
+  if (S.allPlayers.length) Engines.ensureDURANT(S.allPlayers);
 
   // Opponent header
   var oppRec = oppTeam.record || {wins:0,losses:0,ties:0};
@@ -1628,7 +1639,7 @@ function renderOpponentScout() {
 
   // Opponent roster
   var oppPlayers = (oppTeam.players || []).slice();
-  oppPlayers.sort(function(a,b) { return (b.effectiveDURANT || 0) - (a.effectiveDURANT || 0); });
+  oppPlayers.sort(function(a,b) { return (b.durantScore || 0) - (a.durantScore || 0); });
 
   html += '<div class="card"><div class="card-header">Opponent Roster</div>';
   html += '<div class="table-scroll"><table class="data-table compact">';
@@ -1698,7 +1709,7 @@ function renderNewsInjuries() {
     var ao = statusOrder[a.injuryStatus] !== undefined ? statusOrder[a.injuryStatus] : 3;
     var bo = statusOrder[b.injuryStatus] !== undefined ? statusOrder[b.injuryStatus] : 3;
     if (ao !== bo) return ao - bo;
-    return (b.effectiveDURANT || 0) - (a.effectiveDURANT || 0);
+    return (b.durantScore || 0) - (a.durantScore || 0);
   });
 
   function renderInjuryList(players) {
@@ -1871,7 +1882,7 @@ function renderSeasonTimeline() {
   // Remaining opponent difficulty
   var upcomingMatches = periods.filter(function(mp) { return mp > currentMP; });
   if (upcomingMatches.length && S.allPlayers.length) {
-    Engines.computeDURANT(S.allPlayers);
+    Engines.ensureDURANT(S.allPlayers);
 
     html += '<div class="card"><div class="card-header">Remaining Schedule Difficulty</div>';
     upcomingMatches.slice(0, 8).forEach(function(mp) {

@@ -22,8 +22,11 @@ var LarryEngine = (() => {
   var index_exports = {};
   __export(index_exports, {
     CATEGORIES: () => CATEGORIES,
+    DURANT_SCALE: () => DURANT_SCALE,
+    applyHaircut: () => applyHaircut,
     buildExplainPayload: () => buildExplainPayload,
     buildQPool: () => buildQPool,
+    computeBaseValues: () => computeBaseValues,
     computeLeagueAverages: () => computeLeagueAverages,
     createEspnProjectionSource: () => createEspnProjectionSource,
     createInMemoryProjectionSource: () => createInMemoryProjectionSource,
@@ -44,6 +47,12 @@ var LarryEngine = (() => {
   // src/engine/constants.ts
   var Q_POOL_MULTIPLIER = 12;
   var Q_POOL_ITERATIONS = 2;
+  var DEFAULT_ROSTER_SIZE = 13;
+  var SHRINK_K = 8;
+  var Z_CAP = 3;
+  var MIN_GP_POOL = 10;
+  var FULL_SEASON_GAMES = 82;
+  var DURANT_SCALE = 10;
   var G_SCORE_KAPPA = 1;
   var ALPHA_IN_SEASON = 0.3;
   var ALPHA_DRAFT = 0.6;
@@ -95,13 +104,13 @@ var LarryEngine = (() => {
     const stdev = Math.max(Math.sqrt(variance), STDEV_FLOOR);
     return { mean, stdev };
   }
-  function statsFromPlayers(players) {
+  function statsFromPlayers(players, cats = CATEGORIES) {
     const stats = {
       mean: emptyVector(),
       stdev: emptyVector(),
       poolSize: players.length
     };
-    for (const c of CATEGORIES) {
+    for (const c of cats) {
       const values = players.map((p) => p.perGame[c]);
       const { mean, stdev } = meanStdev(values);
       stats.mean[c] = mean;
@@ -109,29 +118,42 @@ var LarryEngine = (() => {
     }
     return stats;
   }
-  function zVector(player, stats) {
+  function zVector(player, stats, cats = CATEGORIES) {
     const z = emptyVector();
-    for (const c of CATEGORIES) {
+    for (const c of cats) {
       z[c] = (player.perGame[c] - stats.mean[c]) / stats.stdev[c];
     }
     return z;
   }
-  function sumVector(v) {
+  function sumVector(v, cats = CATEGORIES) {
     let s = 0;
-    for (const c of CATEGORIES) s += v[c];
+    for (const c of cats) s += v[c];
     return s;
   }
-  function buildQPool(pool, rosterSize) {
+  function clamp(value, limit) {
+    if (value > limit) return limit;
+    if (value < -limit) return -limit;
+    return value;
+  }
+  function buildQPool(pool, rosterSize, opts = {}) {
+    const cats = opts.categories ?? CATEGORIES;
+    const cap = opts.cap;
     if (pool.length === 0) {
       return { stats: { mean: emptyVector(), stdev: emptyVector(), poolSize: 0 }, players: [] };
     }
     const targetSize = Math.min(pool.length, rosterSize * Q_POOL_MULTIPLIER);
-    let stats = statsFromPlayers(pool);
+    let stats = statsFromPlayers(pool, cats);
     let current = pool;
     for (let i = 0; i < Q_POOL_ITERATIONS; i++) {
-      const ranked = [...pool].map((p) => ({ p, score: sumVector(zVector(p, stats)) })).sort((a, b) => b.score - a.score).slice(0, targetSize).map((x) => x.p);
+      const ranked = [...pool].map((p) => {
+        const z = zVector(p, stats, cats);
+        if (cap !== void 0) {
+          for (const c of cats) z[c] = clamp(z[c], cap);
+        }
+        return { p, score: sumVector(z, cats) };
+      }).sort((a, b) => b.score - a.score).slice(0, targetSize).map((x) => x.p);
       current = ranked;
-      stats = statsFromPlayers(ranked);
+      stats = statsFromPlayers(ranked, cats);
     }
     return { stats, players: current };
   }
@@ -147,6 +169,75 @@ var LarryEngine = (() => {
   }
   function gScore(player, stats) {
     return sumVector(gVector(player, stats));
+  }
+  function num(v) {
+    return typeof v === "number" && isFinite(v) ? v : 0;
+  }
+  function toPerGame(input, cats) {
+    const pg = emptyVector();
+    const gp = input.gamesPlayed;
+    if (input.perGame) {
+      for (const c of cats) pg[c] = num(input.perGame[c]);
+      return pg;
+    }
+    if (gp > 0) {
+      const totals = input.seasonTotals ?? {};
+      for (const c of cats) pg[c] = num(totals[c]) / gp;
+      return pg;
+    }
+    const projected = input.projectedSeason ?? {};
+    for (const c of cats) pg[c] = num(projected[c]) / FULL_SEASON_GAMES;
+    return pg;
+  }
+  function asProjection(id, perGame) {
+    return {
+      id,
+      name: id,
+      team: "",
+      positions: [],
+      gamesRemaining: 0,
+      perGame,
+      injuryStatus: "UNKNOWN"
+    };
+  }
+  function computeBaseValues(players, opts = {}) {
+    const cats = opts.categories && opts.categories.length > 0 ? opts.categories : CATEGORIES;
+    const rosterSize = opts.rosterSize && opts.rosterSize > 0 ? opts.rosterSize : DEFAULT_ROSTER_SIZE;
+    const prepared = players.map((input) => ({
+      input,
+      perGame: toPerGame(input, cats)
+    }));
+    if (prepared.length === 0) {
+      return {
+        rows: [],
+        stats: { mean: emptyVector(), stdev: emptyVector(), poolSize: 0 },
+        poolSize: 0
+      };
+    }
+    const eligible = prepared.filter((r) => r.input.gamesPlayed >= MIN_GP_POOL);
+    const firstPass = eligible.length > 0 ? eligible : prepared;
+    const { stats, players: qPool } = buildQPool(
+      firstPass.map((r) => asProjection(r.input.id, r.perGame)),
+      rosterSize,
+      { categories: cats, cap: Z_CAP }
+    );
+    const rows = prepared.map(({ input, perGame }) => {
+      const gp = input.gamesPlayed;
+      const w = gp < FULL_SEASON_GAMES ? gp / (gp + SHRINK_K) : 1;
+      const shrunk = emptyVector();
+      const z = emptyVector();
+      let baseValue = 0;
+      for (const c of cats) {
+        shrunk[c] = w * perGame[c] + (1 - w) * stats.mean[c];
+        z[c] = clamp((shrunk[c] - stats.mean[c]) / stats.stdev[c], Z_CAP);
+        baseValue += z[c];
+      }
+      return { id: input.id, gamesPlayed: gp, perGame, shrunk, z, baseValue };
+    });
+    return { rows, stats, poolSize: qPool.length };
+  }
+  function applyHaircut(baseValue, factor) {
+    return baseValue > 0 ? baseValue * factor : baseValue;
   }
 
   // src/engine/teamFit.ts

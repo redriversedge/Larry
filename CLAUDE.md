@@ -35,7 +35,8 @@ REPO_MAP.md             -- Phase 0 audit: file tree + key-file summaries
 ## Key Concepts
 
 - **S object**: Global state in localStorage under `larry_state`. All app data lives here.
-- **DURANT ranking**: Custom composite ranking (z-score + games remaining + trend + scarcity + schedule). Primary player ranking system.
+- **DURANT ranking (v2)**: Primary player ranking. Per-game z-score against a starter-quality Q-pool, with small samples shrunk toward the pool mean and each category capped at +/- 3. `durantScore` is the sum of category z-scores times 10. Nothing multiplies it: no injury discount, no games-remaining factor, no trend or scarcity bonus. Computed by `computeBaseValues` in `src/engine/zscore.ts`, consumed by `computeDURANT` in `js/engines.js`. See `docs/RANKING_V2_SPEC.md`. Rank correlation with the FantasyPros 6-expert consensus top 150 is 0.786, up from 0.296 under the pre-v2 score.
+- **Availability vs DURANT**: `durantScore` and `durantRank` are season-long value and are what every ranking surface sorts on. `availability` (0 to 1) and the opportunity boost are separate fields combined into `effectiveDURANT`, which only add/drop, streaming and lineup logic may read. Any multiplier applies only when the score is positive, because scaling a negative score raises it.
 - **H2H Each Category**: League format. Categories: REB, AST, STL, BLK, PTS (display in this order everywhere).
 - **Games remaining**: Most important variable. Factor into every analysis. Raw averages without games context are meaningless.
 - **Matchup strategy**: Weekly strategy engine (Engine 12) classifies each category as Lock (>70% win probability), Target (30-70%), or Punt (<30%). Strategy drives recommendations, add/drop suggestions, and streaming picks. Recalculates on team change or sync.
@@ -48,8 +49,8 @@ All engines live in the `Engines` IIFE module.
 
 1. **Z-Scores** -- Per-category z-scores for all players against league averages
 2. **Monte Carlo** -- Forward-projected matchup simulation using remaining games
-3. **DURANT Ranking** -- Composite score: z-score + games remaining + trend + scarcity + schedule
-3.5. **Availability Score** -- Multiplier based on injury status and games played consistency
+3. **DURANT Ranking (v2)** -- Per-game z vs a starter-quality Q-pool, shrunk and capped. No multipliers. `computeDURANT` delegates to `window.LarryEngine.computeBaseValues`; `ensureDURANT` is the entry point renders should call, which computes once per sync instead of on every tab switch.
+3.5. **Availability Score** -- Multiplier based on injury status and games played consistency. Feeds `effectiveDURANT` only, never `durantScore`.
 3.6. **Opportunity Boost** -- Multiplier for players on teams with injuries to key players
 4. **Recommendations** -- Add/drop and streaming suggestions, matchup-adjusted via strategy weights. Filters injured players (OUT/SUSPENSION/IR). Uses 40% DURANT + 60% matchup fit blend when strategy exists.
 5. **Trade Analyzer** -- Evaluate proposed trades by category impact
@@ -66,6 +67,7 @@ All engines live in the `Engines` IIFE module.
 ## Commands
 
 - `node --check js/*.js` -- Syntax-check legacy JS files. Run before every commit that touches `js/`.
+- `npx tsx tools/rank-v2-vs-experts.ts` -- Ranking v2 acceptance gate: score parity with `tools/proto.py` plus rank correlation against the expert consensus. Needs a snapshot at `tests/fixtures/users/rank-v2-parity-snapshot.json` (git-ignored). Run it after any change to `src/engine/zscore.ts` or `computeDURANT`.
 - `grep -rP '[\x80-\xFF]' js/` -- ASCII verification. No smart quotes or unicode corruption.
 - `npx serve .` -- Local dev server (no Netlify functions locally, but UI works).
 - `npm test` -- Run vitest suite for new TypeScript code under `src/` and `tests/`.
@@ -156,7 +158,10 @@ The chat is strategy-aware. It references target categories when discussing pick
 
 ## Reference Docs
 
-- `LARRY_PLAN.md` -- Active improvement roadmap (Phases 0 through 7)
+- `docs/HANDOFF.md` -- Active 8-phase roadmap (data correctness, ranking v2, engine and UI fixes, chat hardening, Larry's Move). Phase 2 is done; phase 1 is next.
+- `docs/RANKING_V2_SPEC.md` -- Ranking v2 algorithm, measurements and acceptance criteria
+- `tools/proto.py` -- Reference implementation of ranking v2. `tools/rank-v2-vs-experts.ts` asserts the TypeScript engine reproduces it.
+- `LARRY_PLAN.md` -- Earlier improvement roadmap (Phases 0 through 7), superseded by `docs/HANDOFF.md`
 - `PLAN_RECONCILED.md` -- Phase 0 reconciliation: plan paths to actual paths, architectural conflicts
 - `REPO_MAP.md` -- Phase 0 audit: file tree + key-file summaries
 - `docs/SCHEMA.md` -- Full state object schema, all localStorage keys

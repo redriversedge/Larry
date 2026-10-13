@@ -1,6 +1,13 @@
 # Larry: Complete Improvement Plan
 *A repo-aware redesign for a hobbyist-built, Netlify-hosted, mobile-first ESPN H2H 5-cat fantasy basketball app*
 
+> **Superseded for current work.** `docs/HANDOFF.md` (2026-10-12) is the active
+> roadmap. It was written against a live audit of the app and supersedes the
+> phase numbering below. Status: its phase 2 (ranking v2) is shipped, see
+> `docs/RANKING_V2_SPEC.md`; its phase 1 (per-game normalization at parse
+> time, stat id map, season rollover, real schedules) is the next PR. This
+> file is kept for the phase 0 through 2 history it records.
+
 ---
 
 ## How to use this document
