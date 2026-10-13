@@ -1,0 +1,231 @@
+{
+    "freeAgents":  [
+
+                   ],
+    "oppRoster":  [
+                      {
+                          "pos":  [
+                                      "PF"
+                                  ],
+                          "injury":  "ACTIVE",
+                          "name":  "Opp One",
+                          "perGame":  {
+                                          "PTS":  18,
+                                          "REB":  9,
+                                          "STL":  0.7,
+                                          "AST":  2,
+                                          "BLK":  1.4
+                                      },
+                          "gamesLeftThisWeek":  3
+                      }
+                  ],
+    "today":  "2026-10-13",
+    "kind":  "larry-move",
+    "matchup":  {
+                    "strategy":  {
+                                     "locks":  [
+                                                   "REB",
+                                                   "AST",
+                                                   "STL",
+                                                   "BLK",
+                                                   "PTS"
+                                               ],
+                                     "punts":  [
+
+                                               ],
+                                     "targets":  [
+
+                                                 ]
+                                 },
+                    "opponentName":  "Rim Reapers",
+                    "myGamesLeft":  2,
+                    "period":  3,
+                    "oppGamesLeft":  1,
+                    "myScores":  {
+                                     "PTS":  900,
+                                     "REB":  200,
+                                     "STL":  40,
+                                     "AST":  150,
+                                     "BLK":  30
+                                 },
+                    "oppScores":  {
+                                      "PTS":  500,
+                                      "REB":  100,
+                                      "STL":  15,
+                                      "AST":  70,
+                                      "BLK":  10
+                                  },
+                    "winProb":  {
+                                    "PTS":  0.97,
+                                    "REB":  0.97,
+                                    "STL":  0.96,
+                                    "AST":  0.95,
+                                    "BLK":  0.97
+                                },
+                    "daysLeft":  1
+                },
+    "league":  {
+                   "irSlots":  0,
+                   "teamCount":  12,
+                   "startingSlots":  8,
+                   "acquisitionsUsed":  0,
+                   "lineupLock":  "daily",
+                   "benchSlots":  4,
+                   "scoringType":  "H2H Each Category",
+                   "categories":  [
+                                      "REB",
+                                      "AST",
+                                      "STL",
+                                      "BLK",
+                                      "PTS"
+                                  ],
+                   "irUsed":  0,
+                   "acquisitionLimit":  -1
+               },
+    "syncedAt":  "2026-10-13T18:00:00.000Z",
+    "myRoster":  [
+                     {
+                         "slotEligible":  [
+                                              "SG",
+                                              "UTIL",
+                                              "BE"
+                                          ],
+                         "irEligible":  false,
+                         "slot":  "PG",
+                         "injury":  "ACTIVE",
+                         "gamesToday":  true,
+                         "trend":  "stable",
+                         "id":  46170,
+                         "gamesLeftThisWeek":  3,
+                         "team":  "BOS",
+                         "rawInjury":  "ACTIVE",
+                         "perGame":  {
+                                         "PTS":  14.2,
+                                         "REB":  5.1,
+                                         "STL":  0.9,
+                                         "AST":  3.2,
+                                         "BLK":  0.4
+                                     },
+                         "gameToday":  {
+                                           "timeLocal":  "7:30 PM",
+                                           "opp":  "MIA",
+                                           "home":  true
+                                       },
+                         "gp":  60,
+                         "pos":  [
+                                     "SG"
+                                 ],
+                         "mpg":  29.5,
+                         "name":  "Alpha Starter",
+                         "value":  62
+                     },
+                     {
+                         "slotEligible":  [
+                                              "SG",
+                                              "UTIL",
+                                              "BE"
+                                          ],
+                         "irEligible":  false,
+                         "slot":  "SG",
+                         "injury":  "ACTIVE",
+                         "gamesToday":  true,
+                         "trend":  "stable",
+                         "id":  27208,
+                         "gamesLeftThisWeek":  3,
+                         "team":  "BOS",
+                         "rawInjury":  "ACTIVE",
+                         "perGame":  {
+                                         "PTS":  14.2,
+                                         "REB":  5.1,
+                                         "STL":  0.9,
+                                         "AST":  3.2,
+                                         "BLK":  0.4
+                                     },
+                         "gameToday":  {
+                                           "timeLocal":  "7:30 PM",
+                                           "opp":  "MIA",
+                                           "home":  true
+                                       },
+                         "gp":  60,
+                         "pos":  [
+                                     "SG"
+                                 ],
+                         "mpg":  29.5,
+                         "name":  "Beta Starter",
+                         "value":  55
+                     },
+                     {
+                         "slotEligible":  [
+                                              "SG",
+                                              "UTIL",
+                                              "BE"
+                                          ],
+                         "irEligible":  false,
+                         "slot":  "BE",
+                         "injury":  "ACTIVE",
+                         "gamesToday":  false,
+                         "trend":  "stable",
+                         "id":  38484,
+                         "gamesLeftThisWeek":  2,
+                         "team":  "BOS",
+                         "rawInjury":  "ACTIVE",
+                         "perGame":  {
+                                         "PTS":  14.2,
+                                         "REB":  5.1,
+                                         "STL":  0.9,
+                                         "AST":  3.2,
+                                         "BLK":  0.4
+                                     },
+                         "gameToday":  null,
+                         "gp":  60,
+                         "pos":  [
+                                     "SG"
+                                 ],
+                         "mpg":  29.5,
+                         "name":  "Gamma Bench",
+                         "value":  18
+                     },
+                     {
+                         "slotEligible":  [
+                                              "SG",
+                                              "UTIL",
+                                              "BE"
+                                          ],
+                         "irEligible":  false,
+                         "slot":  "BE",
+                         "injury":  "ACTIVE",
+                         "gamesToday":  true,
+                         "trend":  "stable",
+                         "id":  30599,
+                         "gamesLeftThisWeek":  3,
+                         "team":  "BOS",
+                         "rawInjury":  "ACTIVE",
+                         "perGame":  {
+                                         "PTS":  14.2,
+                                         "REB":  5.1,
+                                         "STL":  0.9,
+                                         "AST":  3.2,
+                                         "BLK":  0.4
+                                     },
+                         "gameToday":  {
+                                           "timeLocal":  "7:30 PM",
+                                           "opp":  "MIA",
+                                           "home":  true
+                                       },
+                         "gp":  60,
+                         "pos":  [
+                                     "SG"
+                                 ],
+                         "mpg":  29.5,
+                         "name":  "Delta Bench",
+                         "value":  12
+                     }
+                 ],
+    "ruleSummary":  {
+                        "lineupLock":  "daily",
+                        "irRule":  "ESPN: only OUT or INJURY_RESERVE players can occupy an IR slot"
+                    },
+    "engineRecs":  [
+
+                   ]
+}

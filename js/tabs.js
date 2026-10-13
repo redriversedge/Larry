@@ -124,6 +124,13 @@ function renderRoster(container) {
   // Dashboard section (moved here from League in v3)
   html += renderDashboardInline();
 
+  // Larry's Move. The container always renders; the card inside is empty
+  // until the user asks for it, so nothing here triggers an API call.
+  html += '<div style="display:flex;align-items:center;gap:8px;margin:8px 0">' +
+    renderLarryMoveButton() +
+    '<span class="text-xs muted">Ask Larry what to do today</span></div>';
+  html += '<div id="larry-move-card">' + larryMoveCardHtml() + '</div>';
+
   // Date navigation (v3 new)
   html += renderDateNav();
 
