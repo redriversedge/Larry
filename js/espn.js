@@ -696,14 +696,43 @@ var ESPNSync = (function() {
       S.matchup.myTeamId = S.myTeam.teamId;
     }
 
-    // Full schedule
+    // Full schedule.
+    //
+    // pointsByScoringPeriod is kept because it is the only record of which
+    // DAYS ESPN actually scored in a matchup. A scoring period is one day, so
+    // a finished matchup's keys give its exact window with no week
+    // arithmetic, which is how observedMatchupWindows() corrects a wrong
+    // All-Star guess. Only the keys matter, so store those rather than the
+    // scores: 21 matchups x 2 sides x 14 days of floats is state bloat for
+    // data nothing reads.
     S.league.schedule = data.schedule.map(function(m) {
       return {
         matchupPeriodId: m.matchupPeriodId,
-        home: m.home ? { teamId: m.home.teamId, wins: m.home.totalPoints || 0 } : null,
-        away: m.away ? { teamId: m.away.teamId, wins: m.away.totalPoints || 0 } : null
+        home: m.home ? {
+          teamId: m.home.teamId,
+          wins: m.home.totalPoints || 0,
+          scoredPeriods: scoredPeriodIds(m.home)
+        } : null,
+        away: m.away ? {
+          teamId: m.away.teamId,
+          wins: m.away.totalPoints || 0,
+          scoredPeriods: scoredPeriodIds(m.away)
+        } : null
       };
     });
+  }
+
+  // The scoring period ids a side was scored in, as numbers. ESPN keys
+  // pointsByScoringPeriod by period id; we only need which days counted.
+  function scoredPeriodIds(side) {
+    var byPeriod = side && side.pointsByScoringPeriod;
+    if (!byPeriod || typeof byPeriod !== 'object') return [];
+    var out = [];
+    Object.keys(byPeriod).forEach(function(k) {
+      var n = Number(k);
+      if (isFinite(n) && n > 0) out.push(n);
+    });
+    return out;
   }
 
 
@@ -780,21 +809,52 @@ var ESPNSync = (function() {
     return lookup;
   }
 
-  // Schedules are the same for everyone and barely change, so fetch once per
-  // season and reuse. Keyed by season so a rollover refetches.
-  async function loadNbaSchedule() {
-    if (S.scheduleLookup && S.scheduleSeasonId === S.league.seasonId &&
-        Object.keys(S.scheduleLookup).length) {
-      return;
+  // How long a cached schedule stays usable. The NBA schedule is not static:
+  // the NBA Cup knockout window (Dec 4 to 11 in 2026) has no games on the
+  // calendar for teams that have not advanced yet, and those games are added
+  // later. Postponements and reschedules land the same way. Fetching once per
+  // season left an 8-day hole that would have undercounted games remaining
+  // for that whole week.
+  var SCHEDULE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+  function countScheduledGames(lookup) {
+    if (!lookup) return 0;
+    var n = 0;
+    var ids = Object.keys(lookup);
+    for (var i = 0; i < ids.length; i++) {
+      n += (lookup[ids[i]] || []).length;
     }
+    return n;
+  }
+
+  function scheduleIsFresh() {
+    if (!S.scheduleLookup || !Object.keys(S.scheduleLookup).length) return false;
+    if (S.scheduleSeasonId !== S.league.seasonId) return false;
+    var at = S.scheduleFetchedAt ? Date.parse(S.scheduleFetchedAt) : NaN;
+    if (!isFinite(at)) return false;
+    return (Date.now() - at) < SCHEDULE_MAX_AGE_MS;
+  }
+
+  // Refetched whenever the cached copy is over a day old. This is a public,
+  // cookie-free call, so the cost is one request a day.
+  async function loadNbaSchedule() {
+    if (scheduleIsFresh()) return;
     try {
       var data = await fetchSeasonView('proTeamSchedules_wl', S.league.seasonId);
       var lookup = buildScheduleLookup(data);
       var teamCount = Object.keys(lookup).length;
       if (teamCount) {
+        var before = countScheduledGames(S.scheduleLookup);
         S.scheduleLookup = lookup;
         S.scheduleSeasonId = S.league.seasonId;
-        addSyncLog('success', 'Loaded NBA schedule for ' + teamCount + ' teams');
+        S.scheduleFetchedAt = new Date().toISOString();
+        var after = countScheduledGames(lookup);
+        // Worth logging: a jump here is the NBA Cup games or a reschedule
+        // appearing, which is the whole reason this refetches.
+        var delta = (before && after !== before)
+          ? ' (' + (after > before ? '+' : '') + (after - before) + ' games vs cached)'
+          : '';
+        addSyncLog('success', 'Loaded NBA schedule for ' + teamCount + ' teams' + delta);
       } else {
         console.warn('proTeamSchedules_wl returned no usable teams');
       }
@@ -981,50 +1041,233 @@ var ESPNSync = (function() {
     return exact || earliest;
   }
 
+  // Whole days from today (or from the start, if it has not begun) through
+  // the window end, inclusive. Mirrors getMatchupWindow in core.js.
+  function daysLeftInWindow(startStr, endStr, todayStr) {
+    if (!startStr || !endStr) return 0;
+    var fromStr = todayStr > startStr ? todayStr : startStr;
+    if (fromStr > endStr) return 0;
+    return daysBetweenStr(fromStr, endStr) + 1;
+  }
+
+  function daysBetweenStr(aStr, bStr) {
+    var a = parseDateStr(aStr), b = parseDateStr(bStr);
+    if (!a || !b) return 0;
+    // Round, not floor: a DST shift makes the raw difference 23 or 25 hours.
+    return Math.round((b.getTime() - a.getTime()) / 86400000);
+  }
+
+  // Every local date on which any NBA team plays.
+  function gameDateSet() {
+    var set = {};
+    if (!S.scheduleLookup) return set;
+    var teamIds = Object.keys(S.scheduleLookup);
+    for (var t = 0; t < teamIds.length; t++) {
+      var games = S.scheduleLookup[teamIds[t]] || [];
+      for (var g = 0; g < games.length; g++) {
+        if (games[g].date) set[games[g].date] = true;
+      }
+    }
+    return set;
+  }
+
+  // The All-Star break: the longest run of 4 or more consecutive days with no
+  // NBA games, searched only between Feb 1 and Mar 15.
+  //
+  // The date range matters. The NBA Cup knockout window leaves an 8-day hole
+  // in early December that looks identical to an All-Star break, and treating
+  // it as one would double the wrong week.
+  function allStarBreakStr() {
+    var endYear = (S.league && Number(S.league.seasonId)) || 0;
+    if (!endYear) return null;
+    var hasGame = gameDateSet();
+    var fromStr = endYear + '-02-01';
+    var toStr = endYear + '-03-15';
+    var best = null, bestLen = 0;
+    var runStart = null, runLen = 0;
+    var cur = fromStr;
+    while (cur && cur <= toStr) {
+      if (hasGame[cur]) {
+        runStart = null;
+        runLen = 0;
+      } else {
+        if (runStart === null) runStart = cur;
+        runLen++;
+        if (runLen > bestLen) { bestLen = runLen; best = runStart; }
+      }
+      cur = addDaysStr(cur, 1);
+    }
+    // A real break is about 5 to 7 gameless days. A much longer run means
+    // the schedule is incomplete for February rather than that the league
+    // took three weeks off, and inferring a merge from it would shift every
+    // window after it. Better to leave weeks at 7 days than to guess.
+    return (bestLen >= 4 && bestLen <= 12) ? best : null;
+  }
+
+  // The normal Monday-to-Sunday week number containing a date, ignoring any
+  // All-Star merge. Used to work out which week the merge applies to.
+  function normalWeekOf(openingStr, dateStr) {
+    if (!openingStr || !dateStr) return 0;
+    var opening = parseDateStr(openingStr);
+    if (!opening) return 0;
+    var week1End = addDaysStr(openingStr, (7 - opening.getDay()) % 7);
+    if (dateStr <= week1End) return 1;
+    return 1 + Math.ceil(daysBetweenStr(week1End, dateStr) / 7);
+  }
+
+  // Opening night plus the week number ESPN stretches to 14 days.
+  //
+  // ESPN folds the All-Star break into a SINGLE 14-day week rather than
+  // giving it its own matchup. Verified against this league's completed
+  // 2025-26 scores (schedule[].home.pointsByScoringPeriod): matchup 17 ran
+  // days 112 to 125, which is Mon Feb 9 to Sun Feb 22 2026, one ESPN week
+  // covering two calendar weeks. Every week after it shifts by 7 days.
+  //
+  // Without this, every window from the All-Star break to the end of the
+  // season lands one week early, which would have made games remaining,
+  // streaming, strategy and Larry's Move wrong for all three playoff
+  // matchups.
+  function weekPlan() {
+    var openingStr = openingNightStr();
+    if (!openingStr) return { openingStr: null, doubleWeek: 0 };
+    var breakStr = allStarBreakStr();
+    return {
+      openingStr: openingStr,
+      // The merge applies to the week containing the FIRST day of the break.
+      doubleWeek: breakStr ? normalWeekOf(openingStr, breakStr) : 0,
+      breakStr: breakStr || ''
+    };
+  }
+
+  // Accept either a plan object or a bare opening-night string.
+  function asPlan(x) {
+    if (x && typeof x === 'object') {
+      return {
+        openingStr: x.openingStr || null,
+        doubleWeek: Number(x.doubleWeek) || 0
+      };
+    }
+    return { openingStr: x || null, doubleWeek: 0 };
+  }
+
   // A fantasy week as a local date range.
   //
   // Week 1 is the short opening week: opening night through the first Sunday
   // on or after it, so Tue Oct 20 2026 gives Oct 20 to Oct 25. Every later
-  // week is the following Monday through Sunday.
+  // week is the following Monday through Sunday, except the All-Star week,
+  // which is 14 days and pushes every week after it back by 7.
   //
   // ASSUMPTION: ESPN starts week 2 on the first Monday after opening night
   // rather than folding the short opening week into week 2. Worth one check
   // against the ESPN matchup page on opening night.
-  function weekRangeFrom(openingStr, weekNum) {
-    if (!openingStr) return null;
+  function weekRangeFrom(planOrOpening, weekNum) {
+    var plan = asPlan(planOrOpening);
+    if (!plan.openingStr) return null;
     var n = Number(weekNum);
     if (!isFinite(n) || n < 1) return null;
-    var opening = parseDateStr(openingStr);
+    var opening = parseDateStr(plan.openingStr);
     if (!opening) return null;
-    var week1End = addDaysStr(openingStr, (7 - opening.getDay()) % 7);
-    if (n === 1) return { startStr: openingStr, endStr: week1End };
-    var startStr = addDaysStr(week1End, 1 + (n - 2) * 7);
-    return { startStr: startStr, endStr: addDaysStr(startStr, 6) };
+    var week1End = addDaysStr(plan.openingStr, (7 - opening.getDay()) % 7);
+    if (n === 1) return { startStr: plan.openingStr, endStr: week1End };
+    var offset = 1 + (n - 2) * 7;
+    if (plan.doubleWeek && n > plan.doubleWeek) offset += 7;
+    var startStr = addDaysStr(week1End, offset);
+    var span = (plan.doubleWeek && n === plan.doubleWeek) ? 13 : 6;
+    return { startStr: startStr, endStr: addDaysStr(startStr, span) };
+  }
+
+  // Day ranges ESPN actually scored, for matchups that have finished.
+  //
+  // A completed matchup's pointsByScoringPeriod is keyed by scoring period,
+  // and a scoring period is a single day, so this is the exact window with no
+  // week arithmetic involved. Used in preference to the computed window
+  // wherever we have it, which also means a wrong All-Star guess self-corrects
+  // for every matchup already played.
+  function observedMatchupWindows() {
+    var out = {};
+    var sched = (S.league && S.league.schedule) || [];
+    var dateFor = scoringPeriodDates();
+    for (var i = 0; i < sched.length; i++) {
+      var m = sched[i] || {};
+      var id = Number(m.matchupPeriodId);
+      if (!isFinite(id) || id <= 0) continue;
+      var periods = [];
+      ['home', 'away'].forEach(function(side) {
+        var s = m[side];
+        if (!s) return;
+        // Parsed state stores scoredPeriods; raw ESPN data carries
+        // pointsByScoringPeriod. Accept either.
+        if (s.scoredPeriods && s.scoredPeriods.length) {
+          for (var j = 0; j < s.scoredPeriods.length; j++) {
+            var v = Number(s.scoredPeriods[j]);
+            if (isFinite(v)) periods.push(v);
+          }
+          return;
+        }
+        var ids = scoredPeriodIds(s);
+        for (var k = 0; k < ids.length; k++) periods.push(ids[k]);
+      });
+      if (!periods.length) continue;
+      var lo = Math.min.apply(null, periods);
+      var hi = Math.max.apply(null, periods);
+      var startStr = dateFor[lo], endStr = dateFor[hi];
+      if (!startStr || !endStr) continue;
+      var prev = out[id];
+      out[id] = {
+        startStr: prev && prev.startStr < startStr ? prev.startStr : startStr,
+        endStr: prev && prev.endStr > endStr ? prev.endStr : endStr
+      };
+    }
+    return out;
+  }
+
+  // Scoring period id to local date. A scoring period is one day, so every
+  // game in a period shares its date.
+  function scoringPeriodDates() {
+    var out = {};
+    if (!S.scheduleLookup) return out;
+    var teamIds = Object.keys(S.scheduleLookup);
+    for (var t = 0; t < teamIds.length; t++) {
+      var games = S.scheduleLookup[teamIds[t]] || [];
+      for (var g = 0; g < games.length; g++) {
+        var sp = Number(games[g].scoringPeriodId);
+        var d = games[g].date;
+        if (!isFinite(sp) || !d) continue;
+        // Earliest date wins, so a stray mislabelled game cannot stretch it.
+        if (!out[sp] || d < out[sp]) out[sp] = d;
+      }
+    }
+    return out;
   }
 
   // The matchup's window: first day of its first week through the last day
   // of its last week, so a two-week playoff matchup spans 14 days.
-  function matchupWindowFor(matchupPeriodId, openingStr) {
+  function matchupWindowFor(matchupPeriodId, planOrOpening, observed) {
+    // Prefer what ESPN actually scored, when the matchup is already done.
+    var obs = observed && observed[Number(matchupPeriodId)];
+    if (obs && obs.startStr && obs.endStr) {
+      return { startStr: obs.startStr, endStr: obs.endStr, source: 'observed' };
+    }
     var weeks = matchupWeeks(matchupPeriodId);
     if (!weeks.length) return null;
     var startStr = null, endStr = null;
     for (var i = 0; i < weeks.length; i++) {
-      var r = weekRangeFrom(openingStr, weeks[i]);
+      var r = weekRangeFrom(planOrOpening, weeks[i]);
       if (!r || !r.startStr || !r.endStr) continue;
       if (startStr === null || r.startStr < startStr) startStr = r.startStr;
       if (endStr === null || r.endStr > endStr) endStr = r.endStr;
     }
-    return startStr ? { startStr: startStr, endStr: endStr } : null;
+    return startStr ? { startStr: startStr, endStr: endStr, source: 'weeks' } : null;
   }
 
   // Which matchup contains this date. Only needed when ESPN has not told us
   // the current matchup period.
-  function matchupForDateStr(dateStr, openingStr) {
+  function matchupForDateStr(dateStr, planOrOpening, observed) {
     var map = (S.league && S.league.matchupPeriods) || null;
     if (!map) return 0;
     var ids = Object.keys(map);
     for (var i = 0; i < ids.length; i++) {
-      var win = matchupWindowFor(ids[i], openingStr);
+      var win = matchupWindowFor(ids[i], planOrOpening, observed);
       if (win && dateStr >= win.startStr && dateStr <= win.endStr) {
         return Number(ids[i]);
       }
@@ -1035,26 +1278,40 @@ var ESPNSync = (function() {
   // The window to count games against: the current matchup if one is
   // running, otherwise matchup 1 (preseason).
   function activeMatchupWindow() {
-    var openingStr = openingNightStr();
+    var plan = weekPlan();
+    var openingStr = plan.openingStr;
+    var observed = observedMatchupWindows();
     var todayStr = localDateStr(new Date());
     // ESPN's own answer first. During the season currentMatchupPeriod is
     // authoritative and cannot drift from our week arithmetic.
     var target = (S.league && Number(S.league.currentMatchupPeriod)) || 0;
-    if (!(target > 0)) {
+    var fromEspn = target > 0;
+    if (!fromEspn) {
       // Before opening night there is no current matchup and matchup 1 is
       // what the user wants to see. Mid-season with the value missing, use
       // whichever matchup's window contains today.
       target = (openingStr && todayStr > openingStr)
-        ? (matchupForDateStr(todayStr, openingStr) || 1)
+        ? (matchupForDateStr(todayStr, plan, observed) || 1)
         : 1;
     }
-    var win = matchupWindowFor(target, openingStr);
+    var win = matchupWindowFor(target, plan, observed);
     if (win) {
+      // Self-correction check. If ESPN says we are in matchup N but today is
+      // outside the window we computed for N, the week model is wrong
+      // somewhere (most likely the All-Star guess). ESPN is right; say so in
+      // the sync log rather than failing silently all season.
+      if (fromEspn && openingStr && todayStr >= openingStr &&
+          (todayStr < win.startStr || todayStr > win.endStr)) {
+        addSyncLog('error', 'Matchup window looks wrong: ESPN says matchup ' +
+          target + ' but today (' + todayStr + ') is outside ' +
+          win.startStr + ' to ' + win.endStr +
+          '. Check the All-Star week.');
+      }
       return {
         startStr: win.startStr,
         endStr: win.endStr,
         matchupPeriodId: target,
-        source: 'schedule'
+        source: win.source === 'observed' ? 'observed' : 'schedule'
       };
     }
     // No schedule to derive from; fall back to the calendar week.
@@ -1106,6 +1363,9 @@ var ESPNSync = (function() {
     // date range printed nothing.
     S.matchup.startDate = win.startStr;
     S.matchup.endDate = win.endStr;
+    // Was initialised to 0 and never written. Nothing reads it today, but a
+    // field that is always zero is a trap for whoever reads it next.
+    S.matchup.daysRemaining = daysLeftInWindow(win.startStr, win.endStr, todayStr);
 
     // Count from today, or from the window start when the window is still
     // in the future (preseason: matchup 1 begins on opening night).
@@ -1273,6 +1533,14 @@ var ESPNSync = (function() {
     weekRangeFrom: weekRangeFrom,
     matchupWindowFor: matchupWindowFor,
     matchupForDateStr: matchupForDateStr,
-    activeMatchupWindow: activeMatchupWindow
+    activeMatchupWindow: activeMatchupWindow,
+    // All-Star handling and the observed-window self-correction.
+    allStarBreakStr: allStarBreakStr,
+    normalWeekOf: normalWeekOf,
+    weekPlan: weekPlan,
+    observedMatchupWindows: observedMatchupWindows,
+    scoringPeriodDates: scoringPeriodDates,
+    daysLeftInWindow: daysLeftInWindow,
+    scheduleIsFresh: scheduleIsFresh
   };
 })();

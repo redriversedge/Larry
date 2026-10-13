@@ -13,7 +13,7 @@ import { describe, expect, it } from "vitest";
 const ROOT = path.resolve(__dirname, "../..");
 
 // espn.js is a browser IIFE. Load it with the globals it closes over.
-function loadESPNSync(state: any) {
+function loadESPNSync(state: any, overrides: Record<string, any> = {}) {
   const src = fs.readFileSync(path.join(ROOT, "js/espn.js"), "utf8");
   const sandbox: any = {};
   sandbox.window = sandbox;
@@ -53,6 +53,7 @@ function loadESPNSync(state: any) {
       ensureDURANT: () => {}, computeMatchupStrategy: () => {}, rosProjections: () => {},
     },
   };
+  Object.assign(globals, overrides);
   const names = Object.keys(globals);
   const fn = new Function(...names, src + "\n; window.ESPNSync = ESPNSync; return window.ESPNSync;");
   return fn(...names.map((n) => globals[n]));
@@ -508,6 +509,485 @@ describe("matchup windows", () => {
     // ended Nov 1 2026, so week 2 (Oct 26 to Nov 1) straddles it.
     expect(ESPNSync.weekRangeFrom(OPENING, 2).endStr).toBe("2026-11-01");
     expect(ESPNSync.weekRangeFrom(OPENING, 3).startStr).toBe("2026-11-02");
+  });
+});
+
+describe("ESPN folds the All-Star break into one 14-day week", () => {
+  // Regression test against this league's COMPLETED 2025-26 season, where
+  // pointsByScoringPeriod records exactly which days ESPN scored in each
+  // matchup. The observed ranges were:
+  //
+  //   matchup  1: days 1-6     (6d)   weeks [1]
+  //   matchup  2: days 7-13    (7d)   weeks [2]
+  //   matchup 16: days 105-111 (7d)   weeks [16]
+  //   matchup 17: days 112-125 (14d)  weeks [17]   <- All-Star week
+  //   matchup 18: days 126-132 (7d)   weeks [18]
+  //   matchup 19: days 133-146 (14d)  weeks [19,20]
+  //   matchup 20: days 147-160 (14d)  weeks [21,22]
+  //   matchup 21: days 161-174 (14d)  weeks [23,24]
+  //
+  // Opening night was Tue Oct 21 2025. Day 112 = Mon Feb 9 2026 and day 125
+  // = Sun Feb 22 2026, so week 17 is one ESPN week across two calendar
+  // weeks and every week after it shifts by 7 days.
+  const OPENING_2026 = "2025-10-21";
+
+  function dayStrFrom(opening: string, dayNum: number): string {
+    const q = opening.split("-");
+    const dt = new Date(Number(q[0]), Number(q[1]) - 1, Number(q[2]));
+    dt.setDate(dt.getDate() + (dayNum - 1));
+    const p = (n: number) => String(n).padStart(2, "0");
+    return dt.getFullYear() + "-" + p(dt.getMonth() + 1) + "-" + p(dt.getDate());
+  }
+
+  // A schedule with a game every day from opening night except the All-Star
+  // break, which is what the detector looks for. 2026's break was Feb 13-18.
+  function seasonSchedule(opening: string, breakFrom: string, breakTo: string, days: number) {
+    const games: any[] = [];
+    for (let i = 1; i <= days; i++) {
+      const date = dayStrFrom(opening, i);
+      if (date >= breakFrom && date <= breakTo) continue;
+      games.push({ date, scoringPeriodId: i });
+    }
+    return games;
+  }
+
+  function state2026() {
+    const s = baseState(2026);
+    s.league.firstScoringPeriod = 1;
+    s.league.matchupPeriods = {
+      "1": [1], "2": [2], "16": [16], "17": [17], "18": [18],
+      "19": [19, 20], "20": [21, 22], "21": [23, 24],
+    };
+    s.league.currentMatchupPeriod = 0;
+    s.scheduleLookup = {
+      2: seasonSchedule(OPENING_2026, "2026-02-13", "2026-02-18", 174),
+    };
+    return s;
+  }
+
+  it("locates the break and the week it belongs to", () => {
+    const state = state2026();
+    const ESPNSync = loadESPNSync(state);
+    expect(ESPNSync.allStarBreakStr()).toBe("2026-02-13");
+    // The merge applies to the week containing the break's FIRST day.
+    expect(ESPNSync.normalWeekOf(OPENING_2026, "2026-02-13")).toBe(17);
+    const plan = ESPNSync.weekPlan();
+    expect(plan.openingStr).toBe(OPENING_2026);
+    expect(plan.doubleWeek).toBe(17);
+  });
+
+  it("reproduces every observed 2025-26 matchup window exactly", () => {
+    const state = state2026();
+    const ESPNSync = loadESPNSync(state);
+    const plan = ESPNSync.weekPlan();
+    const expected: Array<[number, number, number]> = [
+      [1, 1, 6],
+      [2, 7, 13],
+      [16, 105, 111],
+      [17, 112, 125],
+      [18, 126, 132],
+      [19, 133, 146],
+      [20, 147, 160],
+      [21, 161, 174],
+    ];
+    for (const [matchup, firstDay, lastDay] of expected) {
+      const win = ESPNSync.matchupWindowFor(matchup, plan);
+      expect(win.startStr, "matchup " + matchup + " start").toBe(dayStrFrom(OPENING_2026, firstDay));
+      expect(win.endStr, "matchup " + matchup + " end").toBe(dayStrFrom(OPENING_2026, lastDay));
+    }
+    // Day 174 is the last day of the NBA regular season.
+    expect(dayStrFrom(OPENING_2026, 174)).toBe("2026-04-12");
+  });
+
+  it("makes the All-Star week 14 days and keeps the rest at 7", () => {
+    const state = state2026();
+    const ESPNSync = loadESPNSync(state);
+    const plan = ESPNSync.weekPlan();
+    const span = (w: number) => {
+      const r = ESPNSync.weekRangeFrom(plan, w);
+      const a = r.startStr.split("-");
+      const b = r.endStr.split("-");
+      return Math.round(
+        (new Date(Number(b[0]), Number(b[1]) - 1, Number(b[2])).getTime() -
+          new Date(Number(a[0]), Number(a[1]) - 1, Number(a[2])).getTime()) / 86400000,
+      ) + 1;
+    };
+    expect(span(1)).toBe(6); // short opening week
+    expect(span(16)).toBe(7);
+    expect(span(17)).toBe(14); // All-Star
+    expect(span(18)).toBe(7);
+    expect(span(24)).toBe(7);
+  });
+
+  it("derives the 2026-27 double week as 18, which moves the playoffs", () => {
+    // The 2027 All-Star break is Feb 19-24, inside the Feb 15-21 week, so
+    // ESPN's week 18 should run Feb 15 to Feb 28. Without the merge the app
+    // put playoff matchup 18 at Feb 15 to Feb 28 and every later matchup a
+    // week early.
+    const s = baseState(2027);
+    s.league.firstScoringPeriod = 1;
+    s.league.matchupPeriods = { "18": [18, 19], "19": [20, 21], "20": [22, 23] };
+    s.league.currentMatchupPeriod = 0;
+    s.scheduleLookup = {
+      2: seasonSchedule("2026-10-20", "2027-02-19", "2027-02-24", 174),
+    };
+    const ESPNSync = loadESPNSync(s);
+    const plan = ESPNSync.weekPlan();
+    expect(plan.doubleWeek).toBe(18);
+    expect(ESPNSync.weekRangeFrom(plan, 18))
+      .toEqual({ startStr: "2027-02-15", endStr: "2027-02-28" });
+    // Matchup 18 covers weeks 18 and 19, so it reaches into March.
+    expect(ESPNSync.matchupWindowFor(18, plan).startStr).toBe("2027-02-15");
+    expect(ESPNSync.matchupWindowFor(18, plan).endStr).toBe("2027-03-07");
+    expect(ESPNSync.matchupWindowFor(19, plan).startStr).toBe("2027-03-08");
+    expect(ESPNSync.matchupWindowFor(19, plan).endStr).toBe("2027-03-21");
+    expect(ESPNSync.matchupWindowFor(20, plan).startStr).toBe("2027-03-22");
+    expect(ESPNSync.matchupWindowFor(20, plan).endStr).toBe("2027-04-04");
+  });
+
+  it("ignores the December NBA Cup gap, which looks identical", () => {
+    // The 2027 schedule has 8 straight gameless days Dec 4-11 (the NBA Cup
+    // knockout window). Searching the whole season would find that run
+    // first and double the wrong week.
+    const s = baseState(2027);
+    s.league.firstScoringPeriod = 1;
+    const games = seasonSchedule("2026-10-20", "2027-02-19", "2027-02-24", 174)
+      .filter((g: any) => !(g.date >= "2026-12-04" && g.date <= "2026-12-11"));
+    s.scheduleLookup = { 2: games };
+    const ESPNSync = loadESPNSync(s);
+    expect(ESPNSync.allStarBreakStr()).toBe("2027-02-19");
+    expect(ESPNSync.weekPlan().doubleWeek).toBe(18);
+  });
+
+  it("leaves weeks at 7 days when no break can be found", () => {
+    const s = baseState(2027);
+    s.league.firstScoringPeriod = 1;
+    // A game every single day: no break to find.
+    s.scheduleLookup = { 2: seasonSchedule("2026-10-20", "2099-01-01", "2099-01-02", 174) };
+    const ESPNSync = loadESPNSync(s);
+    expect(ESPNSync.allStarBreakStr()).toBeNull();
+    expect(ESPNSync.weekPlan().doubleWeek).toBe(0);
+    expect(ESPNSync.weekRangeFrom(ESPNSync.weekPlan(), 18))
+      .toEqual({ startStr: "2027-02-15", endStr: "2027-02-21" });
+  });
+
+  it("needs a run of at least 4 gameless days", () => {
+    const s = baseState(2027);
+    s.league.firstScoringPeriod = 1;
+    // A 3-day gap is an ordinary light stretch, not the All-Star break.
+    s.scheduleLookup = { 2: seasonSchedule("2026-10-20", "2027-02-19", "2027-02-21", 174) };
+    const ESPNSync = loadESPNSync(s);
+    expect(ESPNSync.allStarBreakStr()).toBeNull();
+  });
+
+  it("rejects an implausibly long run as missing data, not a break", () => {
+    // If February has no games at all the longest run is the whole search
+    // window. That means the schedule is incomplete, not that the league
+    // took three weeks off, and merging on it would shift every later week.
+    const s = baseState(2027);
+    s.league.firstScoringPeriod = 1;
+    s.scheduleLookup = {
+      2: seasonSchedule("2026-10-20", "2027-02-01", "2027-03-15", 174),
+    };
+    const ESPNSync = loadESPNSync(s);
+    expect(ESPNSync.allStarBreakStr()).toBeNull();
+    expect(ESPNSync.weekPlan().doubleWeek).toBe(0);
+  });
+});
+
+describe("All-Star detection against the real 2026-27 NBA schedule", () => {
+  // Not synthetic. These are the 156 real game days of the 2026-27 season,
+  // fetched from ESPN's proTeamSchedules_wl. The whole season contains
+  // exactly two gameless runs of 4 or more days:
+  //
+  //   2026-12-04 to 2026-12-11  (8 days)  NBA Cup knockout window
+  //   2027-02-19 to 2027-02-24  (6 days)  All-Star break
+  //
+  // The December run is longer, which is precisely why the search is
+  // restricted to Feb 1 through Mar 15.
+  const real = JSON.parse(
+    fs.readFileSync(path.join(ROOT, "tests/fixtures/nba-schedule-2027-gamedays.json"), "utf8"),
+  );
+
+  function realState() {
+    const s = baseState(2027);
+    s.league.firstScoringPeriod = real.firstScoringPeriod;
+    s.league.matchupPeriods = {
+      "1": [1], "2": [2], "17": [17], "18": [18, 19], "19": [20, 21], "20": [22, 23],
+    };
+    s.league.currentMatchupPeriod = 0;
+    s.scheduleLookup = {
+      2: real.gameDays.map((g: [string, number]) => ({ date: g[0], scoringPeriodId: g[1] })),
+    };
+    return s;
+  }
+
+  it("picks the February break over the longer December gap", () => {
+    const ESPNSync = loadESPNSync(realState());
+    expect(ESPNSync.openingNightStr()).toBe("2026-10-20");
+    expect(ESPNSync.allStarBreakStr()).toBe("2027-02-19");
+    expect(ESPNSync.weekPlan().doubleWeek).toBe(18);
+  });
+
+  it("stretches week 18 to 14 days and shifts the rest", () => {
+    const ESPNSync = loadESPNSync(realState());
+    const plan = ESPNSync.weekPlan();
+    expect(ESPNSync.weekRangeFrom(plan, 17))
+      .toEqual({ startStr: "2027-02-08", endStr: "2027-02-14" });
+    expect(ESPNSync.weekRangeFrom(plan, 18))
+      .toEqual({ startStr: "2027-02-15", endStr: "2027-02-28" });
+    expect(ESPNSync.weekRangeFrom(plan, 19))
+      .toEqual({ startStr: "2027-03-01", endStr: "2027-03-07" });
+  });
+
+  it("places the three playoff matchups where ESPN's pattern says", () => {
+    // These are the dates the round-4 report inferred from last season's
+    // completed scores. Before this fix the app had matchup 18 ending
+    // Feb 28 and 19 and 20 each a full week early.
+    const ESPNSync = loadESPNSync(realState());
+    const plan = ESPNSync.weekPlan();
+    const win = (id: number) => {
+      const w = ESPNSync.matchupWindowFor(id, plan);
+      return w.startStr + ".." + w.endStr;
+    };
+    expect(win(18)).toBe("2027-02-15..2027-03-07");
+    expect(win(19)).toBe("2027-03-08..2027-03-21");
+    expect(win(20)).toBe("2027-03-22..2027-04-04");
+  });
+
+  it("still gets opening week and week 2 right", () => {
+    const ESPNSync = loadESPNSync(realState());
+    const plan = ESPNSync.weekPlan();
+    expect(ESPNSync.matchupWindowFor(1, plan).startStr).toBe("2026-10-20");
+    expect(ESPNSync.matchupWindowFor(1, plan).endStr).toBe("2026-10-25");
+    expect(ESPNSync.matchupWindowFor(2, plan).startStr).toBe("2026-10-26");
+    expect(ESPNSync.matchupWindowFor(2, plan).endStr).toBe("2026-11-01");
+  });
+
+  it("counts a Denver-shaped week correctly through the break", () => {
+    // Week 18 is 14 days, so a team plays roughly twice as many games in it
+    // as in a normal week. That is the number streaming decisions turn on.
+    const state = realState();
+    const schedule = state.scheduleLookup[2];
+    const ESPNSync = loadESPNSync(state);
+    const plan = ESPNSync.weekPlan();
+    const w17 = ESPNSync.weekRangeFrom(plan, 17);
+    const w18 = ESPNSync.weekRangeFrom(plan, 18);
+    const n17 = ESPNSync.countGamesInRange(schedule, w17.startStr, w17.endStr);
+    const n18 = ESPNSync.countGamesInRange(schedule, w18.startStr, w18.endStr);
+    // The fixture holds league-wide game days, so this counts days with any
+    // game. A 14-day week must contain more of them than a 7-day week.
+    expect(n17).toBeGreaterThan(0);
+    expect(n18).toBeGreaterThan(n17);
+  });
+});
+
+describe("observed windows self-correct a wrong week guess", () => {
+  // A finished matchup's pointsByScoringPeriod is keyed by scoring period,
+  // and a scoring period is one day, so it gives the exact window with no
+  // week arithmetic involved. Preferring it means a bad All-Star guess fixes
+  // itself for every matchup already played.
+  function stateWithHistory() {
+    const s = baseState(2027);
+    s.league.firstScoringPeriod = 1;
+    s.league.matchupPeriods = { "1": [1], "2": [2] };
+    s.scheduleLookup = {
+      2: [
+        { date: "2026-10-20", scoringPeriodId: 1 },
+        { date: "2026-10-21", scoringPeriodId: 2 },
+        { date: "2026-10-22", scoringPeriodId: 3 },
+        { date: "2026-10-26", scoringPeriodId: 7 },
+        { date: "2026-10-28", scoringPeriodId: 9 },
+      ],
+    };
+    s.league.schedule = [
+      {
+        matchupPeriodId: 1,
+        home: { pointsByScoringPeriod: { "1": 90, "3": 102 } },
+        away: { pointsByScoringPeriod: { "2": 88 } },
+      },
+    ];
+    return s;
+  }
+
+  it("keeps the scored day ids when parsing the matchup schedule", () => {
+    // parseMatchup used to store only {teamId, wins}, which threw away the
+    // one record of which days ESPN scored. The self-correction below would
+    // have been dead code against real state.
+    const state = baseState(2027);
+    state.myTeam.teamId = 1;
+    state.league.currentMatchupPeriod = 1;
+    const ESPNSync = loadESPNSync(state);
+    ESPNSync.parseMatchup({
+      schedule: [{
+        matchupPeriodId: 1,
+        home: { teamId: 1, totalPoints: 5, pointsByScoringPeriod: { "1": 90, "3": 102 } },
+        away: { teamId: 2, totalPoints: 4, pointsByScoringPeriod: { "2": 88 } },
+      }],
+    });
+    expect(state.league.schedule[0].home.scoredPeriods).toEqual([1, 3]);
+    expect(state.league.schedule[0].away.scoredPeriods).toEqual([2]);
+    // The float scores themselves are not retained; only which days counted.
+    expect(state.league.schedule[0].home.pointsByScoringPeriod).toBeUndefined();
+  });
+
+  it("reads scored days from parsed state, not just raw ESPN data", () => {
+    const s = stateWithHistory();
+    // Replace the raw shape with the shape parseMatchup actually stores.
+    s.league.schedule = [{
+      matchupPeriodId: 1,
+      home: { teamId: 1, wins: 5, scoredPeriods: [1, 3] },
+      away: { teamId: 2, wins: 4, scoredPeriods: [2] },
+    }];
+    const ESPNSync = loadESPNSync(s);
+    expect(ESPNSync.observedMatchupWindows()[1])
+      .toEqual({ startStr: "2026-10-20", endStr: "2026-10-22" });
+  });
+
+  it("maps scoring periods to their dates", () => {
+    const ESPNSync = loadESPNSync(stateWithHistory());
+    const dates = ESPNSync.scoringPeriodDates();
+    expect(dates[1]).toBe("2026-10-20");
+    expect(dates[3]).toBe("2026-10-22");
+    expect(dates[9]).toBe("2026-10-28");
+  });
+
+  it("reads a finished matchup's real day range from both sides", () => {
+    const ESPNSync = loadESPNSync(stateWithHistory());
+    const obs = ESPNSync.observedMatchupWindows();
+    // Periods 1, 2 and 3 across home and away: Oct 20 through Oct 22.
+    expect(obs[1]).toEqual({ startStr: "2026-10-20", endStr: "2026-10-22" });
+  });
+
+  it("prefers the observed window over the computed one", () => {
+    const state = stateWithHistory();
+    const ESPNSync = loadESPNSync(state);
+    const plan = ESPNSync.weekPlan();
+    const win = ESPNSync.matchupWindowFor(1, plan, ESPNSync.observedMatchupWindows());
+    expect(win.source).toBe("observed");
+    expect(win.endStr).toBe("2026-10-22");
+    // Without the observed data the week model gives the full opening week.
+    expect(ESPNSync.matchupWindowFor(1, plan).endStr).toBe("2026-10-25");
+  });
+
+  it("falls back to the week model for a matchup with no history", () => {
+    const state = stateWithHistory();
+    const ESPNSync = loadESPNSync(state);
+    const win = ESPNSync.matchupWindowFor(2, ESPNSync.weekPlan(),
+      ESPNSync.observedMatchupWindows());
+    expect(win.source).toBe("weeks");
+    expect(win.startStr).toBe("2026-10-26");
+  });
+
+  it("warns in the sync log when ESPN disagrees with the computed window", () => {
+    // The self-correction signal. If ESPN says matchup N and today is not
+    // inside our window for N, the week model is wrong and the user should
+    // see it rather than get silently bad numbers all season.
+    const logs: Array<[string, string]> = [];
+    const state = baseState(2027);
+    state.league.firstScoringPeriod = 1;
+    state.league.matchupPeriods = { "1": [1] };
+    state.league.currentMatchupPeriod = 1;
+    // Opening night a long way in the past, so today is well outside
+    // matchup 1's window while still being after the season started.
+    state.scheduleLookup = { 2: [{ date: "2026-01-05", scoringPeriodId: 1 }] };
+    const ESPNSync = loadESPNSync(state, {
+      addSyncLog: (level: string, msg: string) => { logs.push([level, msg]); },
+    });
+    ESPNSync.enrichGamesRemaining();
+    const warning = logs.find(([, m]) => /Matchup window looks wrong/.test(m));
+    expect(warning).toBeDefined();
+    expect(warning![0]).toBe("error");
+    expect(warning![1]).toMatch(/ESPN says matchup 1/);
+    expect(warning![1]).toMatch(/All-Star week/);
+  });
+
+  it("stays quiet before opening night, when being outside is normal", () => {
+    // Preseason, the window is matchup 1's and today is legitimately before
+    // it. Warning here would fire on every sync until the season started.
+    const logs: Array<[string, string]> = [];
+    const state = baseState(2027);
+    state.league.firstScoringPeriod = 1;
+    state.league.matchupPeriods = { "1": [1] };
+    state.league.currentMatchupPeriod = 1;
+    const future = new Date();
+    future.setDate(future.getDate() + 30);
+    const p = (n: number) => String(n).padStart(2, "0");
+    const futureStr = future.getFullYear() + "-" + p(future.getMonth() + 1) +
+      "-" + p(future.getDate());
+    state.scheduleLookup = { 2: [{ date: futureStr, scoringPeriodId: 1 }] };
+    const ESPNSync = loadESPNSync(state, {
+      addSyncLog: (level: string, msg: string) => { logs.push([level, msg]); },
+    });
+    ESPNSync.enrichGamesRemaining();
+    expect(logs.find(([, m]) => /looks wrong/.test(m))).toBeUndefined();
+  });
+
+  it("stays quiet when the window contains today", () => {
+    const logs: Array<[string, string]> = [];
+    const state = baseState(2027);
+    state.league.firstScoringPeriod = 1;
+    state.league.matchupPeriods = { "1": [1] };
+    state.league.currentMatchupPeriod = 1;
+    const today = new Date();
+    const p = (n: number) => String(n).padStart(2, "0");
+    const todayStr = today.getFullYear() + "-" + p(today.getMonth() + 1) + "-" + p(today.getDate());
+    state.scheduleLookup = { 2: [{ date: todayStr, scoringPeriodId: 1 }] };
+    const ESPNSync = loadESPNSync(state, {
+      addSyncLog: (level: string, msg: string) => { logs.push([level, msg]); },
+    });
+    ESPNSync.enrichGamesRemaining();
+    expect(logs.find(([, m]) => /looks wrong/.test(m))).toBeUndefined();
+  });
+});
+
+describe("the NBA schedule is refetched daily, not once a season", () => {
+  // The NBA Cup knockout window leaves 8 gameless days in early December
+  // for teams that have not advanced. Those games are added to the schedule
+  // later, as are postponements and reschedules. Caching once per season
+  // meant they would never appear and games remaining would undercount.
+  function freshState(over: any = {}) {
+    const s = baseState(2027);
+    s.scheduleLookup = { 2: [{ date: "2026-10-20", scoringPeriodId: 1 }] };
+    s.scheduleSeasonId = 2027;
+    return Object.assign(s, over);
+  }
+
+  it("treats a schedule fetched minutes ago as fresh", () => {
+    const state = freshState({ scheduleFetchedAt: new Date().toISOString() });
+    const ESPNSync = loadESPNSync(state);
+    expect(ESPNSync.scheduleIsFresh()).toBe(true);
+  });
+
+  it("treats a schedule over a day old as stale", () => {
+    const old = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
+    const ESPNSync = loadESPNSync(freshState({ scheduleFetchedAt: old }));
+    expect(ESPNSync.scheduleIsFresh()).toBe(false);
+  });
+
+  it("treats a schedule with no timestamp as stale", () => {
+    // Everyone's existing state has no scheduleFetchedAt, so the first sync
+    // after this ships must refetch rather than trust the cached copy.
+    const ESPNSync = loadESPNSync(freshState());
+    expect(ESPNSync.scheduleIsFresh()).toBe(false);
+  });
+
+  it("still refetches on a season rollover", () => {
+    const state = freshState({
+      scheduleFetchedAt: new Date().toISOString(),
+      scheduleSeasonId: 2026,
+    });
+    const ESPNSync = loadESPNSync(state);
+    expect(ESPNSync.scheduleIsFresh()).toBe(false);
+  });
+
+  it("treats an empty lookup as stale", () => {
+    const state = freshState({
+      scheduleFetchedAt: new Date().toISOString(),
+      scheduleLookup: {},
+    });
+    const ESPNSync = loadESPNSync(state);
+    expect(ESPNSync.scheduleIsFresh()).toBe(false);
   });
 });
 

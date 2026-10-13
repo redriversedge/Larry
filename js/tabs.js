@@ -2321,7 +2321,11 @@ function buildPlayerPopup() {
   html += '<span class="player-initials" style="width:56px;height:42px;font-size:1.2rem;background:' + color + ';display:none;border-radius:8px">' + initials + '</span>';
   html += '</div>';
   html += '<div class="popup-info"><h3>' + statusBadge(p.injuryStatus) + ' ' + esc(p.name) + '</h3>';
-  html += '<div class="popup-meta">' + formatPositions(p.eligibleSlots) + ' | ' + esc(p.nbaTeam) + ' | Own: ' + fmt(p.ownership, 0) + '%</div>';
+  // Ownership is blank until ESPN publishes it, which before the draft is
+  // every player. "Own: -%" reads like a bug; omit the field instead.
+  var ownPct = typeof p.ownership === 'number' && isFinite(p.ownership)
+    ? ' | Own: ' + fmt(p.ownership, 0) + '%' : '';
+  html += '<div class="popup-meta">' + formatPositions(p.eligibleSlots) + ' | ' + esc(p.nbaTeam) + ownPct + '</div>';
   if (p.status !== 'ACTIVE' && p.status !== 'HEALTHY') {
     html += '<div class="popup-injury">' + esc(p.status) + '</div>';
   }
@@ -2471,16 +2475,20 @@ function renderPopupNews(p) {
   html += '<div>' + trendIcon + ' ' + streak.label + '</div>';
   html += '</div>';
 
-  // Ownership trend
-  html += '<div style="padding:8px 0;border-bottom:1px solid var(--border)">';
-  html += '<div style="font-weight:700;margin-bottom:4px">Ownership</div>';
-  html += '<div>' + fmt(p.ownership, 1) + '% owned across ESPN leagues</div>';
-  if (p.ownership < 50) {
-    html += '<div class="text-xs muted" style="margin-top:4px">Low ownership - potential sleeper or streaming option</div>';
-  } else if (p.ownership > 95) {
-    html += '<div class="text-xs muted" style="margin-top:4px">Must-roster player in all formats</div>';
+  // Ownership trend. Skipped entirely when ESPN has not published a number,
+  // which before the draft is everyone. Showing "-% owned across ESPN
+  // leagues" looks like a failure rather than missing upstream data.
+  if (typeof p.ownership === 'number' && isFinite(p.ownership)) {
+    html += '<div style="padding:8px 0;border-bottom:1px solid var(--border)">';
+    html += '<div style="font-weight:700;margin-bottom:4px">Ownership</div>';
+    html += '<div>' + fmt(p.ownership, 1) + '% owned across ESPN leagues</div>';
+    if (p.ownership < 50) {
+      html += '<div class="text-xs muted" style="margin-top:4px">Low ownership - potential sleeper or streaming option</div>';
+    } else if (p.ownership > 95) {
+      html += '<div class="text-xs muted" style="margin-top:4px">Must-roster player in all formats</div>';
+    }
+    html += '</div>';
   }
-  html += '</div>';
 
   // Fantasy relevance
   html += '<div style="padding:8px 0">';
