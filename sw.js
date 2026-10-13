@@ -1,5 +1,5 @@
 // Larry v3.0 Service Worker
-var CACHE_VERSION = 'larry-v3.18.0';
+var CACHE_VERSION = 'larry-v3.19.0';
 var CACHE_FILES = [
   '/',
   '/index.html',
@@ -17,6 +17,10 @@ var CACHE_FILES = [
   '/assets/larry-logo.svg',
   '/assets/icon-192.png',
   '/assets/icon-512.png',
+  '/assets/icon-maskable-192.png',
+  '/assets/icon-maskable-512.png',
+  '/assets/favicon-32.png',
+  '/apple-touch-icon.png',
   '/connect',
   '/link',
   '/public/bookmarklet.js',

@@ -192,6 +192,7 @@ The chat is strategy-aware. It references target categories when discussing pick
 - Shrink a small sample toward the pool mean. Use the player's own projection, or every player scores 0 before opening night.
 - Trust a prompt rule to constrain model output when the constraint is checkable in code. Enforce it in the validator too.
 - Pin a Claude model id in a Netlify function. Read `process.env.ANTHROPIC_MODEL` with a current default, or it silently 404s when the model retires.
+- Add an HTML page without the home-screen icon block (manifest, 180px `apple-touch-icon`, favicon, `apple-mobile-web-app-title`). Phones take the icon from whichever page is open when "Add to Home Screen" is tapped; `/connect` and `/link` had none, so the app was saved as a letter "L". Icons are generated from `assets/icon-512.png`: opaque 180px for iOS at `/apple-touch-icon.png`, and `icon-maskable-*.png` with the art inside the 80% safe zone for Android.
 - Commit directly to `main`
 - Use em dashes in any file (use commas, periods, or double hyphens)
 
