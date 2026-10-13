@@ -286,3 +286,118 @@ describe("games remaining from a real schedule", () => {
     expect(count([{ date: "" }, {}, { date: "2026-10-20" }], "2026-10-01", "2026-11-01")).toBe(1);
   });
 });
+
+describe("matchup windows", () => {
+  // A matchup window is not a calendar week. Two ways that bit:
+  //  - Preseason, the current calendar week has no NBA games at all, so
+  //    every player showed 0 games even though matchup 1 is coming.
+  //  - Playoff matchups span two scoring periods, so a calendar week
+  //    covers half of one.
+  function stateWithSchedule(over: any = {}) {
+    const s = baseState(2027);
+    s.league.matchupPeriods = { "1": [1], "2": [2], "18": [18, 19] };
+    s.league.currentMatchupPeriod = 0; // preseason
+    s.scheduleLookup = {
+      2: [
+        { date: "2026-10-20", scoringPeriodId: 1 },
+        { date: "2026-10-22", scoringPeriodId: 1 },
+        { date: "2026-10-27", scoringPeriodId: 2 },
+        { date: "2027-02-16", scoringPeriodId: 18 },
+        { date: "2027-02-23", scoringPeriodId: 19 },
+      ],
+      13: [
+        { date: "2026-10-21", scoringPeriodId: 1 },
+        { date: "2027-02-18", scoringPeriodId: 18 },
+      ],
+    };
+    return Object.assign(s, over);
+  }
+
+  it("maps a playoff matchup to both of its scoring periods", () => {
+    const state = stateWithSchedule();
+    const ESPNSync = loadESPNSync(state);
+    // Exercised through the window helpers, which are what callers use.
+    state.league.currentMatchupPeriod = 18;
+    ESPNSync.enrichGamesRemaining();
+    // Matchup 18 spans periods 18 and 19, so the window has to reach the
+    // Feb 23 game, not stop at the end of the first week.
+    expect(state.matchup.windowStart).toBe("2027-02-16");
+    expect(state.matchup.windowEnd).toBe("2027-02-23");
+    expect(state.matchup.windowSource).toBe("schedule");
+  });
+
+  it("uses matchup 1's window before the season starts", () => {
+    const state = stateWithSchedule();
+    const ESPNSync = loadESPNSync(state);
+    ESPNSync.enrichGamesRemaining();
+    expect(state.matchup.windowMatchupPeriodId).toBe(1);
+    expect(state.matchup.windowStart).toBe("2026-10-20");
+    expect(state.matchup.windowEnd).toBe("2026-10-22");
+  });
+
+  it("counts a future window from its start, not from today", () => {
+    // Today is before opening night, so counting "from today to window end"
+    // would still work, but counting from the window start is what makes
+    // the preseason number meaningful rather than zero.
+    const state = stateWithSchedule();
+    state.allPlayers = [
+      { id: 1, proTeamId: 2, schedule: state.scheduleLookup[2] },
+      { id: 2, proTeamId: 13, schedule: state.scheduleLookup[13] },
+    ];
+    const ESPNSync = loadESPNSync(state);
+    ESPNSync.enrichGamesRemaining();
+    expect(state.allPlayers[0].gamesRemaining).toBe(2); // Oct 20 and 22
+    expect(state.allPlayers[1].gamesRemaining).toBe(1); // Oct 21
+  });
+
+  it("falls back to the calendar week when there is no schedule", () => {
+    const state = stateWithSchedule({ scheduleLookup: {} });
+    const ESPNSync = loadESPNSync(state);
+    ESPNSync.enrichGamesRemaining();
+    expect(state.matchup.windowSource).toBe("calendar");
+  });
+});
+
+describe("games remaining for players without a schedule", () => {
+  it("gives an unsigned player zero games, not the weekly estimate", () => {
+    // The 3.5-games-a-week fallback was applied to anyone without a
+    // schedule, so unsigned free agents (Westbrook, Chris Paul) showed 3
+    // phantom games while every signed player correctly showed 0. Streaming
+    // and Larry's Move then ranked the unsigned players higher.
+    const state = baseState(2027);
+    state.scheduleLookup = { 2: [{ date: "2026-10-20", scoringPeriodId: 1 }] };
+    state.league.matchupPeriods = { "1": [1] };
+    state.allPlayers = [
+      { id: 1, proTeamId: 0, schedule: [] }, // unsigned
+      { id: 2, proTeamId: 2, schedule: state.scheduleLookup[2] },
+    ];
+    const ESPNSync = loadESPNSync(state);
+    ESPNSync.enrichGamesRemaining();
+
+    expect(state.allPlayers[0].gamesRemaining).toBe(0);
+    expect(state.allPlayers[0].gamesRemainingROS).toBe(0);
+    expect(state.allPlayers[1].gamesRemaining).toBe(1);
+  });
+
+  it("gives a signed player zero when their team has no games left", () => {
+    const state = baseState(2027);
+    state.scheduleLookup = { 2: [{ date: "2026-10-20", scoringPeriodId: 1 }] };
+    state.league.matchupPeriods = { "1": [1] };
+    // On a real team, but no schedule entries of their own.
+    state.allPlayers = [{ id: 3, proTeamId: 99, schedule: [] }];
+    const ESPNSync = loadESPNSync(state);
+    ESPNSync.enrichGamesRemaining();
+    expect(state.allPlayers[0].gamesRemaining).toBe(0);
+  });
+
+  it("still estimates when the whole schedule fetch failed", () => {
+    // Degrading to an estimate is right when we have no schedule at all;
+    // it is only wrong when we DO have one and the player is absent from it.
+    const state = baseState(2027);
+    state.scheduleLookup = {};
+    state.allPlayers = [{ id: 4, proTeamId: 2, schedule: [] }];
+    const ESPNSync = loadESPNSync(state);
+    ESPNSync.enrichGamesRemaining();
+    expect(state.allPlayers[0].gamesRemaining).toBeGreaterThan(0);
+  });
+});

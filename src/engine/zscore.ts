@@ -184,8 +184,12 @@ export interface BaseValueInput {
   perGame?: Partial<CategoryVector> | null;
   // Season totals, the shape ESPN gives us today. Divided by gamesPlayed.
   seasonTotals?: Partial<CategoryVector> | null;
-  // Full-season projected totals. Only consulted when gamesPlayed is 0.
+  // Full-season projected totals. Pro-rated over 82 games and used as the
+  // shrink prior, and as the per-game source when gamesPlayed is 0.
   projectedSeason?: Partial<CategoryVector> | null;
+  // Already-per-game projection. Preferred over projectedSeason when the
+  // caller has it (the app's parser produces this as stats.projectedPerGame).
+  projectedPerGame?: Partial<CategoryVector> | null;
 }
 
 export interface BaseValueRow {
@@ -227,9 +231,51 @@ function toPerGame(input: BaseValueInput, cats: readonly Category[]): CategoryVe
     for (const c of cats) pg[c] = num(totals[c]) / gp;
     return pg;
   }
+  // No games played: the observed rate is the projection. With w = 0 at
+  // gp = 0 this term is weighted out anyway and the prior carries the
+  // score, but keeping them equal means perGame is never a misleading
+  // zero in the returned row.
+  if (input.projectedPerGame) {
+    for (const c of cats) pg[c] = num(input.projectedPerGame[c]);
+    return pg;
+  }
   const projected = input.projectedSeason ?? {};
   for (const c of cats) pg[c] = num(projected[c]) / FULL_SEASON_GAMES;
   return pg;
+}
+
+// The pre-observation prior for a player: their projected per-game rate.
+// Returns null when there is no projection to work from, which means the
+// caller should fall back to the pool mean.
+//
+// Accepts either an explicit projectedPerGame vector (what the app's parser
+// now produces) or projectedSeason totals, which get pro-rated over a full
+// season the same way toPerGame does.
+function priorPerGame(
+  input: BaseValueInput,
+  cats: readonly Category[],
+): CategoryVector | null {
+  if (input.projectedPerGame) {
+    const prior = emptyVector();
+    let any = false;
+    for (const c of cats) {
+      const v = num(input.projectedPerGame[c]);
+      prior[c] = v;
+      if (v !== 0) any = true;
+    }
+    return any ? prior : null;
+  }
+  if (input.projectedSeason) {
+    const prior = emptyVector();
+    let any = false;
+    for (const c of cats) {
+      const v = num(input.projectedSeason[c]) / FULL_SEASON_GAMES;
+      prior[c] = v;
+      if (v !== 0) any = true;
+    }
+    return any ? prior : null;
+  }
+  return null;
 }
 
 // Adapt a per-game vector to the PlayerProjection shape buildQPool consumes.
@@ -256,6 +302,18 @@ export function computeBaseValues(
   const prepared = players.map((input) => ({
     input,
     perGame: toPerGame(input, cats),
+    // Step 1b. The prior: our best guess at this player's rate BEFORE we
+    // have seen them play. The projection when we have one, otherwise null
+    // and we fall back to the pool mean.
+    //
+    // This is what the shrink pulls toward, and it is the whole reason
+    // preseason ranking works. Shrinking toward the pool mean meant that at
+    // gp = 0, w = 0, every player landed exactly on the mean and scored 0.
+    // That is defensible as "no evidence" mid-season, but before opening
+    // night EVERY player has 0 games, so the entire board was zeros and the
+    // displayed order was just ESPN's ownership ranking. Meanwhile each
+    // player's projection was sitting right there unused.
+    prior: priorPerGame(input, cats),
   }));
 
   if (prepared.length === 0) {
@@ -268,33 +326,41 @@ export function computeBaseValues(
 
   // Step 2. First-pass pool is everyone with a real sample. Below MIN_GP_POOL
   // games the per-game rate says more about noise than about the player, so
-  // those rows are scored against the pool but never help define it. If no
-  // one clears the bar (a synthetic fixture, or a snapshot taken on opening
-  // night) fall back to the whole population rather than dividing by nothing.
+  // those rows are scored against the pool but never help define it.
+  //
+  // When nobody has cleared the bar yet (preseason, or opening week) the pool
+  // is built from priors instead. A pool defined by 500 players who have all
+  // played 0 games has no spread at all; one defined by their projections
+  // describes the league properly.
   const eligible = prepared.filter((r) => r.input.gamesPlayed >= MIN_GP_POOL);
-  const firstPass = eligible.length > 0 ? eligible : prepared;
+  const usePriorPool = eligible.length === 0;
+  const firstPass = usePriorPool ? prepared : eligible;
 
   // Step 3. Iterate the pool down to starter quality. Pool selection uses the
   // same clamp as the final score so a single category outlier cannot buy a
   // seat in the reference pool.
   const { stats, players: qPool } = buildQPool(
-    firstPass.map((r) => asProjection(r.input.id, r.perGame)),
+    firstPass.map((r) =>
+      asProjection(r.input.id, usePriorPool ? (r.prior ?? r.perGame) : r.perGame)),
     rosterSize,
     { categories: cats, cap: Z_CAP },
   );
 
-  const rows: BaseValueRow[] = prepared.map(({ input, perGame }) => {
+  const rows: BaseValueRow[] = prepared.map(({ input, perGame, prior }) => {
     const gp = input.gamesPlayed;
-    // Step 4. Shrink toward the pool mean in proportion to sample size. A
-    // full season is taken at face value. gp = 0 lands on w = 0, which is
-    // the pool mean exactly and therefore a base value of 0: we are saying
-    // "no evidence", not "average player".
+    // Step 4. Blend observed production with the prior in proportion to
+    // sample size. w = gp / (gp + 8): opening night is all projection, about
+    // half and half by 8 games, mostly real production by 30. No cutover
+    // date and no discontinuity.
     const w = gp < FULL_SEASON_GAMES ? gp / (gp + SHRINK_K) : 1;
     const shrunk = emptyVector();
     const z = emptyVector();
     let baseValue = 0;
     for (const c of cats) {
-      shrunk[c] = w * perGame[c] + (1 - w) * stats.mean[c];
+      // No projection for this player means we genuinely know nothing, so
+      // the pool mean is still the right prior and they still score 0.
+      const priorC = prior ? prior[c] : stats.mean[c];
+      shrunk[c] = w * perGame[c] + (1 - w) * priorC;
       // Step 5.
       z[c] = clamp((shrunk[c] - stats.mean[c]) / stats.stdev[c], Z_CAP);
       // Step 6.

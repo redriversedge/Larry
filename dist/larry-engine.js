@@ -185,9 +185,36 @@ var LarryEngine = (() => {
       for (const c of cats) pg[c] = num(totals[c]) / gp;
       return pg;
     }
+    if (input.projectedPerGame) {
+      for (const c of cats) pg[c] = num(input.projectedPerGame[c]);
+      return pg;
+    }
     const projected = input.projectedSeason ?? {};
     for (const c of cats) pg[c] = num(projected[c]) / FULL_SEASON_GAMES;
     return pg;
+  }
+  function priorPerGame(input, cats) {
+    if (input.projectedPerGame) {
+      const prior = emptyVector();
+      let any = false;
+      for (const c of cats) {
+        const v = num(input.projectedPerGame[c]);
+        prior[c] = v;
+        if (v !== 0) any = true;
+      }
+      return any ? prior : null;
+    }
+    if (input.projectedSeason) {
+      const prior = emptyVector();
+      let any = false;
+      for (const c of cats) {
+        const v = num(input.projectedSeason[c]) / FULL_SEASON_GAMES;
+        prior[c] = v;
+        if (v !== 0) any = true;
+      }
+      return any ? prior : null;
+    }
+    return null;
   }
   function asProjection(id, perGame) {
     return {
@@ -205,7 +232,19 @@ var LarryEngine = (() => {
     const rosterSize = opts.rosterSize && opts.rosterSize > 0 ? opts.rosterSize : DEFAULT_ROSTER_SIZE;
     const prepared = players.map((input) => ({
       input,
-      perGame: toPerGame(input, cats)
+      perGame: toPerGame(input, cats),
+      // Step 1b. The prior: our best guess at this player's rate BEFORE we
+      // have seen them play. The projection when we have one, otherwise null
+      // and we fall back to the pool mean.
+      //
+      // This is what the shrink pulls toward, and it is the whole reason
+      // preseason ranking works. Shrinking toward the pool mean meant that at
+      // gp = 0, w = 0, every player landed exactly on the mean and scored 0.
+      // That is defensible as "no evidence" mid-season, but before opening
+      // night EVERY player has 0 games, so the entire board was zeros and the
+      // displayed order was just ESPN's ownership ranking. Meanwhile each
+      // player's projection was sitting right there unused.
+      prior: priorPerGame(input, cats)
     }));
     if (prepared.length === 0) {
       return {
@@ -215,20 +254,22 @@ var LarryEngine = (() => {
       };
     }
     const eligible = prepared.filter((r) => r.input.gamesPlayed >= MIN_GP_POOL);
-    const firstPass = eligible.length > 0 ? eligible : prepared;
+    const usePriorPool = eligible.length === 0;
+    const firstPass = usePriorPool ? prepared : eligible;
     const { stats, players: qPool } = buildQPool(
-      firstPass.map((r) => asProjection(r.input.id, r.perGame)),
+      firstPass.map((r) => asProjection(r.input.id, usePriorPool ? r.prior ?? r.perGame : r.perGame)),
       rosterSize,
       { categories: cats, cap: Z_CAP }
     );
-    const rows = prepared.map(({ input, perGame }) => {
+    const rows = prepared.map(({ input, perGame, prior }) => {
       const gp = input.gamesPlayed;
       const w = gp < FULL_SEASON_GAMES ? gp / (gp + SHRINK_K) : 1;
       const shrunk = emptyVector();
       const z = emptyVector();
       let baseValue = 0;
       for (const c of cats) {
-        shrunk[c] = w * perGame[c] + (1 - w) * stats.mean[c];
+        const priorC = prior ? prior[c] : stats.mean[c];
+        shrunk[c] = w * perGame[c] + (1 - w) * priorC;
         z[c] = clamp((shrunk[c] - stats.mean[c]) / stats.stdev[c], Z_CAP);
         baseValue += z[c];
       }

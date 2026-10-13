@@ -105,10 +105,21 @@ function corsHeaders(origin) {
   return { headers, allowed };
 }
 
+// Built from char codes so this file stays pure ASCII. The two dashes do
+// different jobs in prose, so they normalise differently: an em dash
+// separates clauses, an en dash joins a range ("3-4 games").
+const EM_DASH = new RegExp(String.fromCharCode(0x2014), 'g');
+const EN_DASH = new RegExp(String.fromCharCode(0x2013), 'g');
+
 function clean(value, maxLen) {
   if (value === null || value === undefined) return '';
   return String(value)
     .replace(new RegExp('[\u0000-\u001F\u007F\u2028\u2029]', 'g'), ' ')
+    // House style has no em or en dashes, and model output sometimes
+    // contains them. Normalising here covers every rendered field at once
+    // rather than relying on the prompt to remember.
+    .replace(EM_DASH, ', ')
+    .replace(EN_DASH, '-')
     .replace(/[<>]/g, '')
     .replace(/\s+/g, ' ')
     .trim()
@@ -162,10 +173,20 @@ function buildDataBlock(ctx) {
     ' | ' + num(league.teamCount, 0) + ' teams' +
     ' | categories ' + cats.join(', ') +
     ' | lineup lock ' + clean(league.lineupLock, 12));
-  lines.push('ACQUISITIONS: ' + num(league.acquisitionsUsed, 0) + ' used' +
+  // Both caps, because they constrain different things: the per-matchup
+  // limit is usually the binding one and was previously not sent at all.
+  var matchupLimit = Number(league.matchupAcquisitionLimit);
+  lines.push('PICKUPS THIS MATCHUP: ' + num(league.matchupAcquisitionsUsed, 0) + ' used' +
+    (matchupLimit >= 0
+      ? ' of ' + num(matchupLimit, 0) + ' allowed' +
+        (Number(league.matchupAcquisitionsUsed) >= matchupLimit
+          ? ' (LIMIT REACHED, no more adds are possible this matchup)'
+          : ' (' + num(matchupLimit - Number(league.matchupAcquisitionsUsed), 0) + ' left)')
+      : ' (no per-matchup limit)'));
+  lines.push('PICKUPS THIS SEASON: ' + num(league.acquisitionsUsed, 0) + ' used' +
     (Number(league.acquisitionLimit) >= 0
       ? ' of ' + num(league.acquisitionLimit, 0)
-      : ' (no limit)'));
+      : ' (no season limit)'));
   lines.push('IR SLOTS: ' + num(league.irSlots, 0) +
     ' total, ' + num(league.irUsed, 0) + ' filled');
 
@@ -237,19 +258,43 @@ function buildDataBlock(ctx) {
   return lines.join('\n');
 }
 
+// True when this manager has no pickups left in the current matchup.
+//
+// The season limit is usually -1 (unlimited) while the per-matchup limit is
+// the one that actually binds, so only the matchup counter is consulted here.
+function pickupsSpent(ctx) {
+  const c = ctx && typeof ctx === 'object' ? ctx : {};
+  const league = c.league && typeof c.league === 'object' ? c.league : {};
+  const limit = Number(league.matchupAcquisitionLimit);
+  if (!isFinite(limit) || limit < 0) return false;
+  const used = Number(league.matchupAcquisitionsUsed);
+  if (!isFinite(used)) return false;
+  return used >= limit;
+}
+
 function buildSystemPrompt(ctx) {
   const c = ctx && typeof ctx === 'object' ? ctx : {};
   const league = c.league && typeof c.league === 'object' ? c.league : {};
-  const weekly = clean(league.lineupLock, 12).toLowerCase() === 'weekly';
+  const lock = clean(league.lineupLock, 20).toLowerCase();
+  const lockRule = lock === 'weekly'
+    ? 'This league locks lineups WEEKLY. Lineup advice is for the week, not for tonight.'
+    : lock === 'individual_game'
+      ? 'This league locks each slot when THAT PLAYER\'S GAME TIPS, not all at once. ' +
+        'So a player in a late game can still be swapped after the early games have ' +
+        'started. Say when a decision can still wait.'
+      : 'This league locks lineups DAILY. Lineup advice is for today.';
+  const limitReached = pickupsSpent(ctx);
 
   return `You are Larry, a fantasy basketball analyst helping ONE manager win THIS week's head-to-head category matchup. You are answering a single question: what should they do today?
 
 HARD RULES, in priority order. These are not suggestions.
 1. NEVER recommend adding a player whose status is OUT, SUSPENSION or INJURY_RESERVE.
 2. NEVER recommend dropping a player in the top 60% of this roster by value, unless you are replacing them with a clearly better healthy player, and if you do, say why in the reason.
-3. Respect the acquisition limit. If a move would spend their last acquisition, say so explicitly.
+3. Respect the pickup limits. ${limitReached
+    ? 'THIS MANAGER HAS NO PICKUPS LEFT THIS MATCHUP. Do not suggest any add or drop. Lineup, IR and hold advice only.'
+    : 'If a move would spend their last pickup of the matchup, say so explicitly.'}
 4. Only propose an IR move for a player marked IR ELIGIBLE, and only when an IR slot is free.
-5. ${weekly ? 'This league locks lineups WEEKLY. Lineup advice is for the week, not for tonight.' : 'This league locks lineups DAILY. Lineup advice is for today.'}
+5. ${lockRule}
 
 METHOD
 a. Decide which categories are winnable, already lost, or genuinely close, using current scores, games left on each side, and per-game rates. A category is not close just because the score is close; weigh how many games remain.
@@ -346,10 +391,16 @@ function strArray(v, maxItems, maxLen) {
 
 // Validate and normalize the model's tool input. Anything unexpected is
 // dropped rather than passed through: the client renders this into the DOM.
-function validateMove(input) {
+function validateMove(input, ctx) {
   if (!input || typeof input !== 'object') return null;
   const headline = clean(input.headline, MAX_HEADLINE);
   if (!headline) return null;
+
+  // The prompt tells the model not to suggest pickups once the matchup limit
+  // is spent, but a prompt rule is advisory. ESPN would reject the add, so
+  // rendering it is worse than useless: the manager would try it and fail.
+  // Drop those actions here, where it is enforceable.
+  const noAdds = pickupsSpent(ctx);
 
   const noMove = bool(input.noMove);
   const rawActions = Array.isArray(input.actions) ? input.actions : [];
@@ -357,6 +408,7 @@ function validateMove(input) {
   for (const a of rawActions.slice(0, MAX_ACTIONS)) {
     if (!a || typeof a !== 'object') continue;
     const type = ACTION_TYPES.indexOf(a.type) >= 0 ? a.type : 'hold';
+    if (noAdds && (type === 'add_drop' || type === 'stream')) continue;
     const action = clean(a.action, 200);
     const reason = clean(a.reason, 300);
     if (!action) continue;
@@ -374,8 +426,14 @@ function validateMove(input) {
   const summary = clean(mr.summary, 400);
   if (!summary) return null;
 
+  // If every action was a pickup we just stripped, the model's headline is
+  // almost certainly "pick up X", which would now sit above an empty list.
+  const strippedAll = noAdds && rawActions.length > 0 && actions.length === 0;
+
   return {
-    headline: headline,
+    headline: strippedAll
+      ? 'No pickups left this matchup. Hold the roster and set the lineup.'
+      : headline,
     // A reply that claims a move but lists none is incoherent; treat it as
     // no-move rather than rendering an empty action list.
     noMove: noMove || actions.length === 0,
@@ -473,7 +531,7 @@ exports.handler = async function (event) {
       }
     }
 
-    const move = validateMove(toolInput);
+    const move = validateMove(toolInput, body);
     if (!move) {
       return {
         statusCode: 502, headers,
@@ -548,5 +606,6 @@ function callClaude(apiKey, payload) {
 }
 
 module.exports._internal = {
-  clean, buildDataBlock, buildSystemPrompt, validateMove, REPORT_MOVE_TOOL,
+  clean, buildDataBlock, buildSystemPrompt, validateMove, pickupsSpent,
+  REPORT_MOVE_TOOL,
 };

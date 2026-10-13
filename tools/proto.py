@@ -20,8 +20,31 @@ def per_game(p):
     st = p["stats"]["season"]
     if gp > 0:
         return {c: (st.get(c) or 0) / gp for c in CATS}, gp
-    pr = p["stats"].get("projectedSeason") or {}
-    return {c: (pr.get(c) or 0) / 82 for c in CATS}, 0
+    return prior_per_game(p) or {c: 0.0 for c in CATS}, 0
+
+
+def prior_per_game(p):
+    """Best guess at a player's per-game rate before we have seen them play.
+
+    This is the shrink target. Shrinking toward the POOL MEAN meant that at
+    gp = 0 the weight w is 0, so every player landed exactly on the mean and
+    scored 0. Mid-season that reads as "no evidence"; in the preseason every
+    player has 0 games, so the whole board was zeros while each player's
+    projection sat unused. Returns None when there is no projection, in which
+    case the caller falls back to the pool mean.
+    """
+    stats = p.get("stats") or {}
+    ppg = stats.get("projectedPerGame")
+    if ppg:
+        prior = {c: float(ppg.get(c) or 0) for c in CATS}
+        if any(v != 0 for v in prior.values()):
+            return prior
+    pr = stats.get("projectedSeason") or {}
+    if pr:
+        prior = {c: float(pr.get(c) or 0) / 82 for c in CATS}
+        if any(v != 0 for v in prior.values()):
+            return prior
+    return None
 
 
 def mean_std(vals):
@@ -46,20 +69,35 @@ def build(players, qpool=True, shrink_k=0, cap=None, out_hair=1.0, gtd_hair=1.0,
     rows = []
     for p in players:
         pg, gp = per_game(p)
-        rows.append({"p": p, "pg": pg, "gp": gp})
+        rows.append({"p": p, "pg": pg, "gp": gp, "prior": prior_per_game(p)})
     base = [r for r in rows if r["gp"] >= min_gp_pool]
-    stats = {c: mean_std([r["pg"][c] for r in base]) for c in CATS}
+    # Preseason: nobody has cleared min_gp_pool, so define the pool from
+    # priors. A pool of players who have all played 0 games has no spread.
+    use_prior_pool = not base
+    if use_prior_pool:
+        base = rows
+        pool_key = lambda r: r["prior"] or r["pg"]
+    else:
+        pool_key = lambda r: r["pg"]
+    stats = {c: mean_std([pool_key(r)[c] for r in base]) for c in CATS}
     if qpool:
         target = roster * mult
         for _ in range(iters):
-            ranked = sorted(base, key=lambda r: -sum(zscores(r["pg"], stats, cap).values()))[:target]
-            stats = {c: mean_std([r["pg"][c] for r in ranked]) for c in CATS}
+            ranked = sorted(
+                base,
+                key=lambda r: -sum(zscores(pool_key(r), stats, cap).values()),
+            )[:target]
+            stats = {c: mean_std([pool_key(r)[c] for r in ranked]) for c in CATS}
     for r in rows:
         pg = dict(r["pg"])
         if shrink_k and r["gp"] < 82:
             w = r["gp"] / (r["gp"] + shrink_k)
+            # Blend observed production toward the player's own projection,
+            # falling back to the pool mean when there is no projection.
+            prior = r["prior"]
             for c in CATS:
-                pg[c] = w * pg[c] + (1 - w) * stats[c][0]
+                p_c = prior[c] if prior else stats[c][0]
+                pg[c] = w * pg[c] + (1 - w) * p_c
         z = zscores(pg, stats, cap)
         total = sum(z.values())
         status = r["p"].get("injuryStatus")
@@ -97,9 +135,12 @@ def evaluate(label, ranks, ecr):
 
 
 if __name__ == "__main__":
-    snap = json.load(open(SNAP))
+    # Explicit utf-8: player names carry accents (Jokic, Doncic, Porzingis),
+    # and on Windows the default is cp1252, which fails on them.
+    snap = json.load(open(SNAP, encoding="utf-8"))
     players = snap["allPlayers"]
-    ecr = [(norm(l.split("|")[1].strip()), int(l.split("|")[0])) for l in open(ECR) if l.strip()]
+    with open(ECR, encoding="utf-8") as fh:
+        ecr = [(norm(l.split("|")[1].strip()), int(l.split("|")[0])) for l in fh if l.strip()]
     legacy = {norm(p["name"]): p["durantRank"] for p in players}
     evaluate("V0 legacy DURANT (as shipped)", legacy, ecr)
     cfgs = [

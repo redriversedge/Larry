@@ -11,7 +11,8 @@ import * as path from "path";
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const move = require("../../netlify/functions/larry-move.js");
-const { clean, buildDataBlock, buildSystemPrompt, validateMove, REPORT_MOVE_TOOL } = move._internal;
+const { clean, buildDataBlock, buildSystemPrompt, validateMove, pickupsSpent, REPORT_MOVE_TOOL } =
+  move._internal;
 
 const FIXTURE_DIR = path.resolve(__dirname, "../fixtures/larry-move");
 
@@ -46,9 +47,45 @@ describe("larry-move: fixtures cover the cases the roadmap names", () => {
       .toMatch(/locks lineups DAILY/);
   });
 
-  it("surfaces the acquisition count so the model can respect the limit", () => {
+  it("surfaces the per-matchup pickup limit, which is the binding one", () => {
+    // Only the SEASON limit used to be sent, and this league has none, so
+    // Larry was told "unlimited" while the real constraint was 3 a matchup.
     const block = buildDataBlock(fixture("acquisition-limit-reached.json"));
-    expect(block).toContain("ACQUISITIONS: 4 used of 4");
+    expect(block).toContain("PICKUPS THIS MATCHUP: 3 used of 3 allowed");
+    expect(block).toMatch(/LIMIT REACHED/);
+    expect(block).toContain("PICKUPS THIS SEASON: 7 used (no season limit)");
+  });
+
+  it("tells the model outright not to suggest adds when the limit is spent", () => {
+    const prompt = buildSystemPrompt(fixture("acquisition-limit-reached.json"));
+    expect(prompt).toMatch(/NO PICKUPS LEFT THIS MATCHUP/);
+    expect(prompt).toMatch(/Do not suggest any add or drop/);
+  });
+
+  it("reports pickups remaining when the limit is not yet spent", () => {
+    const block = buildDataBlock(fixture("weekly-lock.json"));
+    expect(block).toContain("PICKUPS THIS MATCHUP: 0 used of 3 allowed (3 left)");
+    const prompt = buildSystemPrompt(fixture("weekly-lock.json"));
+    expect(prompt).not.toMatch(/NO PICKUPS LEFT/);
+    expect(prompt).toMatch(/spend their last pickup/);
+  });
+
+  it("explains per-game locking rather than assuming daily", () => {
+    // ESPN's INDIVIDUAL_GAME means a slot locks when that player's game
+    // tips, so late games can still be swapped. The prompt was hard-coded
+    // to "daily", which is wrong advice for this league.
+    const prompt = buildSystemPrompt(fixture("acquisition-limit-reached.json"));
+    expect(prompt).toMatch(/locks each slot when THAT PLAYER'S GAME TIPS/);
+    expect(prompt).not.toMatch(/locks lineups DAILY/);
+  });
+
+  it("normalises dashes out of model-facing text", () => {
+    const em = String.fromCharCode(0x2014);
+    const en = String.fromCharCode(0x2013);
+    expect(clean("Start him " + em + " he plays tonight", 100))
+      .toBe("Start him , he plays tonight");
+    // An en dash is a range, so it becomes a hyphen rather than a comma.
+    expect(clean("3" + en + "4 games", 100)).toBe("3-4 games");
   });
 
   it("marks an IR-eligible player so the model can propose the move", () => {
@@ -61,6 +98,70 @@ describe("larry-move: fixtures cover the cases the roadmap names", () => {
     const block = buildDataBlock(fixture("lineup-only.json"));
     expect(block).toContain("PLAYS TODAY");
     expect(block).toContain("no game today");
+  });
+});
+
+describe("larry-move: a spent pickup limit is enforced, not just prompted", () => {
+  // The prompt asks the model not to suggest pickups once the matchup limit
+  // is gone. That is advisory. ESPN would reject the add, so a rendered
+  // add/drop tile sends the manager to a transaction that cannot go through.
+  const spent = () => fixture("acquisition-limit-reached.json");
+  const open = () => fixture("weekly-lock.json");
+
+  const reply = {
+    headline: "Pick up Kel'el Ware and drop Jonathan Kuminga.",
+    noMove: false,
+    actions: [
+      {
+        type: "add_drop",
+        action: "Add Kel'el Ware, drop Jonathan Kuminga",
+        reason: "Ware is starting at center.",
+        players: { in: "Kel'el Ware", out: "Jonathan Kuminga" },
+      },
+      {
+        type: "lineup",
+        action: "Start Pritchard over Kuminga",
+        reason: "Pritchard plays tonight.",
+      },
+    ],
+    matchupRead: { summary: "Steals is the swing category this week." },
+    confidence: "high",
+  };
+
+  it("reads the matchup counter, not the season one", () => {
+    expect(pickupsSpent(spent())).toBe(true);
+    expect(pickupsSpent(open())).toBe(false);
+    // An unlimited league (-1) never counts as spent, however many adds.
+    expect(pickupsSpent({ league: { matchupAcquisitionLimit: -1, matchupAcquisitionsUsed: 99 } }))
+      .toBe(false);
+    expect(pickupsSpent({})).toBe(false);
+    expect(pickupsSpent(undefined)).toBe(false);
+  });
+
+  it("drops add/drop and stream actions when the limit is spent", () => {
+    const out = validateMove(reply, spent());
+    expect(out.actions.map((a: any) => a.type)).toEqual(["lineup"]);
+  });
+
+  it("keeps those same actions when pickups remain", () => {
+    const out = validateMove(reply, open());
+    expect(out.actions.map((a: any) => a.type)).toEqual(["add_drop", "lineup"]);
+  });
+
+  it("rewrites a pickup headline that would sit above an empty action list", () => {
+    const addOnly = { ...reply, actions: [reply.actions[0]] };
+    const out = validateMove(addOnly, spent());
+    expect(out.actions).toEqual([]);
+    expect(out.noMove).toBe(true);
+    expect(out.headline).not.toMatch(/Pick up/);
+    expect(out.headline).toMatch(/No pickups left/);
+  });
+
+  it("leaves the headline alone when the model proposed no pickup at all", () => {
+    const lineupOnly = { ...reply, headline: "Start Pritchard tonight.", actions: [reply.actions[1]] };
+    const out = validateMove(lineupOnly, spent());
+    expect(out.headline).toBe("Start Pritchard tonight.");
+    expect(out.noMove).toBe(false);
   });
 });
 

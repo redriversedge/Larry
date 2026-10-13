@@ -172,8 +172,46 @@ var Engines = (function() {
     return {
       id: String(p.id),
       gamesPlayed: p.gamesPlayed || 0,
-      perGame: v2PerGame(p)
+      perGame: v2PerGame(p),
+      // The shrink prior. Without this the engine falls back to the pool
+      // mean, which scores every player at 0 before opening night.
+      projectedPerGame: v2ProjectedPerGame(p)
     };
+  }
+
+  // The player's projected per-game rate, or null when ESPN has not
+  // projected them (deep bench, two-way contracts). Null means the engine
+  // uses the pool mean and the player scores 0, which is the honest answer
+  // for someone we know nothing about.
+  function v2ProjectedPerGame(p) {
+    var stats = p.stats || {};
+    var src = stats.projectedPerGame;
+    var out = {};
+    var any = false;
+    var i, c, v;
+    if (src) {
+      for (i = 0; i < V2_CATEGORIES.length; i++) {
+        c = V2_CATEGORIES[i];
+        v = typeof src[c] === 'number' && isFinite(src[c]) ? src[c] : 0;
+        out[c] = v;
+        if (v !== 0) any = true;
+      }
+      if (any) return out;
+    }
+    // Pre-migration state stores projections as season totals only.
+    var totals = stats.projectedSeason;
+    if (totals) {
+      out = {};
+      any = false;
+      for (i = 0; i < V2_CATEGORIES.length; i++) {
+        c = V2_CATEGORIES[i];
+        v = typeof totals[c] === 'number' && isFinite(totals[c]) ? totals[c] / 82 : 0;
+        out[c] = v;
+        if (v !== 0) any = true;
+      }
+      if (any) return out;
+    }
+    return null;
   }
 
   // Per-game rates for a legacy player object. stats.season is per-game after
@@ -366,14 +404,30 @@ var Engines = (function() {
     // ESPN uses. This used to compare three literals, so INJURY_RESERVE
     // slipped through.
     if (isUnavailable(player)) return false;
+
+    // A player with no NBA team cannot play, so they can never help.
+    // Westbrook, Chris Paul and D'Angelo Russell were all unsigned in the
+    // snapshot and were being offered as pickups.
+    if (!player.proTeamId) return false;
+
     var mpg = player.minutesPerGame || 0;
     var owned = player.percentOwned || 0;
     if (mpg < 5 && owned < 1) return false;
+
     var gp = player.gamesPlayed || 0;
+    if (gp > 0) return true;
+
     var last7 = player.stats && player.stats.last7 ? player.stats.last7 : {};
     var hasLast7 = Object.keys(last7).some(function(k) { return last7[k] && last7[k] !== 0; });
-    if (gp === 0 && !hasLast7) return false;
-    return true;
+    if (hasLast7) return true;
+
+    // Nobody has played yet. Rejecting gp 0 outright meant the Streaming
+    // page showed "No free agents available" with 500 free agents loaded,
+    // and Larry's Move received zero of them. That would have persisted
+    // through opening week, since on Oct 20 every free agent still has 0
+    // games. A projection plus a real NBA team is enough to consider
+    // someone addable.
+    return !!v2ProjectedPerGame(player);
   }
 
   // Phase 1 v2 engine bridge. When useV2 is true, generateRecommendations
@@ -914,6 +968,15 @@ var Engines = (function() {
       // season projection was built on about four games.
       var gamesLeft = p.gamesRemainingROS > 0 ? p.gamesRemainingROS : fallbackGamesLeft;
 
+      var gp = p.gamesPlayed || 0;
+      // The prior, same source the ranking uses, so the two agree.
+      var projPg = v2ProjectedPerGame(p);
+      // Blend observed production toward the projection exactly as the
+      // ranking does. At gp 0 this is all projection, which is what fixes
+      // "80 games left, 0 projected points".
+      var w = gp > 0 ? gp / (gp + 8) : 0;
+      var totals = (p.stats && p.stats.totals && p.stats.totals.season) || null;
+
       cats.forEach(function(cat) {
         var season = p.stats && p.stats.season ? p.stats.season[cat.abbr] : null;
         if (cat.isPercent) {
@@ -923,15 +986,34 @@ var Engines = (function() {
         }
         var l30 = p.stats && p.stats.last30 ? p.stats.last30[cat.abbr] : null;
         // Weight recent form, but keep the season as the anchor.
-        var perGame = null;
-        if (season != null && l30 != null) perGame = season * 0.6 + l30 * 0.4;
-        else if (season != null) perGame = season;
-        else if (l30 != null) perGame = l30;
+        var observed = null;
+        if (season != null && l30 != null) observed = season * 0.6 + l30 * 0.4;
+        else if (season != null) observed = season;
+        else if (l30 != null) observed = l30;
 
+        var prior = projPg ? projPg[cat.abbr] : null;
+
+        // With no games played, the observed rate is 0 for everyone, which
+        // is why Jokic showed 80 games left and a projection of 0 points.
+        var perGame;
+        if (gp === 0) {
+          perGame = prior != null ? prior : observed;
+        } else if (prior != null && observed != null) {
+          perGame = w * observed + (1 - w) * prior;
+        } else {
+          perGame = observed != null ? observed : prior;
+        }
         if (perGame == null) { p.rosProjection[cat.abbr] = null; return; }
-        // stats.season is per-game, so gamesPlayed * perGame reconstructs
-        // what the player has banked so far.
-        var banked = (p.gamesPlayed || 0) * perGame;
+
+        // Use the REAL banked totals when we have them. Reconstructing them
+        // from the blended rate (gp * blendedRate) silently rewrote history
+        // to match the projection.
+        var banked;
+        if (totals && typeof totals[cat.abbr] === 'number') {
+          banked = totals[cat.abbr];
+        } else {
+          banked = gp * (observed != null ? observed : perGame);
+        }
         p.rosProjection[cat.abbr] = banked + gamesLeft * perGame;
       });
       p.rosGamesLeft = gamesLeft;

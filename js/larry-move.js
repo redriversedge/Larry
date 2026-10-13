@@ -99,6 +99,35 @@ function larryMoveIrEligible(p) {
   return used < irSlots;
 }
 
+// ESPN's lineupLocktimeType, mapped to something the prompt can reason
+// about. This was hard-coded to 'daily'. INDIVIDUAL_GAME is meaningfully
+// different: a slot locks when that player's game tips, so you can still
+// swap players in later games after the early ones have started.
+function larryMoveLineupLock() {
+  var t = String((S.league && S.league.lineupLocktimeType) || '').toUpperCase();
+  if (t === 'INDIVIDUAL_GAME') return 'individual_game';
+  if (t.indexOf('WEEK') >= 0) return 'weekly';
+  if (t === 'FIRST_GAME_OF_DAY' || t.indexOf('DAY') >= 0) return 'daily';
+  return 'individual_game';
+}
+
+// The draft date as a readable local string, or '' when ESPN has not set
+// one. settings.draftSettings.date is epoch ms.
+function larryMoveDraftDateStr() {
+  var ms = S.league && S.league.draftDate;
+  if (!ms) return '';
+  var d = new Date(ms);
+  if (isNaN(d.getTime())) return '';
+  return d.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' }) +
+    ' at ' + d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
+// Nothing to advise on before the draft, so do not spend an API call
+// discovering that. The card says when the draft is instead.
+function larryMoveIsPreDraft() {
+  return !((S.myTeam && S.myTeam.players) || []).length;
+}
+
 function buildLarryMovePayload() {
   // Same reason as buildChatContext: a sync clears the rank cache and only
   // render paths recompute it, so tapping the Move button first after a
@@ -151,9 +180,15 @@ function buildLarryMovePayload() {
       benchSlots: S.league.benchSlots,
       irSlots: S.league.irSlots || 0,
       irUsed: irUsed,
+      // Season cap and per-matchup cap are different numbers. Only the
+      // season one used to be sent, so a league with 3 pickups a matchup
+      // looked unlimited to Larry.
       acquisitionLimit: S.league.acquisitionLimit,
-      acquisitionsUsed: (S.myTeam && S.myTeam.acquisitions) || 0,
-      lineupLock: S.league.lineupLock || 'daily'
+      acquisitionsUsed: (S.myTeam && S.myTeam.acquisitionsUsed) || 0,
+      matchupAcquisitionLimit: S.league.matchupAcquisitionLimit === undefined ?
+        -1 : S.league.matchupAcquisitionLimit,
+      matchupAcquisitionsUsed: (S.myTeam && S.myTeam.matchupAcquisitionsUsed) || 0,
+      lineupLock: larryMoveLineupLock()
     },
     matchup: {
       period: S.league.currentMatchupPeriod || 0,
@@ -193,6 +228,14 @@ function buildLarryMovePayload() {
 
 function requestLarryMove(force) {
   if (_larryMoveLoading) return;
+  // Pre-draft there is no roster to advise on. Previously this still made
+  // the API call and Larry answered "roster data isn't showing", which
+  // reads like a bug rather than the expected state.
+  if (larryMoveIsPreDraft()) {
+    _larryMoveError = '';
+    renderLarryMoveCard();
+    return;
+  }
   var payload;
   try {
     payload = buildLarryMovePayload();
@@ -278,6 +321,18 @@ function renderLarryMoveCard() {
 }
 
 function larryMoveCardHtml() {
+  // Pre-draft state wins over everything: there is genuinely nothing to
+  // say until there is a roster.
+  if (larryMoveIsPreDraft()) {
+    var when = larryMoveDraftDateStr();
+    return '<div class="card"><div class="card-header">Larry\'s Move</div>' +
+      '<div style="padding:12px" class="text-sm">' +
+      (when
+        ? 'Your draft is ' + esc(when) + '. Larry\'s Move starts once you have a roster.'
+        : 'Larry\'s Move starts once you have a roster.') +
+      '</div></div>';
+  }
+
   if (_larryMoveLoading) {
     return '<div class="card"><div class="card-header">Larry\'s Move</div>' +
       '<div style="padding:16px;text-align:center" aria-live="polite">' +

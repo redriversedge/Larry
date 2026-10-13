@@ -143,23 +143,127 @@ describe("ranking v2 base value", () => {
     }
   });
 
-  it("scores a player with no games played at exactly zero", () => {
-    // Deliberate, and matched to tools/proto.py: at gp = 0 the shrink weight
-    // is 0, so the player lands on the pool mean and scores 0. We are saying
-    // "no evidence", not inventing a rank from an ESPN projection. This test
-    // exists so the projectedSeason fallback cannot be quietly re-enabled
-    // without the parity tool being re-run.
+  it("ranks a player with no games played on their projection", () => {
+    // At gp = 0 the shrink weight is 0, so the score comes entirely from the
+    // prior. The prior is the player's own projection, so a projected star
+    // ranks like a star before they have played a game.
+    //
+    // This used to shrink toward the POOL MEAN, which scored every gp = 0
+    // player at exactly 0. Defensible as "no evidence" mid-season, but in
+    // the preseason every player has 0 games, so the entire board was zeros
+    // and the displayed order was just ESPN's ownership ranking.
     const players = [
       ...rotationPool(),
       makeBaseValueInput({
-        id: "rookie",
+        id: "projectedStar",
         gamesPlayed: 0,
         asProjection: true,
         perGame: { REB: 9, AST: 7, STL: 1.5, BLK: 1.2, PTS: 26 },
       }),
+      makeBaseValueInput({
+        id: "projectedScrub",
+        gamesPlayed: 0,
+        asProjection: true,
+        perGame: { REB: 1, AST: 0.4, STL: 0.1, BLK: 0.05, PTS: 2 },
+      }),
     ];
     const result = computeBaseValues(players, { rosterSize: 13 });
-    expect(byId(result, "rookie").baseValue).toBeCloseTo(0, 10);
+    const star = byId(result, "projectedStar");
+    const scrub = byId(result, "projectedScrub");
+
+    expect(star.baseValue).toBeGreaterThan(0);
+    expect(scrub.baseValue).toBeLessThan(0);
+    expect(star.baseValue).toBeGreaterThan(scrub.baseValue);
+    expect(rankOf(result, "projectedStar")).toBeLessThan(rankOf(result, "projectedScrub"));
+  });
+
+  it("still scores zero when there is no projection to go on", () => {
+    // No games AND no projection is genuine ignorance. Those players fall
+    // back to the pool mean and score 0, which puts them below everyone we
+    // do have an opinion about.
+    const players = [
+      ...rotationPool(),
+      { id: "unknown", gamesPlayed: 0 },
+    ];
+    const result = computeBaseValues(players, { rosterSize: 13 });
+    expect(byId(result, "unknown").baseValue).toBeCloseTo(0, 10);
+  });
+
+  it("produces a full distinct ranking when NOBODY has played yet", () => {
+    // The live preseason case. Every player at gp 0, each with a different
+    // projection: the board must be fully ordered, not 500 ties at zero.
+    const players = [];
+    for (let i = 0; i < 80; i++) {
+      const t = i / 80;
+      players.push(
+        makeBaseValueInput({
+          id: `pre${i}`,
+          gamesPlayed: 0,
+          asProjection: true,
+          perGame: {
+            REB: 2 + t * 9,
+            AST: 1 + t * 7,
+            STL: 0.3 + t * 1.4,
+            BLK: 0.1 + t * 1.6,
+            PTS: 5 + t * 23,
+          },
+        }),
+      );
+    }
+    const result = computeBaseValues(players, { rosterSize: 13 });
+    const values = result.rows.map((r) => r.baseValue);
+    const distinct = new Set(values.map((v) => v.toFixed(6)));
+
+    expect(distinct.size).toBe(players.length);
+    expect(Math.max(...values)).toBeGreaterThan(0);
+    expect(Math.min(...values)).toBeLessThan(0);
+    // Ordered by projection strength: the best projection ranks first.
+    expect(rankOf(result, "pre79")).toBe(1);
+    expect(rankOf(result, "pre0")).toBe(players.length);
+  });
+
+  it("accepts an explicit projectedPerGame vector as the prior", () => {
+    // What the app's parser produces (stats.projectedPerGame), as opposed
+    // to projectedSeason totals.
+    const players = [
+      ...rotationPool(),
+      {
+        id: "ppg",
+        gamesPlayed: 0,
+        projectedPerGame: { REB: 9, AST: 7, STL: 1.5, BLK: 1.2, PTS: 26 },
+      },
+    ];
+    const result = computeBaseValues(players, { rosterSize: 13 });
+    expect(byId(result, "ppg").baseValue).toBeGreaterThan(0);
+  });
+
+  it("weights real production over the projection as games accumulate", () => {
+    // A player projected for stardom who is actually producing nothing
+    // should slide as the sample grows: all projection at gp 0, roughly
+    // half and half by 8 games, mostly real production by 30.
+    const projection = { REB: 9, AST: 7, STL: 1.5, BLK: 1.2, PTS: 26 };
+    const actual = { REB: 1, AST: 0.5, STL: 0.1, BLK: 0.05, PTS: 2 };
+
+    const scoreAt = (gp: number) => {
+      const players = [
+        ...rotationPool(),
+        {
+          id: "fading",
+          gamesPlayed: gp,
+          perGame: gp > 0 ? actual : projection,
+          projectedPerGame: projection,
+        },
+      ];
+      return byId(computeBaseValues(players, { rosterSize: 13 }), "fading").baseValue;
+    };
+
+    const atZero = scoreAt(0);
+    const atEight = scoreAt(8);
+    const atThirty = scoreAt(30);
+
+    expect(atZero).toBeGreaterThan(atEight);
+    expect(atEight).toBeGreaterThan(atThirty);
+    expect(atThirty).toBeLessThan(0);
   });
 
   it("excludes sub-threshold samples from the pool that defines the mean", () => {

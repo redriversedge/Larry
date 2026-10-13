@@ -133,8 +133,8 @@
                    "irSlots":  0,
                    "teamCount":  12,
                    "startingSlots":  8,
-                   "acquisitionsUsed":  4,
-                   "lineupLock":  "daily",
+                   "acquisitionsUsed":  7,
+                   "lineupLock":  "individual_game",
                    "benchSlots":  4,
                    "scoringType":  "H2H Each Category",
                    "categories":  [
@@ -145,7 +145,9 @@
                                       "PTS"
                                   ],
                    "irUsed":  0,
-                   "acquisitionLimit":  4
+                   "acquisitionLimit":  -1,
+                   "matchupAcquisitionLimit":  3,
+                   "matchupAcquisitionsUsed":  3
                },
     "syncedAt":  "2026-10-13T18:00:00.000Z",
     "myRoster":  [

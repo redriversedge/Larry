@@ -145,7 +145,9 @@
                                       "PTS"
                                   ],
                    "irUsed":  0,
-                   "acquisitionLimit":  -1
+                   "acquisitionLimit":  -1,
+                   "matchupAcquisitionLimit":  3,
+                   "matchupAcquisitionsUsed":  0
                },
     "syncedAt":  "2026-10-13T18:00:00.000Z",
     "myRoster":  [

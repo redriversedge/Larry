@@ -28,3 +28,6 @@ temporary screenshots/
 # Real-roster snapshots used for manual verification.
 # Contain personal team data; never commit.
 tests/fixtures/users/
+
+# Python bytecode from tools/proto.py
+__pycache__/

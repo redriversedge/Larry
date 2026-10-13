@@ -148,6 +148,12 @@ var ESPNSync = (function() {
     ]);
   }
 
+  // Pre-draft the whole league is on the wire, so pull a deeper pool.
+  function freeAgentFetchLimit() {
+    var drafted = ((S.myTeam && S.myTeam.players) || []).length;
+    return drafted ? 500 : 1000;
+  }
+
   // --- FETCH PLAYERS (FREE AGENTS) ---
   async function fetchPlayers(status) {
     var url = PROXY_URL + '?view=kona_player_info&scoringPeriodId=' + String(S.league.currentScoringPeriodId || 0);
@@ -156,7 +162,17 @@ var ESPNSync = (function() {
       'x-espn-s2': S.espn.espnS2,
       'x-espn-swid': S.espn.swid,
       'x-espn-season': String(S.league.seasonId),
-      'x-fantasy-filter': JSON.stringify({ players: { limit: 500, filterStatus: { value: ['FREEAGENT', 'WAIVERS'] }, sortPercOwned: { sortAsc: false, sortPriority: 1 } } })
+      // Before the draft every NBA player is a free agent, so a 500 cap
+      // truncates the pool to the 500 most-owned and hides deep sleepers
+      // exactly when the draft board matters most. Pull more pre-draft,
+      // then drop back once rosters exist and the pool is naturally small.
+      'x-fantasy-filter': JSON.stringify({
+        players: {
+          limit: freeAgentFetchLimit(),
+          filterStatus: { value: ['FREEAGENT', 'WAIVERS'] },
+          sortPercOwned: { sortAsc: false, sortPriority: 1 }
+        }
+      })
     };
     var resp = await fetch(url, { headers: headers });
     if (!resp.ok) {
@@ -223,23 +239,73 @@ var ESPNSync = (function() {
       S.league.irSlots = irCount;
     }
 
-    // Acquisition limit
+    // Acquisition limits. There are two and they mean different things:
+    // acquisitionLimit is the season cap (-1 for unlimited), while
+    // matchupAcquisitionLimit is pickups allowed per matchup. Only the
+    // season one was being read, so Larry's Move was always told "unlimited"
+    // for a league that actually allows 3 per matchup.
     if (settings.acquisitionSettings) {
-      S.league.acquisitionLimit = settings.acquisitionSettings.acquisitionLimit || -1;
+      var acq = settings.acquisitionSettings;
+      S.league.acquisitionLimit = acq.acquisitionLimit === undefined ? -1 : acq.acquisitionLimit;
+      S.league.matchupAcquisitionLimit =
+        acq.matchupAcquisitionLimit === undefined ? -1 : acq.matchupAcquisitionLimit;
+    }
+
+    // Lineup lock type. Was hard-coded to 'daily' on the way to Larry's
+    // Move; INDIVIDUAL_GAME means a slot locks when that player's game
+    // tips, so late games can still be swapped after early ones start.
+    if (settings.rosterSettings) {
+      S.league.lineupLocktimeType =
+        settings.rosterSettings.lineupLocktimeType || 'INDIVIDUAL_GAME';
+    }
+
+    // Draft date, for the pre-draft Larry's Move message.
+    if (settings.draftSettings && settings.draftSettings.date) {
+      S.league.draftDate = settings.draftSettings.date;
     }
 
     // Schedule / matchup info
     if (data.status) {
       S.league.currentMatchupPeriod = data.status.currentMatchupPeriod || 0;
       S.league.currentScoringPeriodId = data.status.currentScoringPeriodId || 0;
+      if (data.status.firstScoringPeriod) {
+        S.league.firstScoringPeriod = data.status.firstScoringPeriod;
+      }
     }
 
-    // Playoff settings
+    // Playoff settings and the real matchup period map.
     if (settings.scheduleSettings) {
       var sched = settings.scheduleSettings;
       S.league.playoffTeams = sched.playoffTeamCount || 0;
       S.league.matchupPeriodLength = sched.matchupPeriodLength || 7;
+      // matchupPeriods maps each matchup to the scoring-period weeks it
+      // spans, e.g. {"18":[18,19]} for a two-week playoff round. Without
+      // this, "games this week" assumed a Monday-to-Sunday calendar week
+      // and silently halved every multi-week playoff matchup.
+      if (sched.matchupPeriods) {
+        S.league.matchupPeriods = sched.matchupPeriods;
+      }
     }
+  }
+
+  // --- ACQUISITION COUNTS ---
+  // ESPN reports these on the team's transactionCounter in the mTeam view.
+  function seasonAcquisitions(team) {
+    var tc = team && team.transactionCounter;
+    if (!tc) return 0;
+    return tc.acquisitions || 0;
+  }
+
+  // Pickups used in the CURRENT matchup period. matchupAcquisitionTotals is
+  // keyed by matchup period id.
+  function matchupAcquisitions(team) {
+    var tc = team && team.transactionCounter;
+    if (!tc) return 0;
+    var totals = tc.matchupAcquisitionTotals;
+    if (!totals) return 0;
+    var mp = (S.league && S.league.currentMatchupPeriod) || 0;
+    var v = totals[String(mp)];
+    return typeof v === 'number' ? v : 0;
   }
 
   // --- NORMALIZE SWID ---
@@ -311,6 +377,12 @@ var ESPNSync = (function() {
         pointsAgainst: record.pointsAgainst || 0,
         playoffSeed: team.playoffSeed || 0,
         waiverRank: team.waiverRank || 0,
+        // Season-long and this-matchup pickup counts. Larry's Move needs
+        // the matchup one to know whether a suggested add would spend the
+        // user's last pickup; it was reading S.myTeam.acquisitions, a field
+        // that never existed, so it always saw 0.
+        acquisitionsUsed: seasonAcquisitions(team),
+        matchupAcquisitionsUsed: matchupAcquisitions(team),
         players: players,
         isMyTeam: isMe
       });
@@ -345,6 +417,8 @@ var ESPNSync = (function() {
     S.myTeam.pointsAgainst = teamObj.pointsAgainst;
     S.myTeam.playoffSeed = teamObj.playoffSeed;
     S.myTeam.waiverRank = teamObj.waiverRank;
+    S.myTeam.acquisitionsUsed = teamObj.acquisitionsUsed || 0;
+    S.myTeam.matchupAcquisitionsUsed = teamObj.matchupAcquisitionsUsed || 0;
     S.myTeam.players = teamObj.players;
     return true;
   }
@@ -826,6 +900,76 @@ var ESPNSync = (function() {
     });
   }
 
+  // --- MATCHUP WINDOWS ---
+  //
+  // "Games this week" has to mean "games in my current matchup", which is
+  // not the same as the calendar week:
+  //
+  //  - Before the season starts there is no current week, but matchup 1 has
+  //    a window and that is what the user cares about. Today's calendar week
+  //    contains no NBA games at all, so every player showed 0.
+  //  - Playoff matchups span two scoring periods. This league's settings map
+  //    matchup 18 to weeks [18, 19], so a calendar week covers half of it.
+  //
+  // The schedule entries already carry scoringPeriodId and local dates, so
+  // the window can be derived from the schedule itself.
+  function scoringPeriodsForMatchup(matchupPeriodId) {
+    var map = S.league && S.league.matchupPeriods;
+    if (map) {
+      var entry = map[String(matchupPeriodId)];
+      if (entry && entry.length) {
+        return entry.map(function(x) { return Number(x); });
+      }
+    }
+    // No map: one scoring period per matchup.
+    return [Number(matchupPeriodId)];
+  }
+
+  // Min and max local date across every team's games in these scoring
+  // periods. Returns null when the schedule has nothing for them.
+  function dateRangeForScoringPeriods(periods) {
+    if (!S.scheduleLookup) return null;
+    var wanted = {};
+    for (var i = 0; i < periods.length; i++) wanted[periods[i]] = true;
+    var min = null, max = null;
+    var teamIds = Object.keys(S.scheduleLookup);
+    for (var t = 0; t < teamIds.length; t++) {
+      var games = S.scheduleLookup[teamIds[t]];
+      for (var g = 0; g < games.length; g++) {
+        if (!wanted[games[g].scoringPeriodId]) continue;
+        var d = games[g].date;
+        if (!d) continue;
+        if (min === null || d < min) min = d;
+        if (max === null || d > max) max = d;
+      }
+    }
+    return min ? { startStr: min, endStr: max } : null;
+  }
+
+  // The window to count games against: the current matchup if one is
+  // running, otherwise matchup 1 (preseason).
+  function activeMatchupWindow() {
+    var current = (S.league && S.league.currentMatchupPeriod) || 0;
+    var target = current > 0 ? current : 1;
+    var range = dateRangeForScoringPeriods(scoringPeriodsForMatchup(target));
+    if (range) {
+      return {
+        startStr: range.startStr,
+        endStr: range.endStr,
+        matchupPeriodId: target,
+        source: 'schedule'
+      };
+    }
+    // No schedule to derive from; fall back to the calendar week.
+    var dates = getMatchupDates();
+    return {
+      startStr: localDateStr(dates.start),
+      endStr: localDateStr(dates.end),
+      matchupPeriodId: target,
+      source: 'calendar'
+    };
+  }
+
   // Last day of the NBA regular season, as a local YYYY-MM-DD string. ESPN's
   // seasonId is the calendar year the season ends in, so the 2026-27 season
   // carries seasonId 2027 and ends in April 2027. Mid-April is close enough:
@@ -850,21 +994,57 @@ var ESPNSync = (function() {
   }
 
   function enrichGamesRemaining() {
-    var matchupDates = getMatchupDates();
     var todayStr = localDateStr(new Date());
-    var endStr = matchupDates.end ? localDateStr(matchupDates.end) : todayStr;
-    // Fallback only for players with no schedule at all: NBA teams average
-    // ~3.5 games a week.
+    // The window is the current matchup (or matchup 1 before the season
+    // starts), derived from the real schedule rather than assumed to be
+    // this Monday-to-Sunday.
+    var win = activeMatchupWindow();
+    S.matchup = S.matchup || {};
+    S.matchup.windowStart = win.startStr;
+    S.matchup.windowEnd = win.endStr;
+    S.matchup.windowSource = win.source;
+    S.matchup.windowMatchupPeriodId = win.matchupPeriodId;
+
+    // Count from today, or from the window start when the window is still
+    // in the future (preseason: matchup 1 begins on opening night).
+    var fromStr = todayStr > win.startStr ? todayStr : win.startStr;
+    var endStr = win.endStr;
+
+    // Fallback only for when the whole schedule fetch failed: NBA teams
+    // average ~3.5 games a week.
+    var matchupDates = getMatchupDates();
     var estFallback = Math.round((matchupDates.daysLeft || 0) * (3.5 / 7));
     var seasonEndStr = seasonEndDateStr();
 
+    // Did the schedule fetch work at all? If it did, a player without a
+    // schedule genuinely has no games, and guessing would be wrong.
+    var haveSchedule = !!(S.scheduleLookup && Object.keys(S.scheduleLookup).length);
+
     S.allPlayers.forEach(function(p) {
       if (p.schedule && p.schedule.length) {
-        p.gamesRemaining = countGamesInRange(p.schedule, todayStr, endStr);
+        p.gamesRemaining = countGamesInRange(p.schedule, fromStr, endStr);
         // Rest-of-season count. Referenced by ROS projections, which until
         // now read an undefined value.
-        p.gamesRemainingROS = countGamesInRange(p.schedule, todayStr, seasonEndStr);
+        p.gamesRemainingROS = countGamesInRange(p.schedule, fromStr, seasonEndStr);
+        return;
+      }
+      // No NBA team means no games, full stop. The 3.5-games-a-week estimate
+      // was being applied to unsigned free agents (Westbrook, Chris Paul,
+      // D'Angelo Russell), giving them 3 phantom games while every signed
+      // player correctly showed 0. Streaming and Larry's Move then ranked
+      // the unsigned players above real ones.
+      if (!p.proTeamId) {
+        p.gamesRemaining = 0;
+        p.gamesRemainingROS = 0;
+        return;
+      }
+      if (haveSchedule) {
+        // We have the league schedule and this player's team is not in it,
+        // or their team has no games left. Either way the answer is 0.
+        p.gamesRemaining = 0;
+        p.gamesRemainingROS = 0;
       } else {
+        // The schedule fetch failed. An estimate beats nothing here.
         p.gamesRemaining = estFallback;
         p.gamesRemainingROS = 0;
       }
