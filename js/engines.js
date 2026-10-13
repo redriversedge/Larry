@@ -56,30 +56,28 @@ var Engines = (function() {
       });
       p.zScores.total = totalZ;
 
-      // Trend detection
+      // Trend detection, through the one shared definition.
       var l7 = p.stats && p.stats.last7 ? p.stats.last7 : null;
       var season = p.stats && p.stats.season ? p.stats.season : null;
       if (l7 && season) {
-        var diffs = [];
-        cats.forEach(function(cat) {
-          if (cat.isPercent) return;
-          var s = season[cat.abbr]; var r = l7[cat.abbr];
-          if (s && r && s !== 0) diffs.push((r - s) / Math.abs(s));
-        });
-        var avgDiff = diffs.length ? diffs.reduce(function(a,b){return a+b;},0) / diffs.length : 0;
-        p.trend = avgDiff > 0.15 ? 'hot' : (avgDiff < -0.15 ? 'cold' : 'stable');
+        p.trend = trendLabel(trendDelta(p, 'last7', 'season').avgChange);
       }
 
-      // Frustration value
+      // Frustration value: how far recent form swings from the baseline,
+      // regardless of direction.
+      //
+      // The guards here were `!== null`, which passes for undefined. A
+      // missing category then produced NaN, and one NaN poisons the whole
+      // average. `== null` catches both null and undefined.
       var frustDiffs = [];
       cats.forEach(function(cat) {
         var sv = season ? season[cat.abbr] : null;
         var rv = l7 ? l7[cat.abbr] : null;
-        if (sv !== null && sv !== 0 && rv !== null) {
-          frustDiffs.push(Math.pow((rv - sv) / Math.max(Math.abs(sv), 0.1), 2));
-        }
+        if (sv == null || rv == null || sv === 0) return;
+        frustDiffs.push(Math.pow((rv - sv) / Math.max(Math.abs(sv), 0.1), 2));
       });
-      p.frustrationValue = frustDiffs.length ? Math.min(10, Math.sqrt(frustDiffs.reduce(function(a,b){return a+b;},0) / frustDiffs.length) * 5) : 0;
+      p.frustrationValue = frustDiffs.length ?
+        Math.min(10, Math.sqrt(frustDiffs.reduce(function(a, b) { return a + b; }, 0) / frustDiffs.length) * 5) : 0;
     });
 
     return catStats;
@@ -91,8 +89,11 @@ var Engines = (function() {
     }
     var season = player.stats && player.stats.season ? player.stats.season[catAbbr] : null;
     var recent = player.stats && player.stats.last30 ? player.stats.last30[catAbbr] : null;
-    if (season === null) return recent;
-    if (recent === null) return season;
+    // `== null` so an absent category (undefined) takes the same path as an
+    // explicit null. With `=== null` an undefined fell through to the blend
+    // and produced NaN.
+    if (season == null) return recent == null ? null : recent;
+    if (recent == null) return season;
     return season * (1 - recencyWeight) + recent * recencyWeight;
   }
 
@@ -124,9 +125,12 @@ var Engines = (function() {
     var currentOppScores = S.matchup.oppScores || {};
 
     function playerVariance(p, cat) {
-      var season = p.stats && p.stats.season ? p.stats.season[cat.abbr] : 0;
-      var l7 = p.stats && p.stats.last7 ? p.stats.last7[cat.abbr] : season;
-      if (!season) return 0.3;
+      var season = p.stats && p.stats.season ? p.stats.season[cat.abbr] : null;
+      var l7 = p.stats && p.stats.last7 ? p.stats.last7[cat.abbr] : null;
+      // An empty last7 used to leave l7 undefined and return NaN here, which
+      // then propagated through every simulated score for that category.
+      if (season == null || !isFinite(season) || season === 0) return 0.3;
+      if (l7 == null || !isFinite(l7)) return 0.3;
       return Math.min(0.8, Math.abs(l7 - season) / Math.max(Math.abs(season), 0.1));
     }
 
@@ -219,6 +223,35 @@ var Engines = (function() {
   // league scoring 3PM or FG% still ranks on the counting stats it shares
   // with this list; widening it is engine work, not a mapping change.
   var V2_CATEGORIES = ['REB', 'AST', 'STL', 'BLK', 'PTS'];
+
+  // Mirrors DURANT_SCALE in src/engine/constants.ts. durantScore is a sum of
+  // z-scores times this, so anything compared against it has to be on the
+  // same scale.
+  var DURANT_SCALE = 10;
+
+  // ESPN reports the same unavailability under several spellings. Normalize
+  // once so every filter agrees: INJURY_RESERVE and IR were treated as
+  // different statuses in different places, so a player could be excluded
+  // from add recommendations but still surface in the chat free-agent list.
+  var OUT_STATUSES = {
+    OUT: 1, SUSPENSION: 1, IR: 1, INJURY_RESERVE: 1, INJURED_RESERVE: 1, NA: 1
+  };
+  var GTD_STATUSES = {
+    GTD: 1, DAY_TO_DAY: 1, GAME_TIME_DECISION: 1, QUESTIONABLE: 1, DOUBTFUL: 1
+  };
+
+  function normalizeInjuryStatus(status) {
+    var s = String(status || 'ACTIVE').toUpperCase();
+    if (OUT_STATUSES[s]) return 'OUT';
+    if (GTD_STATUSES[s]) return 'GTD';
+    return 'ACTIVE';
+  }
+
+  // True when a player cannot be counted on to play: never recommend adding
+  // one, per CLAUDE.md.
+  function isUnavailable(player) {
+    return normalizeInjuryStatus(player && player.injuryStatus) === 'OUT';
+  }
 
   function v2LeagueCategories() {
     var cats = getOrderedCategories();
@@ -398,7 +431,7 @@ var Engines = (function() {
 
     // injuryFactor (GTD types already penalized in DURANT; re-applied here for availability multiplier)
     var status = player.injuryStatus || 'ACTIVE';
-    var injuryFactor = (status === 'GTD' || status === 'DAY_TO_DAY' || status === 'GAME_TIME_DECISION') ? 0.85 : 1.0;
+    var injuryFactor = normalizeInjuryStatus(status) === 'GTD' ? 0.85 : 1.0;
 
     return mpgFactor * ownershipFactor * recentActivityFactor * injuryFactor;
   }
@@ -411,7 +444,7 @@ var Engines = (function() {
     var teamInjuries = {};
     allPlayers.forEach(function(p) {
       if (!p.proTeamId) return;
-      var isOut = p.injuryStatus === 'OUT' || p.injuryStatus === 'IR';
+      var isOut = isUnavailable(p);
       var isStarter = p.slotId < 12; // non-bench, non-IR fantasy slot
       if (isOut && isStarter) {
         teamInjuries[p.proTeamId] = (teamInjuries[p.proTeamId] || 0) + 1;
@@ -433,8 +466,10 @@ var Engines = (function() {
   // ========== ENGINE 4: RECOMMENDATIONS (v3 FIX: smarter drops) ==========
 
   function isValidAddCandidate(player) {
-    var status = player.injuryStatus || 'ACTIVE';
-    if (status === 'OUT' || status === 'SUSPENSION' || status === 'IR') return false;
+    // Covers OUT, SUSPENSION, IR, INJURY_RESERVE and the other spellings
+    // ESPN uses. This used to compare three literals, so INJURY_RESERVE
+    // slipped through.
+    if (isUnavailable(player)) return false;
     var mpg = player.minutesPerGame || 0;
     var owned = player.percentOwned || 0;
     if (mpg < 5 && owned < 1) return false;
@@ -620,20 +655,31 @@ var Engines = (function() {
       return rosterRank < threshold;
     });
 
-    // For each droppable player, see if a free agent would be an upgrade
+    // Score every pickup/drop pair, then select. The old code pushed the
+    // first five pairs it encountered while walking drops in the outer loop,
+    // so all five tiles named the same drop target and often overlapped on
+    // pickups too. Scoring first and selecting after is what makes the five
+    // suggestions actually distinct.
+    var candidates = [];
     droppable.forEach(function(dropCandidate) {
       freeAgents.forEach(function(pickup) {
-        if (recs.length >= 5) return;
         var durantImprovement = pickup.effectiveDURANT - dropCandidate.effectiveDURANT;
-        if (durantImprovement <= 0) return;
 
-        // Compute matchup-adjusted improvement (weighted by target categories)
+        // Matchup fit, scaled by DURANT_SCALE so it is comparable with
+        // durantImprovement. matchupAdjustedValue sums weighted z-scores,
+        // which live on a roughly +/-5 scale, while DURANT is that times 10.
+        // Blending them raw let the DURANT term swamp the matchup term.
         var matchupImprovement = 0;
         if (hasStrategy) {
-          matchupImprovement = matchupAdjustedValue(pickup, catWeights) - matchupAdjustedValue(dropCandidate, catWeights);
+          matchupImprovement = (matchupAdjustedValue(pickup, catWeights) -
+            matchupAdjustedValue(dropCandidate, catWeights)) * DURANT_SCALE;
         }
 
-        // Blend: 40% overall value, 60% matchup fit (or 100% overall if no strategy)
+        // Blend 40/60 toward matchup fit when a strategy exists. Gate on the
+        // blended value, not on durantImprovement: a pickup that is slightly
+        // worse overall but much better in the categories actually in play
+        // is a real recommendation, and the old `durantImprovement <= 0`
+        // early-return threw those away before the blend was ever computed.
         var improvement = hasStrategy
           ? (durantImprovement * 0.4) + (matchupImprovement * 0.6)
           : durantImprovement;
@@ -669,7 +715,7 @@ var Engines = (function() {
             }
           }
 
-          recs.push({
+          candidates.push({
             type: 'pickup',
             priority: improvement > 5 ? 'high' : 'medium',
             action: 'Add ' + pickup.name + ', Drop ' + dropCandidate.name,
@@ -681,6 +727,22 @@ var Engines = (function() {
         }
       });
     });
+
+    // Best first, then take the top 5 with a distinct pickup AND a distinct
+    // drop. One suggestion per player on each side keeps the five tiles
+    // genuinely different options rather than five spellings of one move.
+    candidates.sort(compareRecs);
+    var usedPickups = {};
+    var usedDrops = {};
+    for (var ci = 0; ci < candidates.length && recs.length < 5; ci++) {
+      var c = candidates[ci];
+      var pid = String(c.player.id);
+      var did = String(c.dropPlayer.id);
+      if (usedPickups[pid] || usedDrops[did]) continue;
+      usedPickups[pid] = true;
+      usedDrops[did] = true;
+      recs.push(c);
+    }
 
     // Streaming recommendations (for today's games), sorted by matchup fit
     var benchNoGame = myPlayers.filter(function(p) { return p.slotId === 12 && !p.gamesToday; });
@@ -711,18 +773,31 @@ var Engines = (function() {
       }
     });
 
-    // Sort by improvement, with tiebreaker chain
-    recs.sort(function(a, b) {
-      var diff = (b.improvement || 0) - (a.improvement || 0);
-      if (Math.abs(diff) > 2) return diff;
-      // Tiebreaker: ownership, then MPG, then alphabetical
-      var ownDiff = (b.player.percentOwned || 0) - (a.player.percentOwned || 0);
-      if (Math.abs(ownDiff) > 0.5) return ownDiff;
-      var mpgDiff = (b.player.minutesPerGame || 0) - (a.player.minutesPerGame || 0);
-      if (Math.abs(mpgDiff) > 1) return mpgDiff;
-      return (a.player.lastName || a.player.name || '').localeCompare(b.player.lastName || b.player.name || '');
-    });
+    recs.sort(compareRecs);
     return recs;
+  }
+
+  // One numeric key, so the ordering is total and transitive.
+  //
+  // The old comparator used fuzzy bands ("if the gap is more than 2, order
+  // by improvement; otherwise fall through to ownership..."), which is not
+  // transitive: A could tie B, B could tie C, and A still beat C. Array
+  // sorts given an inconsistent comparator are free to produce any order,
+  // and V8's does. Folding the tiebreakers into one score keeps the same
+  // intent with a well-defined result.
+  function recSortKey(rec) {
+    var p = rec.player || {};
+    return (rec.improvement || 0) +
+      (p.percentOwned || 0) * 0.01 +
+      (p.minutesPerGame || 0) * 0.001;
+  }
+
+  function compareRecs(a, b) {
+    var diff = recSortKey(b) - recSortKey(a);
+    if (diff !== 0) return diff;
+    var an = (a.player && (a.player.lastName || a.player.name)) || '';
+    var bn = (b.player && (b.player.lastName || b.player.name)) || '';
+    return an < bn ? -1 : (an > bn ? 1 : 0);
   }
 
 
@@ -735,21 +810,49 @@ var Engines = (function() {
 
     cats.forEach(function(cat) {
       var giveSum = 0, getSum = 0;
-      givePlayers.forEach(function(p) { giveSum += p.zScores ? p.zScores[cat.abbr] || 0 : 0; });
-      getPlayers.forEach(function(p) { getSum += p.zScores ? p.zScores[cat.abbr] || 0 : 0; });
+      givePlayers.forEach(function(p) {
+        var e = enrichPlayer(p);
+        giveSum += e.zScores ? e.zScores[cat.abbr] || 0 : 0;
+      });
+      getPlayers.forEach(function(p) {
+        var e = enrichPlayer(p);
+        getSum += e.zScores ? e.zScores[cat.abbr] || 0 : 0;
+      });
       catDiffs[cat.abbr] = getSum - giveSum;
     });
 
-    givePlayers.forEach(function(p) { giveTotal += p.durantScore || 0; });
-    getPlayers.forEach(function(p) { getTotal += p.durantScore || 0; });
+    givePlayers.forEach(function(p) { giveTotal += enrichPlayer(p).durantScore || 0; });
+    getPlayers.forEach(function(p) { getTotal += enrichPlayer(p).durantScore || 0; });
 
+    // Raw value difference, kept for display.
     var netValue = getTotal - giveTotal;
-    var grade = netValue > 10 ? 'A' : netValue > 5 ? 'B' : netValue > 0 ? 'C' : netValue > -5 ? 'D' : 'F';
+
+    // Grade on category impact weighted by the current matchup strategy
+    // rather than on raw DURANT totals. In H2H each-category, a trade that
+    // loses overall value but converts a category you are already losing
+    // into one you can win is a good trade; grading on summed DURANT called
+    // that an F.
+    var strat = (S.matchup && S.matchup.strategy) || {};
+    var catWeights = strat.categoryWeights || {};
+    var weightedImpact = 0;
+    cats.forEach(function(cat) {
+      var w = catWeights[cat.abbr];
+      if (w === undefined) w = 1.0;
+      var delta = catDiffs[cat.abbr];
+      if (cat.isNegative) delta = -delta;
+      weightedImpact += delta * w;
+    });
+
+    var grade = weightedImpact > 3 ? 'A' :
+      weightedImpact > 1.5 ? 'B' :
+      weightedImpact > -0.5 ? 'C' :
+      weightedImpact > -2 ? 'D' : 'F';
 
     return {
       giveTotal: giveTotal,
       getTotal: getTotal,
       netValue: netValue,
+      weightedImpact: weightedImpact,
       grade: grade,
       catDiffs: catDiffs
     };
@@ -836,21 +939,14 @@ var Engines = (function() {
   // ========== ENGINE 8: STREAK DETECTION ==========
 
   function detectStreaks(player) {
-    var cats = getOrderedCategories();
     var l7 = player.stats ? player.stats.last7 : null;
     var season = player.stats ? player.stats.season : null;
     if (!l7 || !season) return { trend: 'stable', label: 'Stable', cats: [] };
 
-    var upCats = [], downCats = [];
-    cats.forEach(function(cat) {
-      if (cat.isPercent) return;
-      var sv = season[cat.abbr] || 0;
-      var rv = l7[cat.abbr] || 0;
-      if (sv === 0) return;
-      var pctChange = (rv - sv) / Math.abs(sv);
-      if (pctChange > 0.2) upCats.push(cat.abbr);
-      else if (pctChange < -0.2) downCats.push(cat.abbr);
-    });
+    // Same threshold as p.trend and Risers/Fallers. This used its own 0.2,
+    // so a player could be "hot" on the roster tile and "stable" here.
+    var d = trendDelta(player, 'last7', 'season');
+    var upCats = d.up, downCats = d.down;
 
     if (upCats.length >= 3) return { trend: 'hot', label: 'Hot streak: ' + upCats.join(', ') + ' up', cats: upCats };
     if (downCats.length >= 3) return { trend: 'cold', label: 'Cold streak: ' + downCats.join(', ') + ' down', cats: downCats };
@@ -864,75 +960,106 @@ var Engines = (function() {
 
   function rosProjections(players) {
     var cats = getOrderedCategories();
-    // Estimate games remaining in season (rough: ~82 game season, ~170 day season)
+    // Fallback only: 82 games over a ~170-day season. The old code then
+    // multiplied this by another 0.5 "because only half the days have
+    // games", but 82/170 is already per team per day, so the extra halving
+    // undercounted every projection.
     var now = new Date();
-    var seasonEnd = new Date(now.getFullYear(), 3, 13); // April 13 approx
+    var seasonEnd = new Date(now.getFullYear(), 3, 13); // approx April 13
     if (now > seasonEnd) seasonEnd = new Date(now.getFullYear() + 1, 3, 13);
-    var daysLeft = Math.max(0, Math.ceil((seasonEnd - now) / (1000*60*60*24)));
-    var avgGamesPerDay = 82 / 170;
+    var daysLeft = Math.max(0, Math.ceil((seasonEnd - now) / (1000 * 60 * 60 * 24)));
+    var fallbackGamesLeft = Math.round(daysLeft * (82 / 170));
 
     players.forEach(function(p) {
       p.rosProjection = {};
-      // Estimate remaining games for this player
-      var estGamesLeft = Math.round(daysLeft * avgGamesPerDay * 0.5); // ~half the days have games for any team
-      if (p.gamesRemaining > 0) estGamesLeft = p.gamesRemaining;
-      else if (p.gamesRemainingROS > 0) estGamesLeft = p.gamesRemainingROS;
+      // Rest of SEASON, so use the season-long count. This used to prefer
+      // p.gamesRemaining, which is games left in the current WEEK, so every
+      // season projection was built on about four games.
+      var gamesLeft = p.gamesRemainingROS > 0 ? p.gamesRemainingROS : fallbackGamesLeft;
 
-      // v3 FIX: Use blended recent + season stats for projection
       cats.forEach(function(cat) {
+        var season = p.stats && p.stats.season ? p.stats.season[cat.abbr] : null;
         if (cat.isPercent) {
-          // Percentages don't accumulate
-          var season = p.stats && p.stats.season ? p.stats.season[cat.abbr] : null;
+          // Rates do not accumulate; carry the current rate forward.
           p.rosProjection[cat.abbr] = season;
           return;
         }
-        var season = p.stats && p.stats.season ? p.stats.season[cat.abbr] : null;
         var l30 = p.stats && p.stats.last30 ? p.stats.last30[cat.abbr] : null;
-        var avg = null;
-        if (season !== null && l30 !== null) avg = season * 0.6 + l30 * 0.4;
-        else if (season !== null) avg = season;
-        else if (l30 !== null) avg = l30;
+        // Weight recent form, but keep the season as the anchor.
+        var perGame = null;
+        if (season != null && l30 != null) perGame = season * 0.6 + l30 * 0.4;
+        else if (season != null) perGame = season;
+        else if (l30 != null) perGame = l30;
 
-        if (avg !== null && estGamesLeft > 0) {
-          // Current totals + projected remaining
-          var currentTotal = (p.gamesPlayed || 0) * avg;
-          var projectedRemaining = estGamesLeft * avg;
-          p.rosProjection[cat.abbr] = currentTotal + projectedRemaining;
-        } else {
-          p.rosProjection[cat.abbr] = null;
-        }
+        if (perGame == null) { p.rosProjection[cat.abbr] = null; return; }
+        // stats.season is per-game, so gamesPlayed * perGame reconstructs
+        // what the player has banked so far.
+        var banked = (p.gamesPlayed || 0) * perGame;
+        p.rosProjection[cat.abbr] = banked + gamesLeft * perGame;
       });
-      p.rosGamesLeft = estGamesLeft;
+      p.rosGamesLeft = gamesLeft;
     });
   }
 
 
   // ========== ENGINE 10: RISERS & FALLERS ==========
 
+  // One definition of "trending", used by risersAndFallers, detectStreaks
+  // and computeAllZScores. Three separate thresholds (0.15, 0.2, and a
+  // capped average) used to disagree about the same player.
+  var TREND_THRESHOLD = 0.15;
+
+  // Average per-category change from a baseline split to a recent one, as a
+  // signed fraction. Both splits are per-game, so this compares rates rather
+  // than the old totals-vs-totals comparison, which made every player look
+  // like +0% or -100% depending on sample size.
+  function trendDelta(player, recentSplit, baseSplit) {
+    var cats = getOrderedCategories();
+    var stats = player.stats || {};
+    var recent = stats[recentSplit || 'last7'];
+    var base = stats[baseSplit || 'season'];
+    if (!recent || !base) return { avgChange: 0, counted: 0, up: [], down: [] };
+    var total = 0, counted = 0, up = [], down = [];
+    for (var i = 0; i < cats.length; i++) {
+      var cat = cats[i];
+      if (cat.isPercent) continue;
+      var bv = base[cat.abbr];
+      var rv = recent[cat.abbr];
+      if (bv == null || rv == null || bv === 0) continue;
+      // Cap at +/-100% so one near-zero baseline cannot dominate the mean.
+      var pct = Math.max(-1, Math.min(1, (rv - bv) / Math.abs(bv)));
+      total += pct;
+      counted++;
+      if (pct > TREND_THRESHOLD) up.push(cat.abbr);
+      else if (pct < -TREND_THRESHOLD) down.push(cat.abbr);
+    }
+    return {
+      avgChange: counted > 0 ? total / counted : 0,
+      counted: counted, up: up, down: down
+    };
+  }
+
+  function trendLabel(avgChange) {
+    if (avgChange > TREND_THRESHOLD) return 'hot';
+    if (avgChange < -TREND_THRESHOLD) return 'cold';
+    return 'stable';
+  }
+
   function risersAndFallers(players, limit) {
     limit = limit || 10;
-    var cats = getOrderedCategories();
 
-    var scored = players.filter(function(p) {
-      return p.stats && p.stats.season && p.stats.last7;
-    }).map(function(p) {
-      var totalPctChange = 0;
-      var counted = 0;
-      cats.forEach(function(cat) {
-        if (cat.isPercent) return;
-        var sv = p.stats.season[cat.abbr] || 0;
-        var rv = p.stats.last7[cat.abbr] || 0;
-        if (sv !== 0) {
-          // v3 FIX: Cap percentage change to avoid >100%
-          var pctChange = Math.max(-1, Math.min(1, (rv - sv) / Math.abs(sv)));
-          totalPctChange += pctChange;
-          counted++;
-        }
-      });
-      return { player: p, avgChange: counted > 0 ? totalPctChange / counted : 0 };
-    });
+    var scored = [];
+    for (var i = 0; i < players.length; i++) {
+      var p = players[i];
+      if (!p.stats || !p.stats.season || !p.stats.last7) continue;
+      var d = trendDelta(p, 'last7', 'season');
+      // A player with no comparable categories has no trend; including them
+      // packed the fallers list with zeros.
+      if (d.counted === 0) continue;
+      scored.push({ player: p, avgChange: d.avgChange });
+    }
 
-    scored.sort(function(a,b) { return b.avgChange - a.avgChange; });
+    scored.sort(function(a, b) { return b.avgChange - a.avgChange; });
     var risers = scored.slice(0, limit);
     var fallers = scored.slice(-limit).reverse();
 
@@ -942,81 +1069,136 @@ var Engines = (function() {
 
   // ========== ENGINE 11: TRADE FINDER ==========
 
+  // Rank every team in a category, 1 = best. Returns { teamId: rank }.
+  // The old code decided a team was "weak" in a category when the z-sum of
+  // its roster was negative, but z is centered on a starter-quality pool, so
+  // a full 13-man roster sums negative almost everywhere. Every team looked
+  // weak in everything, which is half of why this engine returned nothing
+  // usable. Relative standing is the real question, so rank across teams.
+  function teamCatRanks(catAbbr) {
+    var cat = null;
+    var leagueCats = (S.league && S.league.categories) || [];
+    for (var c = 0; c < leagueCats.length; c++) {
+      if (leagueCats[c].abbr === catAbbr) { cat = leagueCats[c]; break; }
+    }
+    var totals = (S.teams || []).map(function(t) {
+      var sum = 0;
+      (t.players || []).forEach(function(p) {
+        if (p.slotId >= 12) return;
+        var e = enrichPlayer(p);
+        if (e.stats && e.stats.season) sum += e.stats.season[catAbbr] || 0;
+      });
+      return { teamId: t.teamId, total: sum };
+    });
+    totals.sort(function(a, b) {
+      return cat && cat.isNegative ? a.total - b.total : b.total - a.total;
+    });
+    var ranks = {};
+    for (var i = 0; i < totals.length; i++) ranks[totals[i].teamId] = i + 1;
+    return ranks;
+  }
+
   function findTrades(opts) {
     opts = opts || {};
     var myPlayers = S.myTeam.players || [];
     var cats = getOrderedCategories();
     var trades = [];
+    var teamCount = (S.teams || []).length;
+    if (!teamCount || !myPlayers.length) return trades;
 
-    // Find categories where we're weak
-    var weakCats = [];
-    cats.forEach(function(cat) {
-      var rank = getTeamCatRank(cat.abbr);
-      if (rank > Math.ceil(S.league.teamCount / 2)) weakCats.push(cat.abbr);
-    });
+    // Rank every team in every category once.
+    var ranksByCat = {};
+    cats.forEach(function(cat) { ranksByCat[cat.abbr] = teamCatRanks(cat.abbr); });
 
-    // For each other team, find mutually beneficial trades
+    // A team needs a category when it sits in the bottom half of the league.
+    var midpoint = Math.ceil(teamCount / 2);
+    function needsOf(teamId) {
+      var needs = [];
+      cats.forEach(function(cat) {
+        var rank = ranksByCat[cat.abbr][teamId];
+        if (rank && rank > midpoint) needs.push(cat.abbr);
+      });
+      return needs;
+    }
+
+    var myNeeds = needsOf(S.myTeam.teamId);
+
+    // Net category gain for a side: what the incoming player adds in the
+    // categories that side needs, minus what the outgoing player took with
+    // them in those same categories.
+    function categoryGain(incoming, outgoing, needs) {
+      var gain = 0;
+      for (var i = 0; i < needs.length; i++) {
+        var cat = needs[i];
+        var inZ = incoming.zScores ? incoming.zScores[cat] || 0 : 0;
+        var outZ = outgoing.zScores ? outgoing.zScores[cat] || 0 : 0;
+        gain += inZ - outZ;
+      }
+      return gain;
+    }
+
     S.teams.forEach(function(team) {
       if (team.teamId === S.myTeam.teamId) return;
       if (!team.players || !team.players.length) return;
+      var theirNeeds = needsOf(team.teamId);
+      if (!theirNeeds.length && !myNeeds.length) return;
 
-      // What are they weak in?
-      var theirWeakCats = [];
-      cats.forEach(function(cat) {
-        var theirTeamPlayers = team.players || [];
-        var theirSum = 0;
-        theirTeamPlayers.forEach(function(p) {
-          theirSum += p.zScores ? p.zScores[cat.abbr] || 0 : 0;
-        });
-        // Rough: if their total z is negative, they're weak
-        if (theirSum < 0) theirWeakCats.push(cat.abbr);
-      });
+      myPlayers.forEach(function(myStub) {
+        if (myStub.slotId === 13) return; // IR players cannot be traded here
+        var myP = enrichPlayer(myStub);
 
-      // Find our players strong in their weak cats
-      myPlayers.forEach(function(myP) {
-        if (myP.slotId === 13) return; // Skip IR
-        var myStrengthForThem = 0;
-        theirWeakCats.forEach(function(cat) {
-          myStrengthForThem += myP.zScores ? myP.zScores[cat] || 0 : 0;
-        });
+        team.players.forEach(function(theirStub) {
+          if (theirStub.slotId === 13) return;
+          var theirP = enrichPlayer(theirStub);
 
-        (team.players || []).forEach(function(theirP) {
-          if (theirP.slotId === 13) return;
-          var theirStrengthForUs = 0;
-          weakCats.forEach(function(cat) {
-            theirStrengthForUs += theirP.zScores ? theirP.zScores[cat] || 0 : 0;
+          var ourGain = categoryGain(theirP, myP, myNeeds);
+          var theirGain = categoryGain(myP, theirP, theirNeeds);
+          if (ourGain <= 0 || theirGain <= 0) return; // must help both sides
+
+          // Value they give up, from their perspective. Positive means we
+          // are asking for the better player.
+          var valueToUs = (theirP.durantScore || 0) - (myP.durantScore || 0);
+
+          // Acceptance falls as we ask for more value, and rises with how
+          // much the deal fixes their own weakness.
+          //
+          // The old formula was `50 + netDURANT * 2` with netDURANT = theirs
+          // minus mine, so asking for a BETTER player made them MORE likely
+          // to accept. The sign was inverted, which is the other half of why
+          // this engine produced nothing sane.
+          var acceptance = 50 - valueToUs * 1.5 + theirGain * 8;
+          acceptance = Math.max(0, Math.min(100, acceptance));
+
+          if (opts.minAcceptance && acceptance < opts.minAcceptance) return;
+
+          trades.push({
+            team: team,
+            give: myP,
+            get: theirP,
+            netDURANT: valueToUs,
+            ourGain: ourGain,
+            theirGain: theirGain,
+            acceptanceLikelihood: Math.round(acceptance),
+            helpsUs: myNeeds.filter(function(c) {
+              return (theirP.zScores ? theirP.zScores[c] || 0 : 0) >
+                (myP.zScores ? myP.zScores[c] || 0 : 0);
+            }),
+            helpsThem: theirNeeds.filter(function(c) {
+              return (myP.zScores ? myP.zScores[c] || 0 : 0) >
+                (theirP.zScores ? theirP.zScores[c] || 0 : 0);
+            })
           });
-
-          // Both sides benefit?
-          if (myStrengthForThem > 1 && theirStrengthForUs > 1) {
-            var netDURANT = (theirP.durantScore || 0) - (myP.durantScore || 0);
-            // v3 FIX: Filter by 50%+ acceptance likelihood
-            var acceptanceLikelihood = 50 + netDURANT * 2; // rough heuristic
-            acceptanceLikelihood = Math.max(0, Math.min(100, acceptanceLikelihood));
-
-            if (!opts.minAcceptance || acceptanceLikelihood >= opts.minAcceptance) {
-              trades.push({
-                team: team,
-                give: myP,
-                get: theirP,
-                netDURANT: netDURANT,
-                acceptanceLikelihood: Math.round(acceptanceLikelihood),
-                helpsUs: weakCats.filter(function(c) {
-                  return (theirP.zScores ? theirP.zScores[c] || 0 : 0) > (myP.zScores ? myP.zScores[c] || 0 : 0);
-                }),
-                helpsThem: theirWeakCats.filter(function(c) {
-                  return (myP.zScores ? myP.zScores[c] || 0 : 0) > (theirP.zScores ? theirP.zScores[c] || 0 : 0);
-                })
-              });
-            }
-          }
         });
       });
     });
 
-    // Sort by net benefit
-    trades.sort(function(a,b) {
-      return (b.acceptanceLikelihood + (b.helpsUs.length * 10)) - (a.acceptanceLikelihood + (a.helpsUs.length * 10));
+    // Rank by how much the deal helps us, discounted by how unlikely it is
+    // to be accepted. A great trade nobody would take is worth less than a
+    // good one they might.
+    trades.sort(function(a, b) {
+      var sa = a.ourGain * (a.acceptanceLikelihood / 100);
+      var sb = b.ourGain * (b.acceptanceLikelihood / 100);
+      return sb - sa;
     });
 
     return trades.slice(0, 20);
@@ -1041,45 +1223,30 @@ var Engines = (function() {
     var oppTeam = S.teams.find(function(t) { return t.teamId === S.matchup.opponentTeamId; });
     var oppPlayers = oppTeam ? (oppTeam.players || []).filter(function(p) { return p.slotId < 12; }) : [];
 
+    strategy.winProb = {};
+
     cats.forEach(function(cat) {
       var myNow = myScores[cat.abbr] || 0;
       var oppNow = oppScores[cat.abbr] || 0;
-      var margin = cat.isNegative ? (oppNow - myNow) : (myNow - oppNow);
 
-      // Project remaining production
-      var myRemaining = 0;
-      myPlayers.forEach(function(p) {
-        var avg = p.stats && p.stats.season ? (p.stats.season[cat.abbr] || 0) : 0;
-        myRemaining += avg * (p.gamesRemaining || 0);
-      });
-      var oppRemaining = 0;
-      oppPlayers.forEach(function(p) {
-        var enriched = S.allPlayers.find(function(ap) { return ap.id === p.id; }) || p;
-        var avg = enriched.stats && enriched.stats.season ? (enriched.stats.season[cat.abbr] || 0) : 0;
-        oppRemaining += avg * (enriched.gamesRemaining || p.gamesRemaining || 0);
-      });
+      // Project remaining production and its variance. Variance accumulates
+      // per game, so a category decided over 25 remaining games is far less
+      // certain than the same margin with 2 games left: that is the whole
+      // reason to model it instead of scaling the margin.
+      var myProj = projectSide(myPlayers, cat);
+      var oppProj = projectSide(oppPlayers, cat);
 
-      var projectedMargin;
-      if (cat.isNegative) {
-        projectedMargin = (oppNow + oppRemaining) - (myNow + myRemaining);
-      } else {
-        projectedMargin = (myNow + myRemaining) - (oppNow + oppRemaining);
-      }
+      var myTotal = myNow + myProj.mean;
+      var oppTotal = oppNow + oppProj.mean;
+      var mean = cat.isNegative ? (oppTotal - myTotal) : (myTotal - oppTotal);
+      var variance = myProj.variance + oppProj.variance;
 
-      // Win probability from projected margin as percentage of total production
-      var projMyTotal = cat.isNegative ? (oppNow + oppRemaining) : (myNow + myRemaining);
-      var projOppTotal = cat.isNegative ? (myNow + myRemaining) : (oppNow + oppRemaining);
-      var totalProduction = projMyTotal + projOppTotal;
-      var winProb = 50;
-      if (totalProduction > 0) {
-        var marginPct = projectedMargin / (totalProduction / 2);
-        winProb = Math.round(Math.min(95, Math.max(5, 50 + marginPct * 30)));
-      }
+      strategy.winProb[cat.abbr] = categoryWinProb(mean, variance);
 
-      if (winProb > 70) {
+      if (strategy.winProb[cat.abbr] > LOCK_THRESHOLD) {
         strategy.locks.push(cat.abbr);
         strategy.categoryWeights[cat.abbr] = 0.5;
-      } else if (winProb < 30) {
+      } else if (strategy.winProb[cat.abbr] < PUNT_THRESHOLD) {
         strategy.punts.push(cat.abbr);
         strategy.categoryWeights[cat.abbr] = 0.3;
       } else {
@@ -1101,6 +1268,71 @@ var Engines = (function() {
   }
 
 
+  // S.teams[].players and S.myTeam.players are separate deserialized copies
+  // of the same players, and only S.allPlayers gets refreshed with ranks,
+  // z-scores and schedules. Resolve a roster stub to the live object so
+  // consumers do not silently read a stale shell.
+  function enrichPlayer(stub) {
+    if (!stub || !S || !S.allPlayers) return stub;
+    var id = stub.id;
+    for (var i = 0; i < S.allPlayers.length; i++) {
+      if (S.allPlayers[i].id === id) return S.allPlayers[i];
+    }
+    return stub;
+  }
+
+  // Lock above 70% win probability, punt below 30%, target in between.
+  var LOCK_THRESHOLD = 0.70;
+  var PUNT_THRESHOLD = 0.30;
+
+  // Per-game standard deviation as a fraction of a player's own per-game
+  // mean. Blocks and steals are spiky (a player averaging 1.0 blocks swings
+  // between 0 and 3 nightly); points and rebounds are comparatively smooth.
+  // These are proxies until gamelogs land and we can measure per-player
+  // variance directly.
+  var CATEGORY_CV = { REB: 0.45, AST: 0.50, STL: 0.85, BLK: 0.95, PTS: 0.35 };
+  var DEFAULT_CV = 0.60;
+
+  // Standard normal CDF via the Abramowitz and Stegun 7.1.26 erf
+  // approximation. Accurate to ~1e-7, which is far finer than anything that
+  // depends on it here.
+  function normalCDF(z) {
+    var sign = z < 0 ? -1 : 1;
+    var x = Math.abs(z) / Math.sqrt(2);
+    var t = 1 / (1 + 0.3275911 * x);
+    var y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t -
+      0.284496736) * t + 0.254829592) * t * Math.exp(-x * x);
+    return 0.5 * (1 + sign * y);
+  }
+
+  // Projected remaining production for one side of a category: the sum of
+  // each player's per-game rate times their games left, with variance
+  // accumulating per game.
+  function projectSide(players, cat) {
+    var mean = 0;
+    var variance = 0;
+    var cv = CATEGORY_CV[cat.abbr] || DEFAULT_CV;
+    for (var i = 0; i < players.length; i++) {
+      var p = enrichPlayer(players[i]);
+      var games = p.gamesRemaining || 0;
+      if (games <= 0) continue;
+      var perGame = p.stats && p.stats.season ? (p.stats.season[cat.abbr] || 0) : 0;
+      mean += perGame * games;
+      var sd = perGame * cv;
+      variance += sd * sd * games;
+    }
+    return { mean: mean, variance: variance };
+  }
+
+  // Probability that a projected margin ends up positive. With no variance
+  // the outcome is already decided, so collapse to a hard 0/1/0.5.
+  function categoryWinProb(mean, variance) {
+    if (variance <= 0) return mean > 0 ? 1 : (mean < 0 ? 0 : 0.5);
+    var p = normalCDF(mean / Math.sqrt(variance));
+    // Never claim certainty: injuries and rest days are not in the model.
+    return Math.min(0.97, Math.max(0.03, p));
+  }
+
   // ========== MATCHUP-ADJUSTED VALUE HELPER ==========
 
   function matchupAdjustedValue(player, catWeights) {
@@ -1121,6 +1353,14 @@ var Engines = (function() {
     computeAllZScores: computeAllZScores,
     computeDURANT: computeDURANT,
     ensureDURANT: ensureDURANT,
+    enrichPlayer: enrichPlayer,
+    isValidAddCandidate: isValidAddCandidate,
+    isUnavailable: isUnavailable,
+    normalizeInjuryStatus: normalizeInjuryStatus,
+    trendDelta: trendDelta,
+    trendLabel: trendLabel,
+    normalCDF: normalCDF,
+    categoryWinProb: categoryWinProb,
     monteCarloMatchup: monteCarloMatchup,
     generateRecommendations: generateRecommendations,
     analyzeTrade: analyzeTrade,

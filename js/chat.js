@@ -112,7 +112,8 @@ function buildChatContext() {
   }
 
   // Roster with z-scores and injury status
-  var myPlayers = S.myTeam.players || [];
+  // .slice() so building chat context does not reorder the real roster.
+  var myPlayers = (S.myTeam.players || []).slice();
   if (myPlayers.length) {
     context += 'ROSTER:\n';
     myPlayers.sort(function(a,b) { return (b.durantScore||0) - (a.durantScore||0); });

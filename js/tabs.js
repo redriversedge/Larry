@@ -706,9 +706,7 @@ function renderOpponentInsight(cats) {
     return p.injuryStatus && p.injuryStatus !== 'ACTIVE' && p.injuryStatus !== 'HEALTHY';
   });
   if (oppInjured.length) {
-    var oppOut = oppInjured.filter(function(p) {
-      return p.injuryStatus === 'OUT' || p.injuryStatus === 'IR' || p.injuryStatus === 'INJURED_RESERVE' || p.injuryStatus === 'SUSPENSION';
-    });
+    var oppOut = oppInjured.filter(function(p) { return Engines.isUnavailable(p); });
     html += '<div class="opp-injury-mini">';
     html += '<span class="injury-count">' + oppInjured.length + '</span> opponent player' + (oppInjured.length > 1 ? 's' : '') + ' injured';
     if (oppOut.length) html += ' (<span style="color:var(--accent-red)">' + oppOut.length + ' OUT</span>)';
@@ -1342,7 +1340,10 @@ function renderStatsTrends() {
 
 function renderROSProjections() {
   var cats = getOrderedCategories();
-  var myPlayers = S.myTeam.players || [];
+  // .slice() so the sort below does not reorder S.myTeam.players in place.
+  // It used to, and autosave then persisted the render order as the user's
+  // actual roster order.
+  var myPlayers = (S.myTeam.players || []).slice();
   if (!myPlayers.length) return '<div class="empty-state"><p>No roster data.</p></div>';
 
   Engines.rosProjections(myPlayers);
