@@ -1140,3 +1140,63 @@ body {
 .trend-name { flex: 1; color: var(--text-primary); }
 .trend-team { font-size: 0.72rem; color: var(--text-secondary); }
 .trend-group-label { font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase; padding: 6px 0 4px; font-weight: 700; }
+
+/* --- ACCESSIBILITY (phase 4) --- */
+/* WCAG 2.5.5: interactive targets need to be at least 44x44 CSS pixels.
+   Several controls were sized 32-36px, which is a real miss on a
+   mobile-first app whose whole point is tapping through rosters on a
+   phone. min-height/min-width rather than fixed sizes so nothing that is
+   already larger gets shrunk. */
+.date-nav-btn,
+.popup-close,
+.header-btn,
+.btn-sm,
+.sub-tab,
+.popup-tab,
+.filter-select,
+.day-nav-btn,
+.injury-banner .banner-dismiss {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+/* The circular controls keep their visual size via the icon, but the hit
+   area now extends to the full 44px. */
+.date-nav-btn { width: 44px; height: 44px; }
+.popup-close { width: 44px; height: 44px; font-size: 1.4rem; }
+
+/* Sortable table headers are real buttons now, so they need to look like
+   the header text they replaced rather than like form controls. */
+.th-sort {
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  font-weight: inherit;
+  cursor: pointer;
+  padding: 0;
+  min-height: 44px;
+  width: 100%;
+  text-align: inherit;
+}
+.th-sort:focus-visible,
+.date-nav-btn:focus-visible,
+.popup-close:focus-visible,
+.header-btn:focus-visible,
+.sub-tab:focus-visible,
+.popup-tab:focus-visible,
+.btn:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+}
+
+/* Visible only to screen readers. */
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

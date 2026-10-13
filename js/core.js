@@ -433,9 +433,12 @@ function safeRender(container) {
       }
     }
   } catch (e) {
-    container.innerHTML = '<div class="error-card"><h3>Something went wrong</h3><p>' + e.message + '</p>' +
-      '<pre>' + (e.stack || '').substring(0, 500) + '</pre>' +
-      '<p>Tab: ' + S.currentTab + ' | Sub: ' + S.leagueSubPage + '</p>' +
+    // Escape the error text. An exception message can carry attacker-shaped
+    // content (an ESPN team name that landed in a thrown string, say), and
+    // this is the one path that renders it raw into innerHTML.
+    container.innerHTML = '<div class="error-card"><h3>Something went wrong</h3><p>' + esc(e.message) + '</p>' +
+      '<pre>' + esc((e.stack || '').substring(0, 500)) + '</pre>' +
+      '<p>Tab: ' + esc(S.currentTab) + ' | Sub: ' + esc(S.leagueSubPage) + '</p>' +
       '<p>TeamId: ' + S.myTeam.teamId + ' | Players: ' + (S.myTeam.players ? S.myTeam.players.length : 0) + ' | Teams: ' + S.teams.length + '</p>' +
       '<button class="btn btn-primary" onclick="render()">Retry</button> ' +
       '<button class="btn btn-secondary" onclick="switchTab(0)">Go to Roster</button> ' +

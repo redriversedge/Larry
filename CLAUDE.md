@@ -86,7 +86,16 @@ All engines live in the `Engines` IIFE module.
 
 ### Legacy `js/*.js` (existing files)
 
-- All legacy JS uses `var` (ES5 style for maximum compatibility). No `let`/`const`, no arrow functions, no template literals. Files in `js/` deploy directly to the browser without a build step, so they must be ES5 to keep the no-bundler guarantee.
+Files in `js/` deploy straight to the browser with no build step, so whatever is written here has to run as-is.
+
+**House style (enforced):** `var`, not `let`/`const`. `function` expressions, not arrow functions. String concatenation, not template literals. This is a consistency rule, not a compatibility one; keep it so the files read as one codebase.
+
+**Actual language baseline: ES2017.** The previous rule said "ES5 for maximum compatibility", but that was never true of the shipping code: `js/` contains 7 `async function` declarations and 43 `\u{...}` code-point escapes, both of which are *syntax-level* ES6+. A genuine ES5 engine would throw `SyntaxError` while parsing and the app would not load at all. Since it does load, every browser in use supports ES2017. So `Array.prototype.find`, `includes`, `startsWith`, `padStart` and `Object.assign` are all fine, and rewriting them into loops buys nothing. Do not "fix" them.
+
+**Still genuinely required:**
+- `node --check js/*.js` before every commit. With no build step this is the only thing standing between a typo and a blank app.
+- ASCII only. Write the escape sequence, never a pasted arrow glyph.
+
 - Global modules use IIFE pattern: `var ModuleName = (function() { ... return { publicAPI }; })();`
 
 ### New TypeScript code (`src/`, `tests/`)

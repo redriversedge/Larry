@@ -2,7 +2,10 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <!-- user-scalable=no and maximum-scale=1 block pinch zoom, which users
+       with low vision rely on. Removed; the layout is already mobile-first
+       and does not need zoom suppressed. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="theme-color" content="#0a0a1a">
@@ -115,8 +118,8 @@
 
   <!-- PLAYER POPUP OVERLAY -->
   <div id="player-popup-overlay" onclick="if(event.target===this)closePlayerPopup()">
-    <div class="player-popup">
-      <button class="popup-close" onclick="closePlayerPopup()">&times;</button>
+    <div class="player-popup" role="dialog" aria-modal="true" aria-label="Player details">
+      <button class="popup-close" onclick="closePlayerPopup()" aria-label="Close player details">&times;</button>
       <div id="player-popup-content"></div>
     </div>
   </div>

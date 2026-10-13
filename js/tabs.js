@@ -15,7 +15,10 @@ var _playersPositionFilter = 'ALL';
 var _playersAvailFilter = 'available';
 var _playersDateFilter = '';
 var _playersSortCol = 'durantScore';
-var _playersSortDir = -1;
+// 1 = descending, -1 = ascending. Starts descending so the default view is
+// best-ranked first.
+var _playersSortDir = 1;
+var _playersShowCount = 100;
 
 // --- ROSTER TAB STATE ---
 var _rosterDateOffset = 0;
@@ -64,7 +67,7 @@ function renderInjuryBanner(myPlayers) {
   });
   if (!injured.length) return '';
   var names = injured.map(function(p) {
-    return (p.fullName || p.name || '') + ' (' + p.injuryStatus + ')';
+    return esc(p.fullName || p.name || '') + ' (' + esc(p.injuryStatus) + ')';
   }).join(', ');
   return '<div class="injury-banner" id="injury-banner">' +
     '<span>Injury alert: ' + names + '</span>' +
@@ -79,14 +82,17 @@ function renderAddDropTiles(recommendations) {
   var tiles = recommendations.slice(0, 5).map(function(rec) {
     var p = rec.player;
     var drop = rec.dropPlayer;
-    var headshotUrl = 'https://a.espncdn.com/i/headshots/nba/players/full/' + p.id + '.png';
+    // Coerce the id to a number before building the URL so a crafted id
+    // cannot break out of the src attribute.
+    var headshotUrl = 'https://a.espncdn.com/i/headshots/nba/players/full/' +
+      (parseInt(p.id, 10) || 0) + '.png';
     var reason = rec.detail ? rec.detail.split('.')[0] : 'Better fit';
     return '<div class="addrop-tile">' +
-      '<img class="player-headshot" src="' + headshotUrl + '" onerror="this.style.background=\'var(--bg-surface)\';this.src=\'\'" alt="' + (p.name || '') + '">' +
-      '<div class="tile-name">' + (p.name || '') + '</div>' +
+      '<img class="player-headshot" src="' + headshotUrl + '" onerror="this.style.background=\'var(--bg-surface)\';this.src=\'\'" alt="' + esc(p.name || '') + '">' +
+      '<div class="tile-name">' + esc(p.name || '') + '</div>' +
       '<div class="tile-pos">' + formatPositions(p.eligibleSlots) + '</div>' +
-      '<div class="tile-drop">Drop: ' + (drop ? drop.name : '--') + '</div>' +
-      '<div class="tile-reason">' + reason + '</div>' +
+      '<div class="tile-drop">Drop: ' + esc(drop ? drop.name : '--') + '</div>' +
+      '<div class="tile-reason">' + esc(reason) + '</div>' +
     '</div>';
   }).join('');
   return '<div class="addrop-scroll">' + tiles + '</div>';
@@ -364,7 +370,7 @@ function renderPlayerCell(p) {
   var initials = (p.firstName ? p.firstName[0] : '') + (p.lastName ? p.lastName[0] : '');
   var html = '<div class="player-cell-inner">';
   html += '<div class="player-cell-headshot">';
-  html += '<img class="player-headshot" src="https://a.espncdn.com/combiner/i?img=/i/headshots/nba/players/full/' + p.id + '.png&w=48&h=36&cb=1" width="24" height="18" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'" style="border-radius:4px">';
+  html += '<img class="player-headshot" src="https://a.espncdn.com/combiner/i?img=/i/headshots/nba/players/full/' + (parseInt(p.id, 10) || 0) + '.png&w=48&h=36&cb=1" width="24" height="18" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'" style="border-radius:4px">';
   html += '<span class="player-initials" style="width:24px;height:18px;font-size:0.55rem;background:' + color + ';display:none;border-radius:4px">' + initials + '</span>';
   html += '</div>';
   html += '<div class="player-cell-info">';
@@ -373,7 +379,7 @@ function renderPlayerCell(p) {
   if (p.trend === 'hot') html += '<span class="trend-badge hot">\u2191 HOT</span>';
   else if (p.trend === 'cold') html += '<span class="trend-badge cold">\u2193 COLD</span>';
   html += '</span>';
-  html += '<span class="player-meta">' + formatPositions(p.eligibleSlots) + ' - ' + p.nbaTeam + '</span>';
+  html += '<span class="player-meta">' + formatPositions(p.eligibleSlots) + ' - ' + esc(p.nbaTeam) + '</span>';
   html += '</div></div>';
   return html;
 }
@@ -416,8 +422,16 @@ function renderMatchup(container) {
 
 function renderMatchupStrategy() {
   var strat = S.matchup.strategy || {};
-  if (!strat.targets && !strat.locks && !strat.punts) return '';
-  if (!strat.targets.length && !strat.locks.length && !strat.punts.length) return '';
+  // Default to empty arrays. The guard below used to check existence and
+  // then immediately read .length on all three, so a strategy object with
+  // only some of the keys present threw on the second line.
+  var targets = strat.targets || [];
+  var locks = strat.locks || [];
+  var punts = strat.punts || [];
+  strat.targets = targets;
+  strat.locks = locks;
+  strat.punts = punts;
+  if (!targets.length && !locks.length && !punts.length) return '';
 
   var collapsed = isSectionCollapsed('matchupStrategy');
   var html = '<div class="card">';
@@ -432,7 +446,7 @@ function renderMatchupStrategy() {
       html += '<div style="margin-bottom:10px">';
       html += '<span style="color:var(--accent-gold);font-weight:600;margin-right:8px">TARGET</span>';
       strat.targets.forEach(function(cat) {
-        html += '<span style="display:inline-block;padding:4px 10px;margin:2px 4px;border-radius:12px;background:rgba(245,158,11,0.15);color:var(--accent-gold);font-size:13px;font-weight:600">' + cat + '</span>';
+        html += '<span style="display:inline-block;padding:4px 10px;margin:2px 4px;border-radius:12px;background:rgba(245,158,11,0.15);color:var(--accent-gold);font-size:13px;font-weight:600">' + esc(cat) + '</span>';
       });
       html += '</div>';
     }
@@ -441,7 +455,7 @@ function renderMatchupStrategy() {
       html += '<div style="margin-bottom:10px">';
       html += '<span style="color:var(--accent-green);font-weight:600;margin-right:8px">LOCK</span>';
       strat.locks.forEach(function(cat) {
-        html += '<span style="display:inline-block;padding:4px 10px;margin:2px 4px;border-radius:12px;background:rgba(34,197,94,0.15);color:var(--accent-green);font-size:13px;font-weight:600">' + cat + '</span>';
+        html += '<span style="display:inline-block;padding:4px 10px;margin:2px 4px;border-radius:12px;background:rgba(34,197,94,0.15);color:var(--accent-green);font-size:13px;font-weight:600">' + esc(cat) + '</span>';
       });
       html += '</div>';
     }
@@ -450,7 +464,7 @@ function renderMatchupStrategy() {
       html += '<div style="margin-bottom:10px">';
       html += '<span style="color:var(--accent-red);font-weight:600;margin-right:8px">PUNT</span>';
       strat.punts.forEach(function(cat) {
-        html += '<span style="display:inline-block;padding:4px 10px;margin:2px 4px;border-radius:12px;background:rgba(239,68,68,0.15);color:var(--accent-red);font-size:13px;font-weight:600">' + cat + '</span>';
+        html += '<span style="display:inline-block;padding:4px 10px;margin:2px 4px;border-radius:12px;background:rgba(239,68,68,0.15);color:var(--accent-red);font-size:13px;font-weight:600">' + esc(cat) + '</span>';
       });
       html += '</div>';
     }
@@ -819,7 +833,7 @@ function renderPlayers(container) {
   html += '<div class="filter-bar">';
 
   // Search - v3 FIX: Use oninput with debounce, NOT onkeyup which dismisses keyboard
-  html += '<input type="text" class="filter-search" id="players-search" placeholder="Search players..." ';
+  html += '<input type="text" class="filter-search" id="players-search" aria-label="Search players" placeholder="Search players..." ';
   html += 'value="' + esc(_playersSearchTerm) + '" ';
   html += 'oninput="handlePlayersSearch(this.value)">';
 
@@ -871,9 +885,51 @@ function renderPlayers(container) {
   renderPlayersList();
 }
 
+// Disable the button while a sync runs so an impatient double-tap does not
+// fire two overlapping syncs, and say something when it finishes.
+function doManualSync(btn) {
+  if (btn) {
+    if (btn.disabled) return;
+    btn.disabled = true;
+    btn.textContent = 'Syncing...';
+  }
+  var done = function(ok) {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Sync Now';
+    }
+    if (typeof toast === 'function') toast(ok ? 'Sync complete' : 'Sync failed');
+  };
+  try {
+    var result = ESPNSync.syncAll();
+    if (result && typeof result.then === 'function') {
+      result.then(function() { done(true); }, function() { done(false); });
+    } else {
+      done(true);
+    }
+  } catch (e) {
+    done(false);
+  }
+}
+
+// Trade search was re-rendering the results on every keystroke, which is
+// both wasteful and the classic way to lose the mobile keyboard. Same 250ms
+// debounce as the Players search, and it never rewrites the input element.
+var _tradeSearchTimer = null;
+function handleTradeSearch(value) {
+  _tradeSearchTerm = value;
+  if (_tradeSearchTimer) clearTimeout(_tradeSearchTimer);
+  _tradeSearchTimer = setTimeout(function() {
+    renderTradeResults();
+  }, 250);
+}
+
 // v3 FIX: Debounced search that does NOT dismiss keyboard
 function handlePlayersSearch(value) {
   _playersSearchTerm = value;
+  // A new search is a new result set, so start the page count over rather
+  // than keeping whatever "show more" depth the previous query reached.
+  _playersShowCount = 100;
   if (_playersSearchTimer) clearTimeout(_playersSearchTimer);
   _playersSearchTimer = setTimeout(function() {
     renderPlayersList();
@@ -931,23 +987,21 @@ function renderPlayersList() {
   // Sort by DURANT by default. The rank column prints p.durantRank, so this
   // has to sort on the same field the rank was assigned from; it used to
   // sort on effectiveDURANT and print durantRank, which disagreed.
-  filtered.sort(function(a,b) {
-    if (_playersSortCol === 'durantScore') return (b.durantScore || 0) - (a.durantScore || 0);
-    if (_playersSortCol === 'name') return (a.name || '').localeCompare(b.name || '');
-    // Sort by stat
-    var aVal, bVal;
-    if (_playersStatView === 'day') {
-      var aDay = _dayStats ? _dayStats[a.id] : null;
-      var bDay = _dayStats ? _dayStats[b.id] : null;
-      aVal = aDay ? (aDay[_playersSortCol] || 0) : 0;
-      bVal = bDay ? (bDay[_playersSortCol] || 0) : 0;
-    } else {
-      var aPg = ESPNSync.getPerGameStats(a, _playersStatView);
-      var bPg = ESPNSync.getPerGameStats(b, _playersStatView);
-      aVal = aPg ? (aPg[_playersSortCol] || 0) : 0;
-      bVal = bPg ? (bPg[_playersSortCol] || 0) : 0;
+  // dir is applied to every branch. It used to only reach the stat branch,
+  // so tapping Player or the rank column could never reverse the order.
+  filtered.sort(function(a, b) {
+    var dir = _playersSortDir;
+    if (_playersSortCol === 'durantScore') {
+      return ((b.durantScore || 0) - (a.durantScore || 0)) * dir;
     }
-    return (bVal - aVal) * _playersSortDir;
+    if (_playersSortCol === 'name') {
+      // Negated so the first tap on Player gives A to Z. For numbers "first
+      // tap" means biggest first; for names it means alphabetical.
+      return (a.name || '').localeCompare(b.name || '') * -dir;
+    }
+    var aVal = playersStatValue(a, _playersSortCol);
+    var bVal = playersStatValue(b, _playersSortCol);
+    return (bVal - aVal) * dir;
   });
 
   // Render trending section above table
@@ -956,19 +1010,35 @@ function renderPlayersList() {
 
   // Render table
   var html = trendingHtml;
-  html += '<div class="text-xs muted" style="margin-bottom:6px">' + filtered.length + ' players</div>';
-  html += '<p class="sort-label">Sorted by ' + playersSortLabel() + '</p>';
+  // Say how many are actually on screen. The header used to report the full
+  // filtered count while the table rendered only the first 100, so it read
+  // "666 players" above a 100-row table with no way to reach the rest.
+  var willShow = Math.min(_playersShowCount, filtered.length);
+  html += '<div class="text-xs muted" style="margin-bottom:6px">Showing ' + willShow +
+    ' of ' + filtered.length + ' players</div>';
+  html += '<p class="sort-label">Sorted by ' + esc(playersSortLabel()) +
+    (_playersSortCol !== 'durantScore' ?
+      ' <button class="btn btn-sm btn-secondary" style="min-height:44px" ' +
+      'onclick="resetPlayersSort()">Reset</button>' : '') + '</p>';
   html += '<div class="table-scroll"><table class="data-table compact">';
   html += '<thead><tr>';
-  html += '<th style="text-align:left;min-width:28px">#</th>';
+  html += '<th style="text-align:left;min-width:28px"><button type="button" class="th-sort" ' +
+    'onclick="sortPlayers(\'durantScore\')" aria-label="Sort by DURANT rank">#' +
+    playersSortIndicator('durantScore') + '</button></th>';
   html += '<th class="stat-col">Today</th>';
-  html += '<th style="text-align:left;min-width:120px" onclick="sortPlayers(\'name\')">Player</th>';
+  html += '<th style="text-align:left;min-width:120px"><button type="button" class="th-sort" ' +
+    'onclick="sortPlayers(\'name\')" aria-label="Sort by player name">Player' +
+    playersSortIndicator('name') + '</button></th>';
   cats.forEach(function(cat) {
-    html += '<th class="stat-col" style="color:' + cat.color + '" onclick="sortPlayers(\'' + cat.abbr + '\')">' + cat.abbr + '</th>';
+    html += '<th class="stat-col" style="color:' + cat.color + '">' +
+      '<button type="button" class="th-sort" onclick="sortPlayers(\'' + cat.abbr + '\')" ' +
+      'aria-label="Sort by ' + cat.abbr + '">' + cat.abbr +
+      playersSortIndicator(cat.abbr) + '</button></th>';
   });
   html += '</tr></thead><tbody>';
 
-  filtered.slice(0, 100).forEach(function(p, idx) {
+  var shown = Math.min(_playersShowCount, filtered.length);
+  filtered.slice(0, shown).forEach(function(p, idx) {
     var isMyTeam = p.onTeamId === S.myTeam.teamId;
     html += '<tr class="' + (isMyTeam ? 'my-team-row' : '') + '">';
     html += '<td class="text-xs muted">' + (p.durantRank || idx + 1) + '</td>';
@@ -999,13 +1069,59 @@ function renderPlayersList() {
   });
   html += '</tbody></table></div>';
 
+  if (filtered.length > shown) {
+    html += '<div style="text-align:center;padding:12px 0">' +
+      '<button class="btn btn-secondary" style="min-height:44px" onclick="showMorePlayers()">' +
+      'Show 100 more (' + (filtered.length - shown) + ' remaining)</button></div>';
+  }
+
   listContainer.innerHTML = html;
 }
 
+function showMorePlayers() {
+  _playersShowCount += 100;
+  renderPlayersList();
+}
+
+// _playersSortDir: 1 = descending, -1 = ascending.
+//
+// A fresh column starts descending, which is what you want from "sort by
+// points". It used to start at -1 and the comparator computed
+// (b - a) * dir, so the first tap produced ascending order and you had to
+// tap twice to see the leaders.
 function sortPlayers(col) {
   if (_playersSortCol === col) _playersSortDir *= -1;
-  else { _playersSortCol = col; _playersSortDir = -1; }
+  else { _playersSortCol = col; _playersSortDir = 1; }
   renderPlayersList();
+}
+
+// Restore the default view: DURANT rank, best first.
+function resetPlayersSort() {
+  _playersSortCol = 'durantScore';
+  _playersSortDir = 1;
+  renderPlayersList();
+}
+
+// The value the Players table is currently showing for a category, matching
+// whatever stat view is active. The ROS view was missing here, so sorting
+// the ROS column compared zeros and did nothing.
+function playersStatValue(p, col) {
+  if (_playersStatView === 'day') {
+    var day = _dayStats ? _dayStats[p.id] : null;
+    return day ? (day[col] || 0) : 0;
+  }
+  if (_playersStatView === 'ros') {
+    if (!p.rosProjection) Engines.rosProjections([p]);
+    return p.rosProjection ? (p.rosProjection[col] || 0) : 0;
+  }
+  var pg = ESPNSync.getPerGameStats(p, _playersStatView);
+  return pg ? (pg[col] || 0) : 0;
+}
+
+function playersSortIndicator(col) {
+  if (_playersSortCol !== col) return '';
+  // Escapes, not literals: js/ must stay ASCII.
+  return _playersSortDir === 1 ? ' \u25BC' : ' \u25B2';
 }
 
 function renderTrendingSection(allPlayers) {
@@ -1208,16 +1324,16 @@ function renderTradeCenter() {
 
   // Search for specific player trades
   html += '<div class="card"><div class="card-header">Trade Finder</div>';
-  html += '<input type="text" class="filter-search" placeholder="Search for a player to see trade options..." ';
-  html += 'value="' + esc(_tradeSearchTerm) + '" oninput="_tradeSearchTerm=this.value;renderTradeResults()">';
+  html += '<input type="text" class="filter-search" aria-label="Search for a player to see trade options" placeholder="Search for a player to see trade options..." ';
+  html += 'value="' + esc(_tradeSearchTerm) + '" oninput="handleTradeSearch(this.value)">';
   html += '<div id="trade-results"></div></div>';
 
   // Trade Analyzer
   html += '<div class="card"><div class="card-header">Trade Analyzer</div>';
   html += '<p class="muted text-sm" style="margin-bottom:8px">Compare two players to evaluate a trade.</p>';
   html += '<div style="display:flex;gap:8px;margin-bottom:8px">';
-  html += '<input type="text" class="filter-search" id="trade-give-input" placeholder="You give..." style="flex:1" oninput="tradeAnalyzerSearch(\'give\',this.value)">';
-  html += '<input type="text" class="filter-search" id="trade-get-input" placeholder="You get..." style="flex:1" oninput="tradeAnalyzerSearch(\'get\',this.value)">';
+  html += '<input type="text" class="filter-search" id="trade-give-input" aria-label="Players you give" placeholder="You give..." style="flex:1" oninput="tradeAnalyzerSearch(\'give\',this.value)">';
+  html += '<input type="text" class="filter-search" id="trade-get-input" aria-label="Players you get" placeholder="You get..." style="flex:1" oninput="tradeAnalyzerSearch(\'get\',this.value)">';
   html += '</div>';
   html += '<div id="trade-give-results" class="trade-analyzer-results"></div>';
   html += '<div id="trade-get-results" class="trade-analyzer-results"></div>';
@@ -1722,7 +1838,7 @@ function renderNewsInjuries() {
       if (team) teamName = team.abbrev || team.name;
       h += '<div class="mini-row" style="cursor:pointer" onclick="openPlayerPopup(' + p.id + ')">';
       h += '<span style="flex:1">' + statusBadge(p.injuryStatus) + ' ' + esc(p.name) + '</span>';
-      h += '<span class="text-xs muted">' + p.nbaTeam + ' | ' + esc(teamName) + '</span>';
+      h += '<span class="text-xs muted">' + esc(p.nbaTeam) + ' | ' + esc(teamName) + '</span>';
       h += '<span class="text-xs" style="min-width:50px;text-align:right">' + (p.injuryStatus || '').replace(/_/g, ' ') + '</span>';
       h += '</div>';
     });
@@ -1937,7 +2053,7 @@ function tradeAnalyzerSearch(side, query) {
   matches.forEach(function(p) {
     html += '<div class="mini-row" style="cursor:pointer;padding:4px 8px" onclick="selectTradePlayer(\'' + side + '\',' + p.id + ')">';
     html += '<span>' + esc(p.name) + '</span>';
-    html += '<span class="text-xs muted">' + formatPositions(p.eligibleSlots) + ' | ' + p.nbaTeam + '</span>';
+    html += '<span class="text-xs muted">' + formatPositions(p.eligibleSlots) + ' | ' + esc(p.nbaTeam) + '</span>';
     html += '</div>';
   });
   resultsEl.innerHTML = html;
@@ -2099,7 +2215,8 @@ function renderSettingsPage() {
   html += '<div class="settings-row"><label>League ID</label><span>' + esc(S.espn.leagueId) + '</span></div>';
   html += '<div class="settings-row"><label>Last Sync</label><span>' + (S.espn.lastSync ? new Date(S.espn.lastSync).toLocaleString() : 'Never') + '</span></div>';
   html += '<div class="settings-row"><label>Status</label><span class="' + (S.espn.connected ? 'stat-positive' : 'stat-negative') + '">' + (S.espn.connected ? 'Connected' : 'Disconnected') + '</span></div>';
-  html += '<button class="btn btn-primary btn-full" onclick="ESPNSync.syncAll()">Sync Now</button>';
+  html += '<button id="sync-now-btn" class="btn btn-primary btn-full" ' +
+    'style="min-height:44px" onclick="doManualSync(this)">Sync Now</button>';
   // Phase 2: Disconnect clears cookies and cached league/team/roster data,
   // then drops the user back at the wizard. Theme and prefs survive.
   html += '<button class="btn btn-warning btn-full" style="margin-top:8px" onclick="if(confirm(\'This will sign you out of ESPN and clear your cookies. You will need to reconnect to use Larry.\'))disconnectEspn()">Disconnect ESPN</button>';
@@ -2166,7 +2283,15 @@ function openPlayerPopup(playerId) {
   var overlay = document.getElementById('player-popup-overlay');
   if (overlay) overlay.classList.add('open');
   renderPlayerPopup();
+  // A modal that traps you until you find the X is a keyboard dead end.
+  if (!_popupEscBound) {
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape' && _popupPlayerId) closePlayerPopup();
+    });
+    _popupEscBound = true;
+  }
 }
+var _popupEscBound = false;
 
 function closePlayerPopup() {
   _popupPlayerId = null;
@@ -2179,13 +2304,32 @@ function switchPopupTab(tab) {
   renderPlayerPopup();
 }
 
+// Every render path is wrapped so a bad player record shows a diagnostic
+// card instead of a blank modal (CLAUDE.md: never blank screens). The popup
+// was the one renderer still missing this.
 function renderPlayerPopup() {
   if (!_popupPlayerId) return;
   var container = document.getElementById('player-popup-content');
   if (!container) return;
+  try {
+    container.innerHTML = buildPlayerPopup();
+  } catch (e) {
+    container.innerHTML = '<div class="error-card"><h3>Could not load this player</h3>' +
+      '<p>' + esc(e.message) + '</p>' +
+      '<pre>' + esc((e.stack || '').substring(0, 300)) + '</pre>' +
+      '<button class="btn btn-secondary" style="min-height:44px" ' +
+      'onclick="closePlayerPopup()">Close</button></div>';
+  }
+}
 
-  var p = S.allPlayers.find(function(pl) { return pl.id === _popupPlayerId; });
-  if (!p) { container.innerHTML = '<div class="empty-state"><p>Player not found.</p></div>'; return; }
+function buildPlayerPopup() {
+  var p = null;
+  for (var pi = 0; pi < S.allPlayers.length; pi++) {
+    if (S.allPlayers[pi].id === _popupPlayerId) { p = S.allPlayers[pi]; break; }
+  }
+  if (!p) return '<div class="empty-state"><p>Player not found.</p></div>';
+  // Guard the stats bag: a stub copied from a team roster may not have one.
+  if (!p.stats) p.stats = { season: {}, last7: {}, last15: {}, last30: {}, totals: {}, gp: {} };
 
   var cats = getOrderedCategories();
   var streak = Engines.detectStreaks(p);
@@ -2198,13 +2342,13 @@ function renderPlayerPopup() {
   var initials = (p.firstName ? p.firstName[0] : '') + (p.lastName ? p.lastName[0] : '');
   html += '<div class="popup-header">';
   html += '<div class="popup-headshot">';
-  html += '<img class="player-headshot" src="https://a.espncdn.com/combiner/i?img=/i/headshots/nba/players/full/' + p.id + '.png&w=96&h=72&cb=1" width="56" height="42" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'" style="border-radius:8px">';
+  html += '<img class="player-headshot" src="https://a.espncdn.com/combiner/i?img=/i/headshots/nba/players/full/' + (parseInt(p.id, 10) || 0) + '.png&w=96&h=72&cb=1" width="56" height="42" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'" style="border-radius:8px">';
   html += '<span class="player-initials" style="width:56px;height:42px;font-size:1.2rem;background:' + color + ';display:none;border-radius:8px">' + initials + '</span>';
   html += '</div>';
   html += '<div class="popup-info"><h3>' + statusBadge(p.injuryStatus) + ' ' + esc(p.name) + '</h3>';
-  html += '<div class="popup-meta">' + formatPositions(p.eligibleSlots) + ' | ' + p.nbaTeam + ' | Own: ' + fmt(p.ownership, 0) + '%</div>';
+  html += '<div class="popup-meta">' + formatPositions(p.eligibleSlots) + ' | ' + esc(p.nbaTeam) + ' | Own: ' + fmt(p.ownership, 0) + '%</div>';
   if (p.status !== 'ACTIVE' && p.status !== 'HEALTHY') {
-    html += '<div class="popup-injury">' + p.status + '</div>';
+    html += '<div class="popup-injury">' + esc(p.status) + '</div>';
   }
   html += '</div></div>';
 
@@ -2242,10 +2386,12 @@ function renderPlayerPopup() {
   // Actions
   html += '<div class="popup-actions">';
   html += '<button class="btn btn-sm ' + (onWatch ? 'btn-warning' : 'btn-secondary') + '" onclick="toggleWatchlist(' + p.id + ');renderPlayerPopup()">' + (onWatch ? '\u2B50 Watching' : '\u2606 Watch') + '</button>';
-  html += '<a href="https://fantasy.espn.com/basketball/player?playerId=' + p.id + '" target="_blank" class="btn btn-sm btn-secondary">ESPN</a>';
+  html += '<a href="https://fantasy.espn.com/basketball/player?playerId=' +
+    (parseInt(p.id, 10) || 0) + '" target="_blank" rel="noopener noreferrer" ' +
+    'class="btn btn-sm btn-secondary" style="min-height:44px">ESPN</a>';
   html += '</div>';
 
-  container.innerHTML = html;
+  return html;
 }
 
 function renderPopupStats(p, cats) {
@@ -2427,7 +2573,7 @@ function renderPopupSchedule(p) {
   // Today's game info
   html += '<div style="padding:8px 0;border-top:1px solid var(--border)">';
   html += '<div style="font-weight:700;margin-bottom:4px">Today</div>';
-  html += '<div>' + (p.gamesToday ? '\u{1F7E2} ' + p.nbaTeam + ' has a game today' : '\u{1F534} No game today') + '</div>';
+  html += '<div>' + (p.gamesToday ? '\u{1F7E2} ' + esc(p.nbaTeam) + ' has a game today' : '\u{1F534} No game today') + '</div>';
   html += '</div>';
 
   return html;
