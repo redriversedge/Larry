@@ -1,0 +1,608 @@
+{
+ "source": "FantasyPros NBA Roto/Categories overall rankings, consensus of 6 experts (7 available)",
+ "url": "https://www.fantasypros.com/nba/rankings/overall.php",
+ "asOf": "2026-10-13",
+ "format": "9-category experts; Larry's league is 5-category (REB, AST, STL, BLK, PTS), so some gap is expected",
+ "rankings": [
+  {
+   "rank": 1,
+   "name": "Nikola Jokic"
+  },
+  {
+   "rank": 2,
+   "name": "Victor Wembanyama"
+  },
+  {
+   "rank": 3,
+   "name": "Luka Doncic"
+  },
+  {
+   "rank": 4,
+   "name": "Shai Gilgeous-Alexander"
+  },
+  {
+   "rank": 5,
+   "name": "Cade Cunningham"
+  },
+  {
+   "rank": 6,
+   "name": "Anthony Edwards"
+  },
+  {
+   "rank": 7,
+   "name": "Tyrese Maxey"
+  },
+  {
+   "rank": 8,
+   "name": "Jayson Tatum"
+  },
+  {
+   "rank": 9,
+   "name": "Jalen Johnson"
+  },
+  {
+   "rank": 10,
+   "name": "Cooper Flagg"
+  },
+  {
+   "rank": 11,
+   "name": "Karl-Anthony Towns"
+  },
+  {
+   "rank": 12,
+   "name": "Donovan Mitchell"
+  },
+  {
+   "rank": 13,
+   "name": "Tyrese Haliburton"
+  },
+  {
+   "rank": 14,
+   "name": "Scottie Barnes"
+  },
+  {
+   "rank": 15,
+   "name": "Giannis Antetokounmpo"
+  },
+  {
+   "rank": 16,
+   "name": "Kevin Durant"
+  },
+  {
+   "rank": 17,
+   "name": "Jamal Murray"
+  },
+  {
+   "rank": 18,
+   "name": "Austin Reaves"
+  },
+  {
+   "rank": 19,
+   "name": "Trae Young"
+  },
+  {
+   "rank": 20,
+   "name": "LaMelo Ball"
+  },
+  {
+   "rank": 21,
+   "name": "Stephen Curry"
+  },
+  {
+   "rank": 22,
+   "name": "Chet Holmgren"
+  },
+  {
+   "rank": 23,
+   "name": "Alperen Sengun"
+  },
+  {
+   "rank": 24,
+   "name": "Jalen Brunson"
+  },
+  {
+   "rank": 25,
+   "name": "Kawhi Leonard"
+  },
+  {
+   "rank": 26,
+   "name": "Devin Booker"
+  },
+  {
+   "rank": 27,
+   "name": "Josh Giddey"
+  },
+  {
+   "rank": 28,
+   "name": "Amen Thompson"
+  },
+  {
+   "rank": 29,
+   "name": "James Harden"
+  },
+  {
+   "rank": 30,
+   "name": "Bam Adebayo"
+  },
+  {
+   "rank": 31,
+   "name": "Trey Murphy III"
+  },
+  {
+   "rank": 32,
+   "name": "Evan Mobley"
+  },
+  {
+   "rank": 33,
+   "name": "Anthony Davis"
+  },
+  {
+   "rank": 34,
+   "name": "Jalen Duren"
+  },
+  {
+   "rank": 35,
+   "name": "Domantas Sabonis"
+  },
+  {
+   "rank": 36,
+   "name": "Derrick White"
+  },
+  {
+   "rank": 37,
+   "name": "Walker Kessler"
+  },
+  {
+   "rank": 38,
+   "name": "Jalen Williams"
+  },
+  {
+   "rank": 39,
+   "name": "Jaylen Brown"
+  },
+  {
+   "rank": 40,
+   "name": "Lauri Markkanen"
+  },
+  {
+   "rank": 41,
+   "name": "Deni Avdija"
+  },
+  {
+   "rank": 42,
+   "name": "Brandon Miller"
+  },
+  {
+   "rank": 43,
+   "name": "Kon Knueppel"
+  },
+  {
+   "rank": 44,
+   "name": "LeBron James"
+  },
+  {
+   "rank": 45,
+   "name": "Jaren Jackson Jr."
+  },
+  {
+   "rank": 46,
+   "name": "Donovan Clingan"
+  },
+  {
+   "rank": 47,
+   "name": "Kyrie Irving"
+  },
+  {
+   "rank": 48,
+   "name": "Keyonte George"
+  },
+  {
+   "rank": 49,
+   "name": "Desmond Bane"
+  },
+  {
+   "rank": 50,
+   "name": "Darius Garland"
+  },
+  {
+   "rank": 51,
+   "name": "Franz Wagner"
+  },
+  {
+   "rank": 52,
+   "name": "Nickeil Alexander-Walker"
+  },
+  {
+   "rank": 53,
+   "name": "Joel Embiid"
+  },
+  {
+   "rank": 54,
+   "name": "Pascal Siakam"
+  },
+  {
+   "rank": 55,
+   "name": "Dyson Daniels"
+  },
+  {
+   "rank": 56,
+   "name": "Dejounte Murray"
+  },
+  {
+   "rank": 57,
+   "name": "Onyeka Okongwu"
+  },
+  {
+   "rank": 58,
+   "name": "Paolo Banchero"
+  },
+  {
+   "rank": 59,
+   "name": "Alex Sarr"
+  },
+  {
+   "rank": 60,
+   "name": "OG Anunoby"
+  },
+  {
+   "rank": 61,
+   "name": "Cameron Boozer"
+  },
+  {
+   "rank": 62,
+   "name": "Tyler Herro"
+  },
+  {
+   "rank": 63,
+   "name": "Michael Porter Jr."
+  },
+  {
+   "rank": 64,
+   "name": "Naz Reid"
+  },
+  {
+   "rank": 65,
+   "name": "Ryan Rollins"
+  },
+  {
+   "rank": 66,
+   "name": "Ivica Zubac"
+  },
+  {
+   "rank": 67,
+   "name": "Damian Lillard"
+  },
+  {
+   "rank": 68,
+   "name": "Stephon Castle"
+  },
+  {
+   "rank": 69,
+   "name": "Zach Edey"
+  },
+  {
+   "rank": 70,
+   "name": "VJ Edgecombe"
+  },
+  {
+   "rank": 71,
+   "name": "Mikal Bridges"
+  },
+  {
+   "rank": 72,
+   "name": "Matas Buzelis"
+  },
+  {
+   "rank": 73,
+   "name": "Julius Randle"
+  },
+  {
+   "rank": 74,
+   "name": "Jarrett Allen"
+  },
+  {
+   "rank": 75,
+   "name": "Caleb Wilson"
+  },
+  {
+   "rank": 76,
+   "name": "De'Aaron Fox"
+  },
+  {
+   "rank": 77,
+   "name": "Jaden McDaniels"
+  },
+  {
+   "rank": 78,
+   "name": "Zion Williamson"
+  },
+  {
+   "rank": 79,
+   "name": "Payton Pritchard"
+  },
+  {
+   "rank": 80,
+   "name": "Brandon Ingram"
+  },
+  {
+   "rank": 81,
+   "name": "Ty Jerome"
+  },
+  {
+   "rank": 82,
+   "name": "Kel'el Ware"
+  },
+  {
+   "rank": 83,
+   "name": "Dylan Harper"
+  },
+  {
+   "rank": 84,
+   "name": "Paul George"
+  },
+  {
+   "rank": 85,
+   "name": "Rudy Gobert"
+  },
+  {
+   "rank": 86,
+   "name": "Immanuel Quickley"
+  },
+  {
+   "rank": 87,
+   "name": "Coby White"
+  },
+  {
+   "rank": 88,
+   "name": "AJ Dybantsa"
+  },
+  {
+   "rank": 89,
+   "name": "Ausar Thompson"
+  },
+  {
+   "rank": 90,
+   "name": "Day'Ron Sharpe"
+  },
+  {
+   "rank": 91,
+   "name": "Derik Queen"
+  },
+  {
+   "rank": 92,
+   "name": "Myles Turner"
+  },
+  {
+   "rank": 93,
+   "name": "Josh Hart"
+  },
+  {
+   "rank": 94,
+   "name": "Jalen Suggs"
+  },
+  {
+   "rank": 95,
+   "name": "Darryn Peterson"
+  },
+  {
+   "rank": 96,
+   "name": "Ja Morant"
+  },
+  {
+   "rank": 97,
+   "name": "Brandin Podziemski"
+  },
+  {
+   "rank": 98,
+   "name": "Cedric Coward"
+  },
+  {
+   "rank": 99,
+   "name": "Norman Powell"
+  },
+  {
+   "rank": 100,
+   "name": "Nic Claxton"
+  },
+  {
+   "rank": 101,
+   "name": "Neemias Queta"
+  },
+  {
+   "rank": 102,
+   "name": "Isaiah Hartenstein"
+  },
+  {
+   "rank": 103,
+   "name": "Andrew Wiggins"
+  },
+  {
+   "rank": 104,
+   "name": "Jabari Smith Jr."
+  },
+  {
+   "rank": 105,
+   "name": "Miles Bridges"
+  },
+  {
+   "rank": 106,
+   "name": "Ayo Dosunmu"
+  },
+  {
+   "rank": 107,
+   "name": "John Collins"
+  },
+  {
+   "rank": 108,
+   "name": "Kyshawn George"
+  },
+  {
+   "rank": 109,
+   "name": "CJ McCollum"
+  },
+  {
+   "rank": 110,
+   "name": "Toumani Camara"
+  },
+  {
+   "rank": 111,
+   "name": "Peyton Watson"
+  },
+  {
+   "rank": 112,
+   "name": "Andrew Nembhard"
+  },
+  {
+   "rank": 113,
+   "name": "Wendell Carter Jr."
+  },
+  {
+   "rank": 114,
+   "name": "Zach LaVine"
+  },
+  {
+   "rank": 115,
+   "name": "Keegan Murray"
+  },
+  {
+   "rank": 116,
+   "name": "Collin Murray-Boyles"
+  },
+  {
+   "rank": 117,
+   "name": "Kevin Porter Jr."
+  },
+  {
+   "rank": 118,
+   "name": "Fred VanVleet"
+  },
+  {
+   "rank": 119,
+   "name": "Kristaps Porzingis"
+  },
+  {
+   "rank": 120,
+   "name": "Jaime Jaquez Jr."
+  },
+  {
+   "rank": 121,
+   "name": "Jalen Green"
+  },
+  {
+   "rank": 122,
+   "name": "Jusuf Nurkic"
+  },
+  {
+   "rank": 123,
+   "name": "Reed Sheppard"
+  },
+  {
+   "rank": 124,
+   "name": "Cason Wallace"
+  },
+  {
+   "rank": 125,
+   "name": "Davion Mitchell"
+  },
+  {
+   "rank": 126,
+   "name": "RJ Barrett"
+  },
+  {
+   "rank": 127,
+   "name": "Jrue Holiday"
+  },
+  {
+   "rank": 128,
+   "name": "Jakob Poeltl"
+  },
+  {
+   "rank": 129,
+   "name": "Sandro Mamukelashvili"
+  },
+  {
+   "rank": 130,
+   "name": "Ajay Mitchell"
+  },
+  {
+   "rank": 131,
+   "name": "Daniel Gafford"
+  },
+  {
+   "rank": 132,
+   "name": "Saddiq Bey"
+  },
+  {
+   "rank": 133,
+   "name": "Yaxel Lendeborg"
+  },
+  {
+   "rank": 134,
+   "name": "Maxime Raynaud"
+  },
+  {
+   "rank": 135,
+   "name": "Collin Gillespie"
+  },
+  {
+   "rank": 136,
+   "name": "Egor Demin"
+  },
+  {
+   "rank": 137,
+   "name": "Quentin Grimes"
+  },
+  {
+   "rank": 138,
+   "name": "DeMar DeRozan"
+  },
+  {
+   "rank": 139,
+   "name": "Ace Bailey"
+  },
+  {
+   "rank": 140,
+   "name": "Anthony Black"
+  },
+  {
+   "rank": 141,
+   "name": "Jeremiah Fears"
+  },
+  {
+   "rank": 142,
+   "name": "Cameron Johnson"
+  },
+  {
+   "rank": 143,
+   "name": "P.J. Washington Jr."
+  },
+  {
+   "rank": 144,
+   "name": "Aaron Gordon"
+  },
+  {
+   "rank": 145,
+   "name": "Tari Eason"
+  },
+  {
+   "rank": 146,
+   "name": "Devin Vassell"
+  },
+  {
+   "rank": 147,
+   "name": "Julian Champagnie"
+  },
+  {
+   "rank": 148,
+   "name": "Bobby Portis Jr."
+  },
+  {
+   "rank": 149,
+   "name": "Keaton Wagler"
+  },
+  {
+   "rank": 150,
+   "name": "Dillon Brooks"
+  }
+ ]
+}
