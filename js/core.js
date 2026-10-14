@@ -174,7 +174,13 @@ function initState() {
       theme: 'larry-dark',
       defaultStatView: 'season', chartTheme: 'dark',
       collapsedSections: {}, claudeApiKey: '',
-      recencyWeight: 0.3
+      recencyWeight: 0.3,
+      // Larry's own Marcel projections instead of ESPN's. OFF because the
+      // backtest says ESPN's rates rank players better (value rank
+      // correlation 0.839 against 0.794 on a held-out season). The one
+      // component that does win is expected games played. Full numbers in
+      // docs/PROJECTIONS_BACKTEST.md.
+      useLarryProjections: false
     },
     chatHistory: [],
     analysisCache: {

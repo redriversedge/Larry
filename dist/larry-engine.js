@@ -32,10 +32,18 @@ var LarryEngine = (() => {
     buildQPool: () => buildQPool,
     computeBaseValues: () => computeBaseValues,
     computeLeagueAverages: () => computeLeagueAverages,
+    computeLeagueRates: () => computeLeagueRates,
     createEspnProjectionSource: () => createEspnProjectionSource,
     createInMemoryProjectionSource: () => createInMemoryProjectionSource,
+    espnPerGameRate: () => espnPerGameRate,
     gScore: () => gScore,
     gVector: () => gVector,
+    overrideIsActive: () => overrideIsActive,
+    per36Rate: () => per36Rate,
+    projectAll: () => projectAll,
+    projectGamesPlayed: () => projectGamesPlayed,
+    projectMinutesPerGame: () => projectMinutesPerGame,
+    projectPlayer: () => projectPlayer,
     recommend: () => recommend,
     rosterTotal: () => rosterTotal,
     sumVector: () => sumVector,
@@ -59,6 +67,18 @@ var LarryEngine = (() => {
   var PRESEASON_LONG_TERM_GP = 60;
   var PRESEASON_GP_REFERENCE = 72;
   var PRESEASON_DISCOUNT_POWER = 0.5;
+  var MARCEL_WEIGHTS = [5, 4, 3];
+  var MARCEL_REGRESSION_MINUTES = 1e3;
+  var MARCEL_LEAGUE_MIN_MINUTES = 500;
+  var MARCEL_MPG_GP_FLOOR = 100;
+  var MARCEL_MPG_PRIOR = 24;
+  var MARCEL_MPG_PRIOR_WEIGHT = 0.25;
+  var GP_WEIGHTS = [0.5, 0.3, 0.2];
+  var GP_PRIOR = 70;
+  var GP_PRIOR_WEIGHT = 0.25;
+  var GP_MAX = 82;
+  var GP_FALLBACK = 65;
+  var PROJECTION_BLEND_ALPHA = 0.2;
   var PRESEASON_SUSPECT_GP = 10;
   var DURANT_SCALE = 10;
   var G_SCORE_KAPPA = 1;
@@ -595,6 +615,177 @@ var LarryEngine = (() => {
         return byId.get(id);
       }
     };
+  }
+
+  // src/engine/projections.ts
+  var MINUTES_BASE = 36;
+  function emptyVector3() {
+    return { REB: 0, AST: 0, STL: 0, BLK: 0, PTS: 0 };
+  }
+  function num2(v) {
+    return typeof v === "number" && isFinite(v) ? v : 0;
+  }
+  function computeLeagueRates(seasonsByPlayer, opts = {}) {
+    const cats = opts.categories ?? CATEGORIES;
+    const minMinutes = opts.minMinutes ?? MARCEL_LEAGUE_MIN_MINUTES;
+    const totals = emptyVector3();
+    let minutes = 0;
+    for (const seasons of seasonsByPlayer) {
+      for (let i = 0; i < seasons.length && i < MARCEL_WEIGHTS.length; i++) {
+        const s = seasons[i];
+        if (num2(s.MIN) < minMinutes) continue;
+        const w = MARCEL_WEIGHTS[i];
+        minutes += w * num2(s.MIN);
+        for (const c of cats) totals[c] += w * num2(s[c]);
+      }
+    }
+    const perMinute = emptyVector3();
+    if (minutes > 0) {
+      for (const c of cats) perMinute[c] = totals[c] / minutes;
+    }
+    return { perMinute };
+  }
+  function per36Rate(seasons, league, opts = {}) {
+    const cats = opts.categories ?? CATEGORIES;
+    const R = opts.regressionMinutes ?? MARCEL_REGRESSION_MINUTES;
+    const out = emptyVector3();
+    let weightedMinutes = 0;
+    const weightedStat = emptyVector3();
+    for (let i = 0; i < seasons.length && i < MARCEL_WEIGHTS.length; i++) {
+      const s = seasons[i];
+      const w = MARCEL_WEIGHTS[i];
+      weightedMinutes += w * num2(s.MIN);
+      for (const c of cats) weightedStat[c] += w * num2(s[c]);
+    }
+    const denom = weightedMinutes + R;
+    if (denom <= 0) return out;
+    const ageFactor = opts.ageFactor ?? 1;
+    for (const c of cats) {
+      const perMin = (weightedStat[c] + R * league.perMinute[c]) / denom;
+      out[c] = MINUTES_BASE * perMin * ageFactor;
+    }
+    return out;
+  }
+  function projectMinutesPerGame(seasons) {
+    let weightedMinutes = 0;
+    let weightedGames = 0;
+    let totalGP = 0;
+    for (let i = 0; i < seasons.length && i < MARCEL_WEIGHTS.length; i++) {
+      const s = seasons[i];
+      const w = MARCEL_WEIGHTS[i];
+      weightedMinutes += w * num2(s.MIN);
+      weightedGames += w * num2(s.GP);
+      totalGP += num2(s.GP);
+    }
+    if (weightedGames <= 0) return 0;
+    const raw = weightedMinutes / weightedGames;
+    if (totalGP >= MARCEL_MPG_GP_FLOOR) return raw;
+    return (1 - MARCEL_MPG_PRIOR_WEIGHT) * raw + MARCEL_MPG_PRIOR_WEIGHT * MARCEL_MPG_PRIOR;
+  }
+  function projectGamesPlayed(seasons, espnProjection) {
+    const usable = seasons.slice(0, GP_WEIGHTS.length);
+    if (usable.length <= 1) {
+      const espnGP = num2(espnProjection?.GP);
+      if (espnGP > 0) return Math.min(espnGP, GP_MAX);
+      return GP_FALLBACK;
+    }
+    let weighted = 0;
+    let weightSum = 0;
+    for (let i = 0; i < usable.length; i++) {
+      const w = GP_WEIGHTS[i];
+      weighted += w * num2(usable[i].GP);
+      weightSum += w;
+    }
+    if (weightSum <= 0) return GP_FALLBACK;
+    let gp = weighted / weightSum;
+    gp = (1 - GP_PRIOR_WEIGHT) * gp + GP_PRIOR_WEIGHT * GP_PRIOR;
+    return Math.min(gp, GP_MAX);
+  }
+  function overrideIsActive(override, today) {
+    if (!override) return false;
+    if (!override.until) return true;
+    if (!today) return true;
+    return today <= override.until;
+  }
+  function espnPerGameRate(espnProjection, cats = CATEGORIES) {
+    if (!espnProjection) return null;
+    const gp = num2(espnProjection.GP);
+    if (gp < 1) return null;
+    const out = emptyVector3();
+    let any = false;
+    for (const c of cats) {
+      const v = num2(espnProjection[c]) / gp;
+      out[c] = v;
+      if (v !== 0) any = true;
+    }
+    return any ? out : null;
+  }
+  function projectPlayer(input, league, opts = {}) {
+    const cats = opts.categories ?? CATEGORIES;
+    const alpha = opts.blendAlpha ?? PROJECTION_BLEND_ALPHA;
+    const override = overrideIsActive(opts.override, opts.today) ? opts.override : null;
+    const seasons = (input.seasons ?? []).slice(0, MARCEL_WEIGHTS.length);
+    const espnRate = espnPerGameRate(input.espnProjection, cats);
+    if (seasons.length === 0) {
+      const gp2 = override?.gp ?? num2(input.espnProjection?.GP) ?? GP_FALLBACK;
+      const mpg2 = override?.mpg ?? 0;
+      const perGame2 = espnRate ?? emptyVector3();
+      const per362 = emptyVector3();
+      if (mpg2 > 0) {
+        for (const c of cats) per362[c] = perGame2[c] * MINUTES_BASE / mpg2;
+      }
+      return {
+        id: input.id,
+        perGame: perGame2,
+        per36: per362,
+        gp: Math.min(gp2 > 0 ? gp2 : GP_FALLBACK, GP_MAX),
+        mpg: mpg2,
+        source: espnRate ? override ? "override" : "espn" : "none",
+        seasonsUsed: 0
+      };
+    }
+    const per36 = per36Rate(seasons, league, opts);
+    const modelMpg = projectMinutesPerGame(seasons);
+    const mpg = override?.mpg ?? modelMpg;
+    const larryRate = emptyVector3();
+    for (const c of cats) larryRate[c] = per36[c] * mpg / MINUTES_BASE;
+    const perGame = emptyVector3();
+    let source;
+    if (!espnRate) {
+      for (const c of cats) perGame[c] = larryRate[c];
+      source = "larry";
+    } else if (alpha >= 1) {
+      for (const c of cats) perGame[c] = larryRate[c];
+      source = "larry";
+    } else if (alpha <= 0) {
+      for (const c of cats) perGame[c] = espnRate[c];
+      source = "espn";
+    } else {
+      for (const c of cats) perGame[c] = alpha * larryRate[c] + (1 - alpha) * espnRate[c];
+      source = "blend";
+    }
+    const gp = override?.gp ?? projectGamesPlayed(seasons, input.espnProjection);
+    return {
+      id: input.id,
+      perGame,
+      per36,
+      gp: Math.min(Math.max(gp, 0), GP_MAX),
+      mpg,
+      source: override ? "override" : source,
+      seasonsUsed: seasons.length
+    };
+  }
+  function projectAll(inputs, opts = {}) {
+    const league = computeLeagueRates(
+      inputs.map((i) => i.seasons ?? []),
+      { categories: opts.categories }
+    );
+    const out = /* @__PURE__ */ new Map();
+    for (const input of inputs) {
+      const override = opts.overrides ? opts.overrides[input.id] : opts.override;
+      out.set(input.id, projectPlayer(input, league, { ...opts, override }));
+    }
+    return out;
   }
   return __toCommonJS(index_exports);
 })();

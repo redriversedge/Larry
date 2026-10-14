@@ -911,6 +911,48 @@ var ESPNSync = (function() {
     }
   }
 
+  // Static data for Larry's own projections: four seasons of box-score
+  // totals and the owner's overrides. Both are committed files served off
+  // the same origin, so no proxy and no credentials.
+  //
+  // Only fetched when the flag is on, which it is not by default. 361 KB
+  // is not worth downloading for a feature nobody enabled.
+  async function loadProjectionData() {
+    if (!(S.prefs && S.prefs.useLarryProjections)) return;
+    if (S.projectionHistory && S.projectionOverrides) return;
+    try {
+      var results = await Promise.all([
+        fetch('tests/fixtures/projections/espn-history.json'),
+        fetch('data/projection-overrides.json')
+      ]);
+      if (!results[0].ok || !results[1].ok) {
+        throw new Error('HTTP ' + results[0].status + '/' + results[1].status);
+      }
+      var history = await results[0].json();
+      var overrides = await results[1].json();
+      // Reshape to an id-keyed map of season arrays, most recent first,
+      // which is the order the Marcel model expects.
+      var byId = {};
+      var seasonIds = (history.seasons || []).slice().sort(function(a, b) { return b - a; });
+      (history.players || []).forEach(function(h) {
+        var seasons = [];
+        for (var i = 0; i < seasonIds.length; i++) {
+          var line = h.actual && h.actual[String(seasonIds[i])];
+          if (line && line.GP > 0) seasons.push(line);
+        }
+        if (seasons.length) byId[String(h.id)] = { seasons: seasons };
+      });
+      S.projectionHistory = { pulledAt: history.pulledAt, players: byId };
+      S.projectionOverrides = overrides;
+      addSyncLog('success', 'Loaded projection history for ' +
+        Object.keys(byId).length + ' players');
+    } catch (e) {
+      // Not fatal: the board falls back to ESPN's projections.
+      console.warn('projection data load failed:', e.message);
+      addSyncLog('error', 'Could not load projection history; using ESPN projections');
+    }
+  }
+
   // --- FULL SYNC ---
   async function syncAll() {
     if (SYNC_IN_PROGRESS) return;
@@ -929,6 +971,7 @@ var ESPNSync = (function() {
         parseTeams(data);
 
         await loadNbaSchedule();
+        await loadProjectionData();
         enrichPlayerSchedules();
         if (S.myTeam.teamId > 0) parseMatchup(data);
 
@@ -1571,6 +1614,7 @@ var ESPNSync = (function() {
     buildScheduleLookup: buildScheduleLookup,
     clearSeasonScopedState: clearSeasonScopedState,
     loadNbaSchedule: loadNbaSchedule,
+    loadProjectionData: loadProjectionData,
     enrichPlayerSchedules: enrichPlayerSchedules,
     countGamesInRange: countGamesInRange,
     // Matchup window arithmetic. Exported so the week-to-day-range mapping

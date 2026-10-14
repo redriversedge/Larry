@@ -1,0 +1,20 @@
+{
+  "_note": "Owner overrides for Larry's projections. gp and mpg each replace the model's number; omit either to keep the model's. Entries past their 'until' date are ignored, so a stale note cannot quietly distort the board all season. Keyed by ESPN player id (find it in tests/fixtures/projections/espn-history.json). Prefer deleting a stale entry over letting it expire.",
+  "_schema": {
+    "gp": "expected games played for the season, 0 to 82",
+    "mpg": "expected minutes per game",
+    "note": "why, in one line, for whoever reads this next",
+    "until": "YYYY-MM-DD, local. After this date the entry is ignored."
+  },
+  "_example": {
+    "4396993": {
+      "name": "Tyrese Haliburton",
+      "gp": 70,
+      "mpg": 33,
+      "note": "Example of the shape. Not active: it lives under _example, not players.",
+      "until": "2026-12-01"
+    }
+  },
+  "_whyEmpty": "The spec called for shipping a Haliburton override because ESPN had him projected for 1 game. ESPN has since corrected that: as of the 2026-10-14 pull he is projected for 64 games, and Larry's board already ranks him 16th without help. An override asserting a different games-played number would be a medical opinion rather than a data fix, which this file is explicitly not for. Add entries here when ESPN is wrong in a way you can point at.",
+  "players": {}
+}

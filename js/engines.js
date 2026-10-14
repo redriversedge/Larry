@@ -175,12 +175,39 @@ var Engines = (function() {
       perGame: v2PerGame(p),
       // The shrink prior. Without this the engine falls back to the pool
       // mean, which scores every player at 0 before opening night.
-      projectedPerGame: v2ProjectedPerGame(p)
+      //
+      // With the flag on this becomes Larry's own projection, which only
+      // moves ranks for low-game-count players (everyone else is mostly
+      // their own production by then). The flag is off by default.
+      projectedPerGame: v2ShrinkPrior(p)
     };
   }
 
-  // Games ESPN expects this player to play, 0 when it did not say.
+  // The in-season shrink prior: Larry's projection when enabled, ESPN's
+  // /82 rate otherwise. Kept separate from v2ProjectedPerGame so the
+  // regular-season path has exactly one place where the flag can change
+  // behaviour.
+  function v2ShrinkPrior(p) {
+    var lp = larryProjFor(p);
+    if (lp && lp.perGame) {
+      var any = false;
+      for (var i = 0; i < V2_CATEGORIES.length; i++) {
+        if (lp.perGame[V2_CATEGORIES[i]]) { any = true; break; }
+      }
+      if (any) return lp.perGame;
+    }
+    return v2ProjectedPerGame(p);
+  }
+
+  // Games this player is expected to play, 0 when nobody said.
+  //
+  // Prefers Larry's number when the flag is on. This is the one part of
+  // the model the backtest showed beating ESPN (13.51 against 14.04 mean
+  // absolute error on a held-out season), and it is also what the
+  // preseason long-term-injury discount runs on.
   function v2ProjectedGP(p) {
+    var lp = larryProjFor(p);
+    if (lp && typeof lp.gp === 'number' && isFinite(lp.gp) && lp.gp > 0) return lp.gp;
     var gp = p && p.stats ? p.stats.projectedGP : 0;
     return (typeof gp === 'number' && isFinite(gp) && gp > 0) ? gp : 0;
   }
@@ -199,10 +226,85 @@ var Engines = (function() {
     return (p.injuryStatus || p.status || 'ACTIVE') !== 'OUT';
   }
 
+  // --- LARRY PROJECTIONS (behind S.prefs.useLarryProjections) ---
+  //
+  // Off by default. The backtest found ESPN's rates rank players better
+  // than Larry's Marcel model (value rank correlation 0.839 against 0.794
+  // on a held-out season), so switching the board over would make it
+  // worse. Kept and wired because the expected-GAMES half of the model
+  // does beat ESPN, and because having our own projections is what makes
+  // the overrides file possible. See docs/PROJECTIONS_BACKTEST.md.
+  function larryProjectionsEnabled() {
+    return !!(S && S.prefs && S.prefs.useLarryProjections);
+  }
+
+  // The stored projection for one player, or null.
+  function larryProjFor(p) {
+    if (!larryProjectionsEnabled()) return null;
+    var cache = S.analysisCache && S.analysisCache.larryProjections;
+    if (!cache || !cache.byId) return null;
+    return cache.byId[String(p.id)] || null;
+  }
+
+  // Computed once per sync: the inputs only change when ESPN data, the
+  // history fixture or the overrides change.
+  function ensureLarryProjections(players) {
+    if (!larryProjectionsEnabled()) return;
+    var Eng = window.LarryEngine;
+    if (!Eng || typeof Eng.projectAll !== 'function') return;
+    if (!players || !players.length) return;
+    S.analysisCache = S.analysisCache || {};
+    var stamp = (S.espn && S.espn.lastSync) || '';
+    var cache = S.analysisCache.larryProjections;
+    if (cache && cache.stamp === stamp && cache.count === players.length) return;
+
+    var history = (S.projectionHistory && S.projectionHistory.players) || null;
+    if (!history) return; // no history loaded, nothing to model
+
+    var overrides = (S.projectionOverrides && S.projectionOverrides.players) || {};
+    var inputs = [];
+    for (var i = 0; i < players.length; i++) {
+      var p = players[i];
+      var h = history[String(p.id)];
+      if (!h) continue;
+      inputs.push({
+        id: String(p.id),
+        seasons: h.seasons || [],
+        espnProjection: (p.stats && p.stats.projectedSeason) || null
+      });
+    }
+    if (!inputs.length) return;
+
+    var result = Eng.projectAll(inputs, {
+      categories: v2LeagueCategories(),
+      overrides: overrides,
+      today: localDateStr(new Date())
+    });
+    var byId = {};
+    result.forEach(function(v, k) {
+      byId[k] = { perGame: v.perGame, gp: v.gp, mpg: v.mpg, source: v.source };
+    });
+    S.analysisCache.larryProjections = {
+      stamp: stamp, count: players.length, byId: byId
+    };
+  }
+
   // Preseason rate: the projection divided by the games ESPN expects the
   // player to play, not by 82. Falls back to the /82 rate when ESPN gave no
   // game count, which is the best available answer in that case.
   function v2ProjectedRate(p) {
+    var lp = larryProjFor(p);
+    if (lp && lp.perGame) {
+      var any = false;
+      for (var k = 0; k < V2_CATEGORIES.length; k++) {
+        if (lp.perGame[V2_CATEGORIES[k]]) { any = true; break; }
+      }
+      if (any) return lp.perGame;
+    }
+    return v2EspnProjectedRate(p);
+  }
+
+  function v2EspnProjectedRate(p) {
     var rate = p && p.stats ? p.stats.projectedRate : null;
     if (rate) {
       var out = {};
@@ -302,6 +404,9 @@ var Engines = (function() {
 
     var cats = v2LeagueCategories();
     var scale = typeof Eng.DURANT_SCALE === 'number' ? Eng.DURANT_SCALE : 10;
+    // No-op unless S.prefs.useLarryProjections is on. Must run before the
+    // inputs are built, since both the rate and the prior read the cache.
+    ensureLarryProjections(players);
     // Preseason the board is built from projections alone, so it reads the
     // rate ESPN expects the player to produce WHEN PLAYING and discounts
     // long-term absences separately. In season this is false and the code
@@ -1481,6 +1586,10 @@ var Engines = (function() {
     detectStreaks: detectStreaks,
     rosProjections: rosProjections,
     v2BaseValueInput: v2BaseValueInput,
+    larryProjectionsEnabled: larryProjectionsEnabled,
+    larryProjFor: larryProjFor,
+    ensureLarryProjections: ensureLarryProjections,
+    v2ShrinkPrior: v2ShrinkPrior,
     v2ProjectedGP: v2ProjectedGP,
     v2ProjectionSuspect: v2ProjectionSuspect,
     v2ProjectedRate: v2ProjectedRate,

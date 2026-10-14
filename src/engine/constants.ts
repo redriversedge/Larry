@@ -58,6 +58,61 @@ export const PRESEASON_GP_REFERENCE = 72;
 // where the experts have them.
 export const PRESEASON_DISCOUNT_POWER = 0.5;
 
+// --- Larry projections (Marcel) ---
+//
+// Season weights, most recent first: T-1, T-2, T-3. Tom Tango's original
+// Marcel ratios, which hold up well for basketball too.
+export const MARCEL_WEIGHTS = [5, 4, 3];
+
+// Regression to the mean, in MINUTES of league-average play added to every
+// player's sample. A player with 3000 weighted minutes barely moves; one
+// with 200 is pulled most of the way to average, which is the right answer
+// for a 10-game sample.
+//
+// The backtest is almost completely insensitive to this: rank correlation
+// moves by 0.001 across the whole range 250 to 3000. Left at a round
+// middle value rather than fit to the fourth decimal of one season.
+// See docs/PROJECTIONS_BACKTEST.md.
+export const MARCEL_REGRESSION_MINUTES = 1000;
+
+// Minutes played below which a player does not help define the league
+// average per-minute rate. Garbage-time lines would drag it down.
+export const MARCEL_LEAGUE_MIN_MINUTES = 500;
+
+// Minutes per game are regressed too, but only for players without much
+// history: below this many total games the sample does not pin a role.
+export const MARCEL_MPG_GP_FLOOR = 100;
+export const MARCEL_MPG_PRIOR = 24;
+export const MARCEL_MPG_PRIOR_WEIGHT = 0.25;
+
+// Expected games played. Recent seasons matter more for availability than
+// for production, so these weights are steeper than the Marcel ones.
+export const GP_WEIGHTS = [0.5, 0.3, 0.2];
+export const GP_PRIOR = 70;
+export const GP_PRIOR_WEIGHT = 0.25;
+export const GP_MAX = 82;
+
+// A player with no usable history at all. ESPN's projected games are used
+// first; this is the last resort.
+export const GP_FALLBACK = 65;
+
+// Share of the final RATE taken from Larry's model, the rest from ESPN.
+//
+// The backtest does not support a high value here. ESPN's rates beat
+// Larry's for ranking on both the tuning season and the held-out one, and
+// value rank correlation falls monotonically as this rises (2026: 0.839 at
+// 0.0 down to 0.794 at 1.0). Pure rho would pick 0.0, but that makes the
+// blend identical to ESPN and the whole model a no-op.
+//
+// 0.2 is the largest weight that costs nothing in rank correlation
+// (0.839 on 2026, same as ESPN alone) while improving the stat lines:
+// rebounds 0.863 -> 0.843 MAE, steals 0.203 -> 0.197, blocks 0.159 ->
+// 0.156. That is the honest "if you turn it on" setting.
+//
+// It is moot by default: S.prefs.useLarryProjections ships FALSE because
+// the spec's acceptance test failed. See docs/PROJECTIONS_BACKTEST.md.
+export const PROJECTION_BLEND_ALPHA = 0.2;
+
 // A projection this small is a data error, not a forecast. Tyrese
 // Haliburton shipped as ACTIVE with a 1-game projection (20 PTS, 10 AST,
 // 4 REB in that single game) while the experts have him 13th. Discounting

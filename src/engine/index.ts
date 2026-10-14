@@ -11,6 +11,25 @@ export {
 } from "./projectionSource";
 export { teamNeedVector, computeLeagueAverages, rosterTotal } from "./teamFit";
 export {
+  computeLeagueRates,
+  espnPerGameRate,
+  overrideIsActive,
+  per36Rate,
+  projectAll,
+  projectGamesPlayed,
+  projectMinutesPerGame,
+  projectPlayer,
+} from "./projections";
+export type {
+  LeagueRates,
+  PlayerProjectionResult,
+  ProjectionInput,
+  ProjectionOptions,
+  ProjectionOverride,
+  ProjectionSourceKind,
+  SeasonTotals,
+} from "./projections";
+export {
   applyHaircut,
   applyPreseasonDiscount,
   buildQPool,

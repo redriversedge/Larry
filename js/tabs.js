@@ -2203,6 +2203,25 @@ function renderTradeAnalysis() {
 
 
 
+// Flipping this changes every rank, so the cached board has to go and
+// DURANT has to run again before anything renders.
+function toggleLarryProjections(on) {
+  S.prefs = S.prefs || {};
+  S.prefs.useLarryProjections = !!on;
+  S.analysisCache = S.analysisCache || {};
+  S.analysisCache.durantComputedAt = null;
+  S.analysisCache.larryProjections = null;
+  saveState();
+  // Turning it on needs the history file, which is only fetched when the
+  // flag is set, so load it before recomputing rather than silently
+  // falling back to ESPN until the next sync.
+  ESPNSync.loadProjectionData().catch(function() {}).then(function() {
+    S.analysisCache.durantComputedAt = null;
+    Engines.ensureDURANT(S.allPlayers);
+    render();
+  });
+}
+
 function renderSettingsPage() {
   var html = '';
 
@@ -2220,6 +2239,22 @@ function renderSettingsPage() {
   // Phase 2: Disconnect clears cookies and cached league/team/roster data,
   // then drops the user back at the wizard. Theme and prefs survive.
   html += '<button class="btn btn-warning btn-full" style="margin-top:8px" onclick="if(confirm(\'This will sign you out of ESPN and clear your cookies. You will need to reconnect to use Larry.\'))disconnectEspn()">Disconnect ESPN</button>';
+  html += '</div>';
+
+  // Larry projections. Off by default and labelled honestly: the backtest
+  // says ESPN ranks players better, so this is an experiment the owner can
+  // opt into, not a recommended setting.
+  var lpOn = !!(S.prefs && S.prefs.useLarryProjections);
+  html += '<div class="card"><div class="card-header">Projections</div>';
+  html += '<div class="settings-row"><label for="larry-proj-toggle">Use Larry projections</label>';
+  html += '<input type="checkbox" id="larry-proj-toggle" style="min-width:44px;min-height:44px" ' +
+    (lpOn ? 'checked ' : '') + 'onchange="toggleLarryProjections(this.checked)"></div>';
+  html += '<div class="text-xs muted" style="padding:0 4px 4px">' +
+    'Off by default. Larry\'s own model is built from four seasons of box ' +
+    'scores. On a held-out season it ranked players worse than ESPN ' +
+    '(0.79 against 0.84 correlation with actual value), though it predicted ' +
+    'games played better. Full numbers in docs/PROJECTIONS_BACKTEST.md.' +
+    '</div>';
   html += '</div>';
 
   // League info
@@ -2464,6 +2499,21 @@ function renderPopupAnalysis(p, cats) {
   html += '<div style="background:var(--bg-input);border-radius:8px;padding:10px;text-align:center">';
   html += '<div style="font-size:1.1rem;font-weight:700">' + fmt(p.zScores ? p.zScores.total : 0, 2) + '</div><div class="text-xs muted">Z-Total</div></div>';
   html += '</div>';
+
+  // Larry's own projection, when the flag is on. Shows the source so an
+  // override is visible as an override rather than looking like the model.
+  var lproj = Engines.larryProjFor ? Engines.larryProjFor(p) : null;
+  if (lproj && lproj.perGame) {
+    html += '<div style="padding:8px 0;border-bottom:1px solid var(--border)">';
+    html += '<div style="font-weight:700;margin-bottom:4px">Larry projection</div>';
+    html += '<div class="text-xs">' + cats.map(function(cat) {
+      return esc(cat.abbr) + ' ' + fmt(lproj.perGame[cat.abbr] || 0, 1);
+    }).join('  ') + '</div>';
+    html += '<div class="text-xs muted" style="margin-top:4px">' +
+      Math.round(lproj.gp || 0) + ' games, ' + fmt(lproj.mpg || 0, 1) +
+      ' mpg, source ' + esc(String(lproj.source || 'model')) + '</div>';
+    html += '</div>';
+  }
 
   // Why this player's preseason value is what it is. Without this the
   // discount is invisible and a lower-than-expected rank looks like a bug.
