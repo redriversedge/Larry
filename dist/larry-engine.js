@@ -23,7 +23,11 @@ var LarryEngine = (() => {
   __export(index_exports, {
     CATEGORIES: () => CATEGORIES,
     DURANT_SCALE: () => DURANT_SCALE,
+    PRESEASON_GP_REFERENCE: () => PRESEASON_GP_REFERENCE,
+    PRESEASON_LONG_TERM_GP: () => PRESEASON_LONG_TERM_GP,
+    PRESEASON_SUSPECT_GP: () => PRESEASON_SUSPECT_GP,
     applyHaircut: () => applyHaircut,
+    applyPreseasonDiscount: () => applyPreseasonDiscount,
     buildExplainPayload: () => buildExplainPayload,
     buildQPool: () => buildQPool,
     computeBaseValues: () => computeBaseValues,
@@ -52,6 +56,10 @@ var LarryEngine = (() => {
   var Z_CAP = 3;
   var MIN_GP_POOL = 10;
   var FULL_SEASON_GAMES = 82;
+  var PRESEASON_LONG_TERM_GP = 60;
+  var PRESEASON_GP_REFERENCE = 72;
+  var PRESEASON_DISCOUNT_POWER = 0.5;
+  var PRESEASON_SUSPECT_GP = 10;
   var DURANT_SCALE = 10;
   var G_SCORE_KAPPA = 1;
   var ALPHA_IN_SEASON = 0.3;
@@ -273,9 +281,23 @@ var LarryEngine = (() => {
         z[c] = clamp((shrunk[c] - stats.mean[c]) / stats.stdev[c], Z_CAP);
         baseValue += z[c];
       }
-      return { id: input.id, gamesPlayed: gp, perGame, shrunk, z, baseValue };
+      return {
+        id: input.id,
+        gamesPlayed: gp,
+        perGame,
+        shrunk,
+        z,
+        baseValue,
+        hasEvidence: gp > 0 || prior !== null
+      };
     });
     return { rows, stats, poolSize: qPool.length };
+  }
+  function applyPreseasonDiscount(baseValue, projectedGP, suspect) {
+    if (suspect) return baseValue;
+    if (!(projectedGP > 0) || projectedGP >= PRESEASON_LONG_TERM_GP) return baseValue;
+    if (baseValue <= 0) return baseValue;
+    return baseValue * Math.pow(projectedGP / PRESEASON_GP_REFERENCE, PRESEASON_DISCOUNT_POWER);
   }
   function applyHaircut(baseValue, factor) {
     return baseValue > 0 ? baseValue * factor : baseValue;

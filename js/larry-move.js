@@ -147,7 +147,7 @@ function buildLarryMovePayload() {
   var freeAgents = (S.allPlayers || []).filter(function(p) {
     return p.onTeamId === 0 && Engines.isValidAddCandidate(p);
   });
-  freeAgents.sort(function(a, b) { return (b.durantScore || 0) - (a.durantScore || 0); });
+  freeAgents.sort(function(a, b) { return durantKey(b.durantScore) - durantKey(a.durantScore); });
 
   var engineRecs = [];
   try {

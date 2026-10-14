@@ -67,12 +67,21 @@ function loadEngines(state: any) {
     (state.league?.categories ?? []).slice();
   const fmt = (n: number, d: number) => Number(n).toFixed(d);
   const ESPNSync = { splitGP: () => 0 };
+  // core.js globals engines.js closes over. durantKey makes a null score
+  // sort below every number; isPreseason is forced off here so these tests
+  // exercise the regular-season path.
+  const durantKey = (v: unknown) =>
+    (v === null || v === undefined ? -Infinity : (v as number));
+  const durantText = (v: unknown, d = 1) =>
+    (v === null || v === undefined ? "--" : Number(v).toFixed(d));
+  const isPreseason = () => state.__preseason === true;
   const fn = new Function(
     "window", "S", "getOrderedCategories", "fmt", "console", "document", "ESPNSync",
+    "durantKey", "durantText", "isPreseason",
     src + "\n; window.Engines = Engines; return window.Engines;",
   );
   return fn(sandbox, state, getOrderedCategories, fmt, console,
-    { querySelectorAll: () => [] }, ESPNSync);
+    { querySelectorAll: () => [] }, ESPNSync, durantKey, durantText, isPreseason);
 }
 
 function baseState(): any {

@@ -17,6 +17,9 @@ import {
   FULL_SEASON_GAMES,
   G_SCORE_KAPPA,
   MIN_GP_POOL,
+  PRESEASON_DISCOUNT_POWER,
+  PRESEASON_GP_REFERENCE,
+  PRESEASON_LONG_TERM_GP,
   PROXY_WEEK_VARIANCE,
   Q_POOL_ITERATIONS,
   Q_POOL_MULTIPLIER,
@@ -199,6 +202,20 @@ export interface BaseValueRow {
   shrunk: CategoryVector; // after shrink toward the pool mean
   z: CategoryVector; // after shrink and clamp
   baseValue: number; // sum of z over the league's categories
+  // False when we know nothing about this player: no games played AND no
+  // usable projection. Such a player shrinks all the way to the pool mean
+  // and scores exactly 0, which reads as "average starter" and is the
+  // opposite of the truth.
+  //
+  // Preseason this was most of the board: 596 of 1000 players had no ESPN
+  // projection, so they filled ranks 65 to 660 and pushed every real
+  // player below starter-average down past 660. Austin Reaves, 18th by
+  // expert consensus, ranked 667th. The same bug hits the unprojected deep
+  // bench in-season.
+  //
+  // baseValue stays numeric so nothing downstream divides by null; callers
+  // order on this flag first.
+  hasEvidence: boolean;
 }
 
 export interface BaseValueOptions {
@@ -366,10 +383,45 @@ export function computeBaseValues(
       // Step 6.
       baseValue += z[c];
     }
-    return { id: input.id, gamesPlayed: gp, perGame, shrunk, z, baseValue };
+    return {
+      id: input.id,
+      gamesPlayed: gp,
+      perGame,
+      shrunk,
+      z,
+      baseValue,
+      hasEvidence: gp > 0 || prior !== null,
+    };
   });
 
   return { rows, stats, poolSize: qPool.length };
+}
+
+// Preseason-only discount for a player ESPN expects to miss a long stretch.
+//
+// Injuries do not reach the ranking through the status tag, and the tag is
+// not usable as a long-term signal anyway: Dejounte Murray is DAY_TO_DAY but
+// projected for 38 games, Kyrie Irving is ACTIVE at 43, Jimmy Butler is OUT
+// at 68. ESPN publishes no return dates. Projected games played is the only
+// honest long-term availability signal in the data.
+//
+// The discount is deliberately soft. A full g/82 cut measured WORSE than no
+// discount at all (rho 0.660 against 0.719) because it buried genuine
+// long-term players far below where the experts have them. sqrt(g/72) with a
+// floor of 60 games leaves normal rest and minor knocks alone and applies a
+// partial cut below that.
+//
+// Never scales a negative value: multiplying a negative by a fraction raises
+// it, which is the bug that made an OUT player outrank a healthy one.
+export function applyPreseasonDiscount(
+  baseValue: number,
+  projectedGP: number,
+  suspect: boolean,
+): number {
+  if (suspect) return baseValue;
+  if (!(projectedGP > 0) || projectedGP >= PRESEASON_LONG_TERM_GP) return baseValue;
+  if (baseValue <= 0) return baseValue;
+  return baseValue * Math.pow(projectedGP / PRESEASON_GP_REFERENCE, PRESEASON_DISCOUNT_POWER);
 }
 
 // Apply a 0-to-1 multiplier (availability, opportunity) to a base value

@@ -954,7 +954,13 @@ function renderPlayersList() {
   filtered.sort(function(a, b) {
     var dir = _playersSortDir;
     if (_playersSortCol === 'durantScore') {
-      return ((b.durantScore || 0) - (a.durantScore || 0)) * dir;
+      // No-evidence players sort last in BOTH directions: reversing the
+      // table should not promote players we know nothing about to the top.
+      var aNo = a.durantScore === null || a.durantScore === undefined;
+      var bNo = b.durantScore === null || b.durantScore === undefined;
+      if (aNo !== bNo) return aNo ? 1 : -1;
+      if (aNo && bNo) return (b.percentOwned || 0) - (a.percentOwned || 0);
+      return (b.durantScore - a.durantScore) * dir;
     }
     if (_playersSortCol === 'name') {
       // Negated so the first tap on Player gives A to Z. For numbers "first
@@ -976,6 +982,13 @@ function renderPlayersList() {
   // filtered count while the table rendered only the first 100, so it read
   // "666 players" above a 100-row table with no way to reach the rest.
   var willShow = Math.min(_playersShowCount, filtered.length);
+  var preseason = isPreseason();
+  if (preseason) {
+    html += '<div class="card" style="padding:8px 10px;margin-bottom:8px">' +
+      '<div style="font-weight:700;font-size:0.85rem">Preseason board</div>' +
+      '<div class="text-xs muted">Per-game value from projections; long-term ' +
+      'injuries discounted.</div></div>';
+  }
   html += '<div class="text-xs muted" style="margin-bottom:6px">Showing ' + willShow +
     ' of ' + filtered.length + ' players</div>';
   html += '<p class="sort-label">Sorted by ' + esc(playersSortLabel()) +
@@ -991,6 +1004,10 @@ function renderPlayersList() {
   html += '<th style="text-align:left;min-width:120px"><button type="button" class="th-sort" ' +
     'onclick="sortPlayers(\'name\')" aria-label="Sort by player name">Player' +
     playersSortIndicator('name') + '</button></th>';
+  // Preseason the whole board rests on ESPN's projected games, so show the
+  // number the value was built from rather than making the user guess why
+  // someone is lower than expected.
+  if (preseason) html += '<th class="stat-col">Proj GP</th>';
   cats.forEach(function(cat) {
     html += '<th class="stat-col" style="color:' + cat.color + '">' +
       '<button type="button" class="th-sort" onclick="sortPlayers(\'' + cat.abbr + '\')" ' +
@@ -1003,10 +1020,18 @@ function renderPlayersList() {
   filtered.slice(0, shown).forEach(function(p, idx) {
     var isMyTeam = p.onTeamId === S.myTeam.teamId;
     html += '<tr class="' + (isMyTeam ? 'my-team-row' : '') + '">';
-    html += '<td class="text-xs muted">' + (p.durantRank || idx + 1) + '</td>';
+    // A player we know nothing about gets no rank number. Printing one
+    // would imply we had placed them, when all we did was run out of
+    // players with evidence.
+    html += '<td class="text-xs muted">' + (p.noEvidence ? '--' : (p.durantRank || idx + 1)) + '</td>';
     var gameCell = formatGameCell(getGameForDate(p, todayStr));
     html += '<td class="stat-col game-cell" style="font-size:0.72rem;white-space:nowrap">' + (gameCell ? gameCell : '<span class="muted">-</span>') + '</td>';
-    html += '<td style="cursor:pointer" onclick="openPlayerPopup(' + p.id + ')">' + renderPlayerCell(p) + '</td>';
+    html += '<td style="cursor:pointer" onclick="openPlayerPopup(' + p.id + ')">' + renderPlayerCell(p) +
+      (p.projectionSuspect ? '<div class="text-xs muted">Projection limited</div>' : '') + '</td>';
+    if (preseason) {
+      var pgp = (p.stats && p.stats.projectedGP) || 0;
+      html += '<td class="stat-col text-xs muted">' + (pgp > 0 ? Math.round(pgp) : '--') + '</td>';
+    }
 
     var period = _playersStatView;
     cats.forEach(function(cat) {
@@ -1092,8 +1117,8 @@ function renderTrendingSection(allPlayers) {
     if (p.trend === 'hot') risers.push(p);
     else if (p.trend === 'cold') fallers.push(p);
   });
-  risers = risers.sort(function(a, b) { return (b.durantScore || 0) - (a.durantScore || 0); }).slice(0, 5);
-  fallers = fallers.sort(function(a, b) { return (b.durantScore || 0) - (a.durantScore || 0); }).slice(0, 5);
+  risers = risers.sort(function(a, b) { return durantKey(b.durantScore) - durantKey(a.durantScore); }).slice(0, 5);
+  fallers = fallers.sort(function(a, b) { return durantKey(b.durantScore) - durantKey(a.durantScore); }).slice(0, 5);
 
   if (!risers.length && !fallers.length) return '<p class="empty-state">Not enough data for trends yet.</p>';
 
@@ -1281,7 +1306,7 @@ function renderWatchlistPage() {
   }
 
   Engines.ensureDURANT(S.allPlayers || []);
-  players.sort(function(a, b) { return (b.durantScore || 0) - (a.durantScore || 0); });
+  players.sort(function(a, b) { return durantKey(b.durantScore) - durantKey(a.durantScore); });
 
   var cats = getOrderedCategories();
   var html = '<div class="card"><div class="table-scroll">' +
@@ -1600,7 +1625,7 @@ function renderROSProjections() {
   cats.forEach(function(cat) { html += '<th style="color:' + cat.color + '">' + cat.abbr + '</th>'; });
   html += '</tr></thead><tbody>';
 
-  myPlayers.sort(function(a,b) { return (b.durantScore || 0) - (a.durantScore || 0); });
+  myPlayers.sort(function(a,b) { return durantKey(b.durantScore) - durantKey(a.durantScore); });
   myPlayers.forEach(function(p) {
     html += '<tr><td style="text-align:left;cursor:pointer" onclick="openPlayerPopup(' + p.id + ')">' + esc(p.name) + '</td>';
     html += '<td>' + (p.rosGamesLeft || '-') + '</td>';
@@ -1814,7 +1839,7 @@ function renderOpponentScout() {
 
   // Opponent roster
   var oppPlayers = (oppTeam.players || []).slice();
-  oppPlayers.sort(function(a,b) { return (b.durantScore || 0) - (a.durantScore || 0); });
+  oppPlayers.sort(function(a,b) { return durantKey(b.durantScore) - durantKey(a.durantScore); });
 
   html += '<div class="card"><div class="card-header">Opponent Roster</div>';
   html += '<div class="table-scroll"><table class="data-table compact">';
@@ -1884,7 +1909,7 @@ function renderNewsInjuries() {
     var ao = statusOrder[a.injuryStatus] !== undefined ? statusOrder[a.injuryStatus] : 3;
     var bo = statusOrder[b.injuryStatus] !== undefined ? statusOrder[b.injuryStatus] : 3;
     if (ao !== bo) return ao - bo;
-    return (b.durantScore || 0) - (a.durantScore || 0);
+    return durantKey(b.durantScore) - durantKey(a.durantScore);
   });
 
   function renderInjuryList(players) {
@@ -2149,9 +2174,9 @@ function renderTradeAnalysis() {
 
   var html = '<div style="margin-top:12px;padding:12px;background:var(--bg-input);border-radius:8px">';
   html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">';
-  html += '<div><strong>' + esc(_tradeGivePlayer.name) + '</strong> <span class="text-xs muted">DURANT: ' + fmt(_tradeGivePlayer.durantScore || 0, 1) + '</span></div>';
+  html += '<div><strong>' + esc(_tradeGivePlayer.name) + '</strong> <span class="text-xs muted">DURANT: ' + durantText(_tradeGivePlayer.durantScore, 1) + '</span></div>';
   html += '<span style="font-size:1.2rem">\u{27A1}\u{FE0F}</span>';
-  html += '<div><strong>' + esc(_tradeGetPlayer.name) + '</strong> <span class="text-xs muted">DURANT: ' + fmt(_tradeGetPlayer.durantScore || 0, 1) + '</span></div>';
+  html += '<div><strong>' + esc(_tradeGetPlayer.name) + '</strong> <span class="text-xs muted">DURANT: ' + durantText(_tradeGetPlayer.durantScore, 1) + '</span></div>';
   html += '</div>';
 
   html += '<div style="text-align:center;margin:8px 0">';
@@ -2399,7 +2424,7 @@ function renderPopupStats(p, cats) {
   // DURANT & extras
   html += '<div style="display:flex;gap:12px;padding:8px 0;font-size:0.78rem;color:var(--text-secondary);border-top:1px solid var(--border);margin-top:8px">';
   html += '<span>GP: ' + (p.gamesPlayed || 0) + '</span><span>MPG: ' + fmt(p.minutesPerGame, 1) + '</span>';
-  html += '<span>DURANT: ' + fmt(p.durantScore || 0, 1) + '</span><span>Z-Total: ' + fmt(p.zScores ? p.zScores.total : 0, 2) + '</span>';
+  html += '<span>DURANT: ' + durantText(p.durantScore, 1) + '</span><span>Z-Total: ' + fmt(p.zScores ? p.zScores.total : 0, 2) + '</span>';
   html += '</div>';
   return html;
 }
@@ -2435,10 +2460,32 @@ function renderPopupGameLog(p, cats) {
 function renderPopupAnalysis(p, cats) {
   var html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">';
   html += '<div style="background:var(--bg-input);border-radius:8px;padding:10px;text-align:center">';
-  html += '<div style="font-size:1.1rem;font-weight:700">' + fmt(p.durantScore || 0, 1) + '</div><div class="text-xs muted">DURANT</div></div>';
+  html += '<div style="font-size:1.1rem;font-weight:700">' + durantText(p.durantScore, 1) + '</div><div class="text-xs muted">DURANT</div></div>';
   html += '<div style="background:var(--bg-input);border-radius:8px;padding:10px;text-align:center">';
   html += '<div style="font-size:1.1rem;font-weight:700">' + fmt(p.zScores ? p.zScores.total : 0, 2) + '</div><div class="text-xs muted">Z-Total</div></div>';
   html += '</div>';
+
+  // Why this player's preseason value is what it is. Without this the
+  // discount is invisible and a lower-than-expected rank looks like a bug.
+  if (isPreseason()) {
+    var projGP = (p.stats && p.stats.projectedGP) || 0;
+    var notes = [];
+    if (projGP > 0) notes.push('ESPN projects ' + Math.round(projGP) + ' games');
+    if (p.projectionSuspect) {
+      notes.push('Projection limited: ESPN has too few games here to trust ' +
+        'the rate, so no availability discount was applied');
+    } else if (projGP > 0 && projGP < 60 && !p.noEvidence) {
+      notes.push('Long-term discount applied (projected ' + Math.round(projGP) + ' games)');
+    }
+    if (p.noEvidence) {
+      notes.push('No games played and no ESPN projection, so there is nothing ' +
+        'to rank this player on');
+    }
+    if (notes.length) {
+      html += '<div class="text-xs muted" style="margin-bottom:10px">' +
+        esc(notes.join('. ')) + '.</div>';
+    }
+  }
 
   // Z-score bars
   html += '<div class="z-bars">';

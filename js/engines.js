@@ -179,6 +179,59 @@ var Engines = (function() {
     };
   }
 
+  // Games ESPN expects this player to play, 0 when it did not say.
+  function v2ProjectedGP(p) {
+    var gp = p && p.stats ? p.stats.projectedGP : 0;
+    return (typeof gp === 'number' && isFinite(gp) && gp > 0) ? gp : 0;
+  }
+
+  // A projection built on almost no games is a data error rather than a
+  // forecast, and discounting on it would compound ESPN's mistake.
+  // Haliburton shipped ACTIVE with a 1-game projection while the experts
+  // had him 13th. An OUT player projected for a handful of games is not
+  // suspect; that is ESPN agreeing with itself.
+  function v2ProjectionSuspect(p) {
+    var Eng = window.LarryEngine;
+    var limit = (Eng && typeof Eng.PRESEASON_SUSPECT_GP === 'number')
+      ? Eng.PRESEASON_SUSPECT_GP : 10;
+    var gp = v2ProjectedGP(p);
+    if (!(gp > 0) || gp >= limit) return false;
+    return (p.injuryStatus || p.status || 'ACTIVE') !== 'OUT';
+  }
+
+  // Preseason rate: the projection divided by the games ESPN expects the
+  // player to play, not by 82. Falls back to the /82 rate when ESPN gave no
+  // game count, which is the best available answer in that case.
+  function v2ProjectedRate(p) {
+    var rate = p && p.stats ? p.stats.projectedRate : null;
+    if (rate) {
+      var out = {};
+      var any = false;
+      for (var i = 0; i < V2_CATEGORIES.length; i++) {
+        var c = V2_CATEGORIES[i];
+        var v = typeof rate[c] === 'number' && isFinite(rate[c]) ? rate[c] : 0;
+        out[c] = v;
+        if (v !== 0) any = true;
+      }
+      if (any) return out;
+    }
+    return v2ProjectedPerGame(p);
+  }
+
+  // Preseason value input. Nobody has played, so the observed rate is
+  // irrelevant and the projection carries the whole score. gamesPlayed is
+  // passed through rather than forced to 0 so that an early-season sync
+  // that still counts as preseason behaves sensibly.
+  function v2PreseasonInput(p) {
+    var rate = v2ProjectedRate(p);
+    return {
+      id: String(p.id),
+      gamesPlayed: p.gamesPlayed || 0,
+      perGame: rate,
+      projectedPerGame: rate
+    };
+  }
+
   // The player's projected per-game rate, or null when ESPN has not
   // projected them (deep bench, two-way contracts). Null means the engine
   // uses the pool mean and the player scores 0, which is the honest answer
@@ -249,7 +302,16 @@ var Engines = (function() {
 
     var cats = v2LeagueCategories();
     var scale = typeof Eng.DURANT_SCALE === 'number' ? Eng.DURANT_SCALE : 10;
-    var inputs = players.map(v2BaseValueInput);
+    // Preseason the board is built from projections alone, so it reads the
+    // rate ESPN expects the player to produce WHEN PLAYING and discounts
+    // long-term absences separately. In season this is false and the code
+    // below is exactly what it was.
+    var preseason = typeof opts.preseason === 'boolean'
+      ? opts.preseason
+      : (typeof isPreseason === 'function' && isPreseason());
+    var inputs = players.map(function(p) {
+      return preseason ? v2PreseasonInput(p) : v2BaseValueInput(p);
+    });
     var result = Eng.computeBaseValues(inputs, {
       categories: cats,
       rosterSize: v2RosterSize()
@@ -260,11 +322,26 @@ var Engines = (function() {
 
     players.forEach(function(p) {
       var row = rowById[String(p.id)];
-      if (!row) { p.durantScore = 0; return; }
-      // Scaled by 10 to sit on the same range as the old zTotal * 10 score,
-      // because the +3 free agent gap in tabs.js and the trade acceptance
-      // margin here are absolute numbers tuned against it.
-      p.durantScore = row.baseValue * scale;
+      if (!row) { p.durantScore = null; p.noEvidence = true; return; }
+      p.projectionSuspect = preseason && v2ProjectionSuspect(p);
+      // No games played and no projection means we know nothing at all.
+      // Scoring such a player 0 reads as "average starter" and floats them
+      // above every real player who is merely below average.
+      if (!row.hasEvidence) {
+        p.durantScore = null;
+        p.noEvidence = true;
+      } else {
+        p.noEvidence = false;
+        var base = row.baseValue;
+        if (preseason) {
+          base = Eng.applyPreseasonDiscount(
+            base, v2ProjectedGP(p), p.projectionSuspect);
+        }
+        // Scaled by 10 to sit on the same range as the old zTotal * 10
+        // score, because the +3 free agent gap in tabs.js and the trade
+        // acceptance margin here are absolute numbers tuned against it.
+        p.durantScore = base * scale;
+      }
       // Replace the totals-based, scarcity-weighted z-scores with the v2
       // per-game ones so the Z column, matchupAdjustedValue and the trade
       // analyzer all read the corrected numbers.
@@ -278,8 +355,16 @@ var Engines = (function() {
       p.perGameStats = row.perGame;
     });
 
-    // Rank
-    players.sort(function(a,b) { return (b.durantScore || 0) - (a.durantScore || 0); });
+    // Rank. Evidenced players by score, then everyone we know nothing about,
+    // ordered by ownership so the list is at least plausible rather than
+    // arbitrary. A null score sorts below every number, including negatives.
+    players.sort(function(a, b) {
+      var aNone = a.durantScore === null || a.durantScore === undefined;
+      var bNone = b.durantScore === null || b.durantScore === undefined;
+      if (aNone !== bNone) return aNone ? 1 : -1;
+      if (aNone && bNone) return (b.percentOwned || 0) - (a.percentOwned || 0);
+      return b.durantScore - a.durantScore;
+    });
     players.forEach(function(p, i) { p.durantRank = i + 1; });
 
     // Availability stays a separate field. It is read by add/drop, streaming
@@ -295,7 +380,12 @@ var Engines = (function() {
   // Multipliers only ever reduce. Applying a 0.3x to a negative score raised
   // it, which is how an OUT player on z -4.2 outranked a healthy player on
   // z -4.1 by 131 places.
+  //
+  // A null score means "no evidence" and must stay null: coercing it to 0
+  // here would put the player back at average-starter and undo the ordering
+  // computeDURANT just established.
   function applyDurantHaircut(score, factor) {
+    if (score === null || score === undefined) return null;
     var Eng = window.LarryEngine;
     if (Eng && typeof Eng.applyHaircut === 'function') return Eng.applyHaircut(score || 0, factor);
     var s = score || 0;
@@ -405,6 +495,11 @@ var Engines = (function() {
     // slipped through.
     if (isUnavailable(player)) return false;
 
+    // No games and no projection means we have no basis for recommending
+    // them over anyone else. Keeps them out of the chat and Larry's Move
+    // free-agent lists as well, since both call through here.
+    if (player.noEvidence) return false;
+
     // A player with no NBA team cannot play, so they can never help.
     // Westbrook, Chris Paul and D'Angelo Russell were all unsigned in the
     // snapshot and were being offered as pickups.
@@ -496,7 +591,7 @@ var Engines = (function() {
     // not need to change. The v2 engine does not propose drops, so we pick
     // drop targets here.
     var sortedMy = (myPlayers || []).slice().sort(function(a, b) {
-      return (a.effectiveDURANT || 0) - (b.effectiveDURANT || 0);
+      return durantKey(a.effectiveDURANT) - durantKey(b.effectiveDURANT);
     });
 
     // CLAUDE.md: never suggest dropping a top-60% player. The legacy path
@@ -646,12 +741,12 @@ var Engines = (function() {
     var targetCats = strat.targets || [];
 
     // Sort my players by effectiveDURANT (worst first for drops)
-    var sortedMy = myPlayers.slice().sort(function(a,b) { return (a.effectiveDURANT || 0) - (b.effectiveDURANT || 0); });
+    var sortedMy = myPlayers.slice().sort(function(a,b) { return durantKey(a.effectiveDURANT) - durantKey(b.effectiveDURANT); });
 
     // Get free agents sorted by effectiveDURANT (best first), filtered by hard criteria
     var freeAgents = allPlayers
       .filter(function(p) { return p.onTeamId === 0 && isValidAddCandidate(p); })
-      .sort(function(a, b) { return b.effectiveDURANT - a.effectiveDURANT; });
+      .sort(function(a, b) { return durantKey(b.effectiveDURANT) - durantKey(a.effectiveDURANT); });
 
     // v3 FIX: Only recommend dropping bench players with low DURANT
     // Never recommend dropping top-50 ranked players
@@ -707,7 +802,7 @@ var Engines = (function() {
 
           // Build detail with strategy context
           var detailParts = [];
-          detailParts.push('DURANT: ' + fmt(pickup.durantScore || 0, 1) + ' vs ' + fmt(dropCandidate.durantScore || 0, 1));
+          detailParts.push('DURANT: ' + durantText(pickup.durantScore, 1) + ' vs ' + durantText(dropCandidate.durantScore, 1));
           if (catImpact.length) {
             detailParts.push(catImpact.join(', '));
           }
@@ -763,7 +858,7 @@ var Engines = (function() {
     }
     faWithGame.slice(0, 3).forEach(function(fa) {
       if (benchNoGame.length && recs.length < 8) {
-        var streamDetail = fa.nbaTeam + ' game. DURANT: ' + fmt(fa.durantScore || 0, 1);
+        var streamDetail = fa.nbaTeam + ' game. DURANT: ' + durantText(fa.durantScore, 1);
         if (hasStrategy && targetCats.length) {
           var helps = [];
           targetCats.forEach(function(tc) {
@@ -1385,6 +1480,11 @@ var Engines = (function() {
     puntAnalysis: puntAnalysis,
     detectStreaks: detectStreaks,
     rosProjections: rosProjections,
+    v2BaseValueInput: v2BaseValueInput,
+    v2ProjectedGP: v2ProjectedGP,
+    v2ProjectionSuspect: v2ProjectionSuspect,
+    v2ProjectedRate: v2ProjectedRate,
+    v2PreseasonInput: v2PreseasonInput,
     risersAndFallers: risersAndFallers,
     findTrades: findTrades,
     getTeamCatRank: getTeamCatRank,

@@ -155,14 +155,14 @@ function buildChatContext() {
 
   // .slice() so building chat context does not reorder the real roster.
   var myPlayers = (S.myTeam.players || []).slice();
-  myPlayers.sort(function(a, b) { return (b.durantScore || 0) - (a.durantScore || 0); });
+  myPlayers.sort(function(a, b) { return durantKey(b.durantScore) - durantKey(a.durantScore); });
 
   // Reuse the engine's own filter so chat and the Roster tiles agree about
   // who is addable, rather than chat keeping a separate list of statuses.
   var freeAgents = (S.allPlayers || []).filter(function(p) {
     return p.onTeamId === 0 && Engines.isValidAddCandidate(p);
   });
-  freeAgents.sort(function(a, b) { return (b.durantScore || 0) - (a.durantScore || 0); });
+  freeAgents.sort(function(a, b) { return durantKey(b.durantScore) - durantKey(a.durantScore); });
 
   var matchupCats = cats.map(function(cat) {
     return {

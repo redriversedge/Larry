@@ -107,7 +107,7 @@ var LEAGUE_MENU = [
 //
 // The NBA season starts in October, so from September onward we are in the
 // season that ends next calendar year.
-var APP_VERSION = '3.9.0';
+var APP_VERSION = '3.10.0';
 var SEASON_START_MONTH = 8; // September, zero-indexed
 
 function computeSeasonId(now) {
@@ -204,6 +204,21 @@ function loadState() {
   }
 }
 
+// Visit every stored player object. S.allPlayers, S.teams[].players and
+// S.myTeam.players are separate deserialized copies of the same players, so
+// a migration that touches one has to touch all three.
+function eachStoredPlayer(fn) {
+  var all = S.allPlayers || [];
+  var i;
+  for (i = 0; i < all.length; i++) fn(all[i]);
+  for (var t = 0; t < (S.teams || []).length; t++) {
+    var roster = (S.teams[t] && S.teams[t].players) || [];
+    for (i = 0; i < roster.length; i++) fn(roster[i]);
+  }
+  var mine = (S.myTeam && S.myTeam.players) || [];
+  for (i = 0; i < mine.length; i++) fn(mine[i]);
+}
+
 // One-time upgrades for state saved by an older build. Keyed on the version
 // that produced the stored object, and written to be safe to run twice.
 function migrateState(priorVersion) {
@@ -225,6 +240,12 @@ function migrateState(priorVersion) {
   }
   var mine = (S.myTeam && S.myTeam.players) || [];
   for (var m = 0; m < mine.length; m++) ESPNSync.migrateStatsToPerGame(mine[m]);
+
+  // 3.10.0: the preseason board needs projectedRate (projection divided by
+  // the games ESPN expects, not by 82) and projectedGP. Both are derivable
+  // from the stored projectedSeason totals, so nobody has to resync to get
+  // a working board.
+  eachStoredPlayer(function(p) { ESPNSync.addProjectedRate(p); });
 
   if (migrated > 0) {
     S.needsResync = true;
@@ -1077,6 +1098,50 @@ function getMatchupDates() {
   end.setDate(end.getDate() + 6);
   end.setHours(23,59,59,999);
   return { start: start, end: end, daysLeft: Math.max(0, Math.ceil((end - now) / (1000*60*60*24))) };
+}
+
+// Sort key for a DURANT score that may be null.
+//
+// Null means "no games played and no projection", i.e. no evidence at all.
+// It has to sort BELOW every number including negatives. Writing
+// `(p.durantScore || 0)` in a comparator is the bug this exists to prevent:
+// it places an unknown player at exactly 0, which is average-starter, above
+// every real player who is merely below average.
+function durantKey(v) {
+  return (v === null || v === undefined) ? -Infinity : v;
+}
+
+// Display form of a possibly-null score or rank.
+function durantText(v, digits) {
+  if (v === null || v === undefined) return '--';
+  return fmt(v, digits === undefined ? 1 : digits);
+}
+
+// True before the season's first NBA game.
+//
+// Preseason every player has 0 games, so the regular ranking path has no
+// production to work with and the board is driven entirely by projections.
+// That needs different handling, but only until opening night: this flips
+// itself off on the first sync on or after the first game, with no user
+// action and no stored flag to go stale.
+function isPreseason() {
+  var opening = null;
+  try {
+    if (typeof ESPNSync !== 'undefined' && ESPNSync.openingNightStr) {
+      opening = ESPNSync.openingNightStr();
+    }
+  } catch (e) {
+    opening = null;
+  }
+  if (opening) return localDateStr(new Date()) < opening;
+  // No schedule loaded. Fall back to the data itself: if nobody in the
+  // league has played a game, the season has not started.
+  var players = (S && S.allPlayers) || [];
+  if (!players.length) return false;
+  for (var i = 0; i < players.length; i++) {
+    if ((players[i].gamesPlayed || 0) > 0) return false;
+  }
+  return true;
 }
 
 // The real matchup window, written by enrichGamesRemaining from ESPN's week

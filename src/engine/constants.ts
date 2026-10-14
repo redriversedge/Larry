@@ -36,6 +36,35 @@ export const MIN_GP_POOL = 10;
 // into a per-game rate, and the point past which no shrink applies.
 export const FULL_SEASON_GAMES = 82;
 
+// --- Preseason board ---
+//
+// Preseason the only availability signal in ESPN's data is projected games
+// played: the injury tag does not track it (DAY_TO_DAY at 38 projected
+// games, ACTIVE at 43, OUT at 68) and there are no return dates.
+//
+// Projected games at or above this are normal rest and minor knocks, so no
+// discount applies. Below it, a partial one.
+export const PRESEASON_LONG_TERM_GP = 60;
+
+// Denominator of the discount. Not 82: a player projected for 70 games is
+// not 15% worse than one projected for 82, they are both available. 72 is
+// roughly a healthy starter's season.
+export const PRESEASON_GP_REFERENCE = 72;
+
+// Exponent on (projectedGP / reference). 0.5 is a square root, i.e. a soft
+// discount. Measured against the FantasyPros 6-expert consensus top 150: no
+// discount gives rho 0.719, this soft discount 0.720, and a full linear
+// g/82 cut only 0.660 because it buries genuine long-term players far below
+// where the experts have them.
+export const PRESEASON_DISCOUNT_POWER = 0.5;
+
+// A projection this small is a data error, not a forecast. Tyrese
+// Haliburton shipped as ACTIVE with a 1-game projection (20 PTS, 10 AST,
+// 4 REB in that single game) while the experts have him 13th. Discounting
+// on it would be compounding ESPN's mistake, so suspect players are left
+// alone and flagged in the UI instead.
+export const PRESEASON_SUSPECT_GP = 10;
+
 // baseValue (a sum of z-scores, roughly -5 to +8) -> durantScore. The legacy
 // score was zTotal * 10 and several absolute thresholds were tuned against
 // that scale: the +3 free-agent notification gap in tabs.js, the trade

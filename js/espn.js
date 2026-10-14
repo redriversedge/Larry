@@ -464,6 +464,39 @@ var ESPNSync = (function() {
     return perGame;
   }
 
+  // The number of games ESPN expects this player to play. Stat id 42 is GP;
+  // the parser has already mapped it to the 'GP' key.
+  function projectedGamesPlayed(projTotals) {
+    if (!projTotals) return 0;
+    var gp = projTotals['GP'];
+    return (typeof gp === 'number' && isFinite(gp) && gp > 0) ? gp : 0;
+  }
+
+  // Per-game rate over the games ESPN expects the player to PLAY, as opposed
+  // to projectedPerGame which always divides by 82. Null when ESPN gave no
+  // projected game count, in which case callers fall back to projectedPerGame.
+  function projectedRateFrom(projTotals, projGP) {
+    if (!projTotals || !(projGP >= 1)) return null;
+    return toPerGameStats(projTotals, projGP);
+  }
+
+  // Backfill projectedRate / projectedGP onto an already-stored player from
+  // its projectedSeason totals. Run by the 3.10.0 migration so an existing
+  // larry_state gets a working preseason board without a resync. Safe to run
+  // twice and safe on a player with no projection.
+  function addProjectedRate(player) {
+    if (!player || !player.stats) return false;
+    var totals = player.stats.projectedSeason;
+    if (!totals) return false;
+    if (player.stats.projectedRate !== undefined &&
+        player.stats.projectedGP !== undefined) {
+      return false;
+    }
+    player.stats.projectedGP = projectedGamesPlayed(totals);
+    player.stats.projectedRate = projectedRateFrom(totals, player.stats.projectedGP);
+    return true;
+  }
+
   // Convert one already-stored player from the pre-3.9.0 totals shape to the
   // per-game shape. Called by the loadState migration so an existing
   // larry_state does not have to be thrown away. Idempotent: a player that
@@ -607,7 +640,20 @@ var ESPNSync = (function() {
       var projTotals = player.stats.totals.projectedSeason;
       if (projTotals) {
         player.stats.projectedSeason = projTotals;
+        // Divided by a FULL season regardless of how many games ESPN expects
+        // the player to play. The in-season shrink prior reads this and the
+        // regular-season ranking is tuned on it; do not change it.
         player.stats.projectedPerGame = toPerGameStats(projTotals, FULL_SEASON_GAMES);
+        // Divided by the games ESPN actually projects. This is the player's
+        // rate WHEN THEY PLAY, which is what the preseason board wants.
+        //
+        // ESPN's projected totals already bake in expected missed games, so
+        // dividing by 82 makes anyone with an injury history look worse per
+        // game than they are: a player projected for 43 games comes out
+        // about 48% too low. That is how Kawhi Leonard (25th by expert
+        // consensus) landed 674th.
+        player.stats.projectedGP = projectedGamesPlayed(projTotals);
+        player.stats.projectedRate = projectedRateFrom(projTotals, player.stats.projectedGP);
       }
     }
 
@@ -1517,6 +1563,8 @@ var ESPNSync = (function() {
     splitGP: splitGP,
     toPerGameStats: toPerGameStats,
     migrateStatsToPerGame: migrateStatsToPerGame,
+    addProjectedRate: addProjectedRate,
+    projectedGamesPlayed: projectedGamesPlayed,
     fetchScoringPeriodStats: fetchScoringPeriodStats,
     // Exported for tests and for the banner's Sync button.
     rollOverDecision: rollOverDecision,

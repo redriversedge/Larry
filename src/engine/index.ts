@@ -12,6 +12,7 @@ export {
 export { teamNeedVector, computeLeagueAverages, rosterTotal } from "./teamFit";
 export {
   applyHaircut,
+  applyPreseasonDiscount,
   buildQPool,
   computeBaseValues,
   gScore,
@@ -26,7 +27,12 @@ export type {
   BaseValueRow,
   PoolStats,
 } from "./zscore";
-export { DURANT_SCALE } from "./constants";
+export {
+  DURANT_SCALE,
+  PRESEASON_GP_REFERENCE,
+  PRESEASON_LONG_TERM_GP,
+  PRESEASON_SUSPECT_GP,
+} from "./constants";
 export type {
   Breakdown,
   Category,
