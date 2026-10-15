@@ -39,8 +39,10 @@ Facts found while building the reference profiles:
 - `draftDetail.picks[]`: `overallPickNumber`, `roundId`, `roundPickNumber`, `teamId`, `playerId`. Skip `keeper: true` picks if present.
 - The owner of a team is `team.primaryOwner` (a member id). Names come from `members[]` (`firstName`, `lastName`, `displayName`). **Key profiles by member id, not teamId**: teams change hands and ids across seasons.
 - The projection is the `stats[]` entry with `statSourceId 1`, `seasonId <yr>`, `statSplitTypeId 0`. Projected GP is stat `'42'`. Category stats: `0` PTS, `1` BLK, `2` STL, `3` AST, `6` REB.
-- `player.draftRanksByRankType.STANDARD.rank` (the ESPN default board) exists only for **2023 and later**.
-- `ownership.averageDraftPosition` for past seasons is garbage (Jokic 140). Do not use it.
+- **Past-season ESPN ranks are not the pre-draft board.** `draftRanksByRankType` (STANDARD and ROTO) for a finished season holds ESPN's *end-of-season* ranks: 2026 ROTO has Jalen Johnson 5th, where he was drafted around 33rd. `ownership.averageDraftPosition` for past seasons is garbage too (Jokic 140). Use neither for history.
+- **The historical board is ESPN ADP from FantasyPros** (`https://www.fantasypros.com/nba/adp/overall.php?year=<Y>`, where `year=2025` is the 2025-26 season, i.e. seasonId 2026). It has an ESPN column for every year back to 2018 (2018-19). This is public data, not league data, so it may be committed: add `tools/fetch-espn-adp-history.ts` that writes `data/espn-adp-history.json` as `{ "<seasonId>": [[name, espnAdp], ...] }`, and match to drafted players by normalized name (the same `norm()` as `tools/preseason-vs-experts.ts`). The browser cannot fetch FantasyPros directly (CORS), which is why this is a committed file.
+- For the **current** season, `ownership.averageDraftPosition` from the league `kona_player_info` is live ESPN ADP and is fine to use.
+- In this H2H category league the `ROTO` rank type is ESPN's 9-category rank (Giannis 19th, Zion 94th, because of FT%). It is not the right value scale for 5 categories; it only matters as a guess at what the ESPN draft room shows.
 - A `filterIds` filter returns ESPN 400. Use the limit-1000 sort instead; it covers about 99% of drafted players.
 - Current-manager sample sizes: 8 managers with 9 drafts, 2 with 8, 1 with 7, 1 with 4.
 
@@ -98,9 +100,9 @@ Labels the UI shows, derived from strength and sign:
 - moderate: "Leans PTS" / "Light on PTS"
 - none on every category: "No clear category lean"
 
-### 3.2 Reach (seasons with ESPN rank only, 2023+)
+### 3.2 Reach (against ESPN ADP that season)
 
-- `reach` per pick = ESPN STANDARD rank minus overall pick. **Positive means they took the player earlier than ESPN ranked him.**
+- `reach` per pick = that season's ESPN ADP (from `data/espn-adp-history.json`) minus overall pick. **Positive means they took the player earlier than ESPN drafters did.** Players with no ESPN ADP that season are left out of reach (they were off the board, so the number would be meaningless).
 - Report the median overall, and medians for early (rounds 1 to 3), mid (4 to 7) and late (8+).
 - Label: median >= 12 "Reaches often", <= 0 "Drafts the board", else "Slight reacher".
 
@@ -120,7 +122,7 @@ Every card shows "N drafts (YYYY to YYYY)". Under 5 drafts, add "Small sample".
 
 ## 4. AI pick model: `src/engine/mockDraft.ts` (pure)
 
-Managers in this league draft off the ESPN default board, so ESPN STANDARD rank is the base and the profile bends it.
+Managers in this league draft off the ESPN board, so ESPN ADP is the base and the profile bends it. (ESPN ADP exists from the 2018-19 season on, so the 2017-18 draft has no reach data.)
 
 For manager m on the clock at overall pick p, every available player i gets a utility:
 
@@ -133,7 +135,7 @@ u_i = - rank_i / tau(m, phase)
 
 and the pick is drawn from `softmax(u)`.
 
-- `rank_i`: the 2027 ESPN STANDARD rank. Fallbacks in order: Larry's preseason `durantRank` offset to the ESPN scale, then 400.
+- `rank_i`: the player's current ESPN ADP (`ownership.averageDraftPosition` from the league kona fetch; when fitting on history, that season's ESPN ADP from `data/espn-adp-history.json`). Fallbacks in order: ESPN `STANDARD` draft rank, Larry's preseason `durantRank`, then 400. The AI uses ESPN because it models what these managers see in the ESPN draft room. It is a prediction of their behavior, not a judgment of player value.
 - `phase`: early (rounds 1 to 3), mid (4 to 7), late (8+).
 - `tau(m, phase) = tau_phase * exp(beta * reachShrunk(m, phase))`. A higher temperature means more willing to leave the board. `reachShrunk` = the manager's phase median reach shrunk toward the league median by `n / (n + 15)`, where n is that manager's pick count in the phase.
 - `z_i`: 2027 per-game z by category from `stats.projectedRate`, computed against the top 200 by ESPN rank.
@@ -145,7 +147,7 @@ and the pick is drawn from `softmax(u)`.
 
 New tool `tools/fit-mock-draft.ts` reads a local export of `larry_draft_history` (path passed as an argument, under `tests/fixtures/users/`, never committed):
 
-- Fit `tau_early`, `tau_mid`, `tau_late`, `beta`, `lambda`, `gamma`, `alpha` by maximum likelihood on the **2023 to 2025** drafts. Profiles used for each draft must be built from **prior seasons only** (no leakage).
+- Fit `tau_early`, `tau_mid`, `tau_late`, `beta`, `lambda`, `gamma`, `alpha` by maximum likelihood on the **2019 to 2025** drafts (ESPN ADP exists for all of them). Profiles used for each draft must be built from **prior seasons only** (no leakage).
 - Test on **2026**. Report, against a **rank-only baseline** (`beta = lambda = gamma = alpha = 0`, `tau` refit):
   - mean log-likelihood per pick
   - top-1 and top-5 hit rate (actual pick among the model's 5 most likely)
@@ -225,7 +227,7 @@ New file `js/draft.js` (ES5 house style) with `renderDraftRoom()`. Add it to `in
 - A manager who never takes above-median PTS: "Punts PTS", seasonsPositive 0.
 - A manager who picks exactly by rank: every category strength "none", reach median 0, "Drafts the board".
 - Ownership change: a team id held by M2 in 2019 and M7 in 2020 credits each season to the right member.
-- Reach ignores seasons without ESPN rank.
+- Reach ignores picks with no ESPN ADP that season, and reads ADP from the history file, never from a past season's `draftRanksByRankType`.
 - Profiles for draft year Y built "as of" Y use only seasons before Y.
 
 `tests/engine/mockDraft.test.ts`:
@@ -242,7 +244,9 @@ UI checks (manual, report in the PR): fresh state, profiles not built, profiles 
 
 ## 9. Reference profile values (for verification after deploy)
 
-Computed 2026-10-15 in the live app with the method in section 3. These are keyed by **2027 teamId**. The in-app profiles must match each value within **+/- 0.05** with the same sign, and t within +/- 0.5:
+Computed 2026-10-15 in the live app with the method in section 3. These are keyed by **2027 teamId**. The in-app profiles must match each **category premium** within **+/- 0.05** with the same sign, t within +/- 0.5, and each position lean within +/- 3 points.
+
+**Do not match the reach numbers below.** They were measured against ESPN's end-of-season ranks (see section 1), not the pre-draft board, so they are wrong. Reach is re-measured against ESPN ADP after the build; report the new medians in the PR and the owner's reviewer will check them.
 
 | teamId | Check |
 |---|---|
