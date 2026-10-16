@@ -85,6 +85,7 @@ var TABS = [
 // Added: statsTrends, schedule and opponentScout had full renderers that
 // no menu entry pointed at, so they were unreachable dead code.
 var LEAGUE_MENU = [
+  { id: 'draftRoom', label: 'Draft Room', icon: '\u{1F3C0}' },
   { id: 'standings', label: 'Standings', icon: '\u{1F3C6}' },
   { id: 'trades', label: 'Trade Center', icon: '\u{1F4E6}' },
   { id: 'teamAnalyzer', label: 'Team Analyzer', icon: '\u{1F50D}' },

@@ -1217,9 +1217,13 @@ function renderLeague(container) {
   var sections = {
     'Overview': ['standings', 'projectedStandings', 'playoffs', 'timeline'],
     'Analysis': ['trades', 'teamAnalyzer', 'projections'],
-    'Info': ['news', 'draftCenter'],
+    'Info': ['news'],
     'System': ['notifications', 'settings']
   };
+  // In the week before the draft the Draft Room is the first thing anyone
+  // opens the app for. Once the season starts it drops back under Info.
+  if (isPreseason()) sections['Overview'].unshift('draftRoom');
+  else sections['Info'].push('draftRoom');
   var sectionKeys = ['Overview', 'Analysis', 'Info', 'System'];
   sectionKeys.forEach(function(section) {
     html += '<div class="menu-section-label">' + section + '</div>';
@@ -1239,6 +1243,9 @@ function renderLeague(container) {
 
 function renderLeagueSubPage(container) {
   var page = S.leagueSubPage;
+  // The old Draft Center is the Draft Room now. A bookmark or a stored
+  // leagueSubPage from before the rename still lands on the right page.
+  if (page === 'draftCenter') page = 'draftRoom';
   var html = '<div class="sub-page-header">';
   html += '<button class="btn-back" onclick="S.leagueSubPage=null;render()">\u276E Back</button>';
   var menuItem = LEAGUE_MENU.find(function(m) { return m.id === page; });
@@ -1264,7 +1271,7 @@ function renderLeagueSubPage(container) {
       case 'projectedStandings':
       case 'playoffs':
         html += renderStandingsPage(page === 'playoffs' ? 'playoff' : 'projected'); break;
-      case 'draftCenter':
+      case 'draftRoom': html += renderDraftRoom(); break;
       case 'notifications':
         html += '<div class="empty-state"><p>This page was removed. ' +
           'Try Standings or the Roster dashboard.</p></div>'; break;
@@ -2240,6 +2247,14 @@ function renderSettingsPage() {
   // then drops the user back at the wizard. Theme and prefs survive.
   html += '<button class="btn btn-warning btn-full" style="margin-top:8px" onclick="if(confirm(\'This will sign you out of ESPN and clear your cookies. You will need to reconnect to use Larry.\'))disconnectEspn()">Disconnect ESPN</button>';
   html += '</div>';
+
+  // Draft Room diagnostics. The same held-out test tools/fit-mock-draft.ts
+  // runs, available without a local export.
+  if (typeof DraftRoom !== 'undefined' && DraftRoom.renderModelCheckCard) {
+    html += '<div class="card"><div class="card-header">Draft Room</div>';
+    html += DraftRoom.renderModelCheckCard();
+    html += '</div>';
+  }
 
   // Larry projections. Off by default and labelled honestly: the backtest
   // says ESPN ranks players better, so this is an experiment the owner can

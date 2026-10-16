@@ -562,6 +562,15 @@ var ESPNSync = (function() {
       slotId: entry.lineupSlotId || 12,
       onTeamId: 0,
       percentOwned: raw.ownership ? raw.ownership.percentOwned || 0 : 0,
+      // Draft Room inputs. For the CURRENT season averageDraftPosition is
+      // live ESPN ADP and is the base of the AI pick model. For a FINISHED
+      // season it is garbage (Jokic 140), which is why draft history reads
+      // ADP from data/espn-adp-history.json instead.
+      espnAdp: (raw.ownership && raw.ownership.averageDraftPosition > 0) ?
+        raw.ownership.averageDraftPosition : null,
+      espnDraftRank: (raw.draftRanksByRankType && raw.draftRanksByRankType.STANDARD &&
+        raw.draftRanksByRankType.STANDARD.rank > 0) ?
+        raw.draftRanksByRankType.STANDARD.rank : null,
       // season/last30/last15/last7 hold PER-GAME rates; raw split totals live
       // under stats.totals and each split's game count under stats.gp.
       stats: {
@@ -1587,10 +1596,317 @@ var ESPNSync = (function() {
       });
   }
 
+  // ============================================================
+  // DRAFT HISTORY (Draft Room, docs/DRAFT_ROOM_SPEC.md s2)
+  // ============================================================
+  //
+  // PRIVACY: this repo is public and everything below is league members'
+  // data. It is fetched in the browser with the user's own cookies and
+  // written to localStorage. It is never committed, never sent to the chat
+  // or Move functions, and never written into a test fixture.
+  //
+  // Kept under its own localStorage key rather than inside larry_state:
+  // it is large, it never changes once built, and keeping it separate means
+  // it can be cleared on its own.
+
+  var DRAFT_HISTORY_KEY = 'larry_draft_history';
+  var DRAFT_HISTORY_VERSION = 1;
+  var DRAFT_HISTORY_FIRST_SEASON = 2018;
+
+  function loadDraftHistory() {
+    try {
+      var raw = localStorage.getItem(DRAFT_HISTORY_KEY);
+      if (!raw) return null;
+      var parsed = JSON.parse(raw);
+      if (!parsed || parsed.version !== DRAFT_HISTORY_VERSION) return null;
+      // A cache built for a different league is not this league's history.
+      if (String(parsed.leagueId) !== String(S.espn.leagueId)) return null;
+      return parsed;
+    } catch (e) {
+      console.warn('loadDraftHistory failed:', e);
+      return null;
+    }
+  }
+
+  function saveDraftHistory(history) {
+    try {
+      localStorage.setItem(DRAFT_HISTORY_KEY, JSON.stringify(history));
+      return true;
+    } catch (e) {
+      console.warn('saveDraftHistory failed:', e);
+      return false;
+    }
+  }
+
+  function clearDraftHistory() {
+    try {
+      localStorage.removeItem(DRAFT_HISTORY_KEY);
+    } catch (e) {
+      console.warn('clearDraftHistory failed:', e);
+    }
+  }
+
+  // The preseason projection ESPN published for that season: statSourceId 1
+  // (projected), statSplitTypeId 0 (season), for the matching seasonId.
+  function projectedStatSetFor(player, seasonId) {
+    var sets = (player && player.stats) || [];
+    for (var i = 0; i < sets.length; i++) {
+      var set = sets[i];
+      if (set.statSourceId === 1 && set.statSplitTypeId === 0 &&
+          Number(set.seasonId) === Number(seasonId)) {
+        return set;
+      }
+    }
+    return null;
+  }
+
+  // One season of the player universe, as the compact tuples the engine
+  // reads: [name, posId, proTeamId, espnRank|null, gp, pts, reb, ast, stl, blk].
+  // Stats are PROJECTED SEASON TOTALS; the engine divides by gp itself.
+  function buildDraftPlayerMap(konaData, seasonId, wantedIds) {
+    var out = {};
+    var rows = (konaData && konaData.players) || [];
+    for (var i = 0; i < rows.length; i++) {
+      var player = rows[i] && rows[i].player;
+      if (!player) continue;
+      var id = String(player.id);
+      if (wantedIds && !wantedIds[id]) continue;
+
+      var set = projectedStatSetFor(player, seasonId);
+      var stats = (set && set.stats) || {};
+      var gp = Number(stats['42']);
+      if (!isFinite(gp) || gp <= 0) gp = 0;
+
+      // draftRanksByRankType for a FINISHED season holds ESPN's
+      // end-of-season rank, not the pre-draft board. Kept for display and
+      // as a last-resort rank fallback only. Reach never reads it; it uses
+      // data/espn-adp-history.json instead. See the spec, s1.
+      var ranks = player.draftRanksByRankType || {};
+      var standard = ranks.STANDARD && ranks.STANDARD.rank;
+      var espnRank = (typeof standard === 'number' && standard > 0) ? standard : null;
+
+      out[id] = [
+        player.fullName || '',
+        player.defaultPositionId || 0,
+        player.proTeamId || 0,
+        espnRank,
+        gp,
+        Number(stats['0']) || 0,
+        Number(stats['6']) || 0,
+        Number(stats['3']) || 0,
+        Number(stats['2']) || 0,
+        Number(stats['1']) || 0
+      ];
+    }
+    return out;
+  }
+
+  function fetchDraftSeason(seasonId) {
+    var headers = {
+      'x-espn-league-id': S.espn.leagueId,
+      'x-espn-s2': S.espn.espnS2,
+      'x-espn-swid': S.espn.swid,
+      'x-espn-season': String(seasonId)
+    };
+    var detailUrl = PROXY_URL + '?view=mDraftDetail&view=mTeam&view=mSettings';
+    var konaUrl = PROXY_URL + '?view=kona_player_info&scoringPeriodId=0';
+    var konaHeaders = {
+      'x-espn-league-id': headers['x-espn-league-id'],
+      'x-espn-s2': headers['x-espn-s2'],
+      'x-espn-swid': headers['x-espn-swid'],
+      'x-espn-season': headers['x-espn-season'],
+      // A filterIds filter returns ESPN 400. The limit-1000 most-owned sort
+      // covers about 99% of drafted players, which is what the spec
+      // measured against.
+      'x-fantasy-filter': JSON.stringify({
+        players: {
+          limit: 1000,
+          sortPercOwned: { sortAsc: false, sortPriority: 1 }
+        }
+      })
+    };
+
+    return fetch(detailUrl, { headers: headers })
+      .then(function(resp) {
+        if (!resp.ok) throw new Error('ESPN returned ' + resp.status + ' for ' + seasonId);
+        return resp.json();
+      })
+      .then(function(detail) {
+        var rawPicks = (detail.draftDetail && detail.draftDetail.picks) || [];
+        if (!rawPicks.length) return null;
+
+        var picks = [];
+        var wanted = {};
+        for (var i = 0; i < rawPicks.length; i++) {
+          var p = rawPicks[i];
+          // Keepers were not drafted off the board, so they say nothing
+          // about how the manager drafts.
+          if (p.keeper) continue;
+          if (!p.playerId || !p.teamId) continue;
+          picks.push([
+            p.overallPickNumber,
+            p.roundId,
+            p.teamId,
+            p.playerId
+          ]);
+          wanted[String(p.playerId)] = true;
+        }
+        if (!picks.length) return null;
+
+        // The owner of a team is a MEMBER id. Teams change hands and team
+        // ids move between seasons, so the profile key has to be the member.
+        var owners = {};
+        var teams = detail.teams || [];
+        for (var t = 0; t < teams.length; t++) {
+          var team = teams[t];
+          var owner = team.primaryOwner ||
+            (team.owners && team.owners.length ? team.owners[0] : null);
+          if (team.id !== undefined && owner) owners[String(team.id)] = String(owner);
+        }
+
+        var members = {};
+        var memberRows = detail.members || [];
+        for (var m = 0; m < memberRows.length; m++) {
+          var member = memberRows[m];
+          if (!member || !member.id) continue;
+          var name = [member.firstName, member.lastName]
+            .filter(function(part) { return !!part; })
+            .join(' ')
+            .trim();
+          members[String(member.id)] = name || member.displayName || 'Manager';
+        }
+
+        return fetch(konaUrl, { headers: konaHeaders })
+          .then(function(resp) {
+            if (!resp.ok) throw new Error('ESPN returned ' + resp.status + ' for ' + seasonId + ' players');
+            return resp.json();
+          })
+          .then(function(kona) {
+            return {
+              season: {
+                picks: picks,
+                owners: owners,
+                players: buildDraftPlayerMap(kona, seasonId, wanted)
+              },
+              members: members
+            };
+          });
+      });
+  }
+
+  // Walk back from last season to the league's first, building one entry per
+  // season that has a completed draft. A season that 404s or has no picks is
+  // logged and skipped; the rest of the history is still worth having.
+  async function fetchDraftHistory(onProgress) {
+    var lastSeason = Number(S.league.seasonId) - 1;
+    var firstSeason = DRAFT_HISTORY_FIRST_SEASON;
+    var history = {
+      leagueId: String(S.espn.leagueId),
+      builtAt: new Date().toISOString(),
+      version: DRAFT_HISTORY_VERSION,
+      seasons: {},
+      members: {},
+      skipped: []
+    };
+
+    for (var seasonId = lastSeason; seasonId >= firstSeason; seasonId--) {
+      if (onProgress) onProgress('Reading the ' + seasonId + ' draft...', seasonId);
+      try {
+        var result = await fetchDraftSeason(seasonId);
+        if (!result) {
+          // No picks. Either the league did not exist yet or the draft was
+          // never completed. Either way there is nothing before this.
+          history.skipped.push(seasonId);
+          break;
+        }
+        history.seasons[String(seasonId)] = result.season;
+        Object.keys(result.members).forEach(function(id) {
+          history.members[id] = result.members[id];
+        });
+      } catch (e) {
+        console.warn('Draft history: skipping ' + seasonId, e);
+        history.skipped.push(seasonId);
+        // A 404 means the league did not exist that far back; stop walking.
+        if (e && e.message && e.message.indexOf('404') >= 0) break;
+      }
+    }
+
+    if (!Object.keys(history.seasons).length) {
+      throw new Error('No draft history found for this league.');
+    }
+
+    saveDraftHistory(history);
+    if (onProgress) {
+      onProgress('Built ' + Object.keys(history.seasons).length + ' drafts.', null);
+    }
+    return history;
+  }
+
+  // The current season's draft order, as a teamId per overall pick. ESPN
+  // publishes the slots well before the draft, with empty picks.
+  async function fetchDraftOrder() {
+    var data = await fetchESPN(['mDraftDetail', 'mTeam', 'mSettings']);
+    var picks = (data.draftDetail && data.draftDetail.picks) || [];
+
+    var order = [];
+    if (picks.length) {
+      var sorted = picks.slice().sort(function(a, b) {
+        return (a.overallPickNumber || 0) - (b.overallPickNumber || 0);
+      });
+      for (var i = 0; i < sorted.length; i++) {
+        if (sorted[i].teamId) order.push(sorted[i].teamId);
+      }
+    }
+
+    // Fall back to the configured first-round order, snaked.
+    if (!order.length) {
+      var settings = (data.settings && data.settings.draftSettings) || {};
+      var first = settings.pickOrder || [];
+      var rounds = Number(settings.rounds) || 0;
+      if (!rounds) {
+        var roster = (data.settings && data.settings.rosterSettings &&
+          data.settings.rosterSettings.lineupSlotCounts) || null;
+        rounds = roster ? Object.keys(roster).reduce(function(sum, slot) {
+          // Slot 13 is IR and is not drafted into.
+          return String(slot) === '13' ? sum : sum + (roster[slot] || 0);
+        }, 0) : 0;
+      }
+      for (var r = 0; r < rounds; r++) {
+        var row = r % 2 === 0 ? first : first.slice().reverse();
+        for (var k = 0; k < row.length; k++) order.push(row[k]);
+      }
+    }
+
+    // teamId -> memberId for the current season, so the mock can look up
+    // each team's manager profile.
+    var ownersByTeam = {};
+    var teams = data.teams || [];
+    for (var t = 0; t < teams.length; t++) {
+      var team = teams[t];
+      var owner = team.primaryOwner ||
+        (team.owners && team.owners.length ? team.owners[0] : null);
+      if (team.id !== undefined && owner) ownersByTeam[String(team.id)] = String(owner);
+    }
+
+    return {
+      order: order,
+      ownersByTeam: ownersByTeam,
+      drafted: !!(data.draftDetail && data.draftDetail.drafted),
+      teamCount: teams.length
+    };
+  }
+
   var _lastLeagueData = null;
 
   return {
     fetchLeague: fetchLeague,
+    fetchDraftHistory: fetchDraftHistory,
+    fetchDraftOrder: fetchDraftOrder,
+    loadDraftHistory: loadDraftHistory,
+    saveDraftHistory: saveDraftHistory,
+    clearDraftHistory: clearDraftHistory,
+    buildDraftPlayerMap: buildDraftPlayerMap,
+    DRAFT_HISTORY_KEY: DRAFT_HISTORY_KEY,
     fetchPlayers: fetchPlayers,
     parseLeagueSettings: parseLeagueSettings,
     parseTeams: parseTeams,

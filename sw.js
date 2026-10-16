@@ -1,5 +1,5 @@
 // Larry v3.0 Service Worker
-var CACHE_VERSION = 'larry-v3.24.1';
+var CACHE_VERSION = 'larry-v3.25.0';
 var CACHE_FILES = [
   '/',
   '/index.html',
@@ -8,11 +8,15 @@ var CACHE_FILES = [
   '/js/core.js',
   '/js/engines.js',
   '/js/tabs.js',
+  '/js/draft.js',
   '/js/espn.js',
   '/js/chat.js',
   '/js/larry-move.js',
   '/dist/larry-engine.js',
   '/dist/larry-cookies.js',
+  // Historical ESPN ADP. Without it the Draft Room's profile cards lose
+  // their reach line, so it is precached rather than fetched on demand.
+  '/data/espn-adp-history.json',
   '/manifest.json',
   '/assets/larry-logo.svg',
   '/assets/icon-192.png',

@@ -22,31 +22,71 @@ var LarryEngine = (() => {
   var index_exports = {};
   __export(index_exports, {
     CATEGORIES: () => CATEGORIES,
+    DEFAULT_MOCK_PARAMS: () => DEFAULT_MOCK_PARAMS,
     DURANT_SCALE: () => DURANT_SCALE,
+    MOCK_AVAIL_CHUNK: () => MOCK_AVAIL_CHUNK,
+    MOCK_AVAIL_SIMS: () => MOCK_AVAIL_SIMS,
+    MOCK_AVAIL_SIMS_REDUCED: () => MOCK_AVAIL_SIMS_REDUCED,
+    MOCK_AVAIL_TOP_N: () => MOCK_AVAIL_TOP_N,
+    MOCK_CAN_WAIT_THRESHOLD: () => MOCK_CAN_WAIT_THRESHOLD,
+    MOCK_FITTED: () => MOCK_FITTED,
     PRESEASON_GP_REFERENCE: () => PRESEASON_GP_REFERENCE,
     PRESEASON_LONG_TERM_GP: () => PRESEASON_LONG_TERM_GP,
     PRESEASON_SUSPECT_GP: () => PRESEASON_SUSPECT_GP,
     applyHaircut: () => applyHaircut,
     applyPreseasonDiscount: () => applyPreseasonDiscount,
+    availableIdsFor: () => availableIdsFor,
+    bestAvailableByLarry: () => bestAvailableByLarry,
+    buildAdpLookup: () => buildAdpLookup,
+    buildDraftProfiles: () => buildDraftProfiles,
     buildExplainPayload: () => buildExplainPayload,
+    buildHistoricalBoard: () => buildHistoricalBoard,
     buildQPool: () => buildQPool,
+    categoryWeight: () => categoryWeight,
+    checkModel: () => checkModel,
+    combineEvals: () => combineEvals,
     computeBaseValues: () => computeBaseValues,
     computeLeagueAverages: () => computeLeagueAverages,
     computeLeagueRates: () => computeLeagueRates,
     createEspnProjectionSource: () => createEspnProjectionSource,
     createInMemoryProjectionSource: () => createInMemoryProjectionSource,
+    decidePick: () => decidePick,
+    emptyAvailabilityCounts: () => emptyAvailabilityCounts,
     espnPerGameRate: () => espnPerGameRate,
+    evaluateDraft: () => evaluateDraft,
+    firstAvailableByRank: () => firstAvailableByRank,
+    fitMockDraft: () => fitMockDraft,
     gScore: () => gScore,
     gVector: () => gVector,
+    leagueReachMedians: () => leagueReachMedians,
+    median: () => median,
+    mixSeed: () => mixSeed,
+    mulberry32: () => mulberry32,
+    myUpcomingPicks: () => myUpcomingPicks,
+    nextPickIndex: () => nextPickIndex,
+    normName: () => normName,
+    overloadFor: () => overloadFor,
     overrideIsActive: () => overrideIsActive,
     per36Rate: () => per36Rate,
+    phaseForRound: () => phaseForRound,
+    pickUtilities: () => pickUtilities,
+    prepareBoard: () => prepareBoard,
+    profilesBySeason: () => profilesBySeason,
     projectAll: () => projectAll,
     projectGamesPlayed: () => projectGamesPlayed,
     projectMinutesPerGame: () => projectMinutesPerGame,
     projectPlayer: () => projectPlayer,
+    rankOf: () => rankOf,
+    reachShrunk: () => reachShrunk,
     recommend: () => recommend,
     rosterTotal: () => rosterTotal,
+    roundForIndex: () => roundForIndex,
+    runAvailabilitySims: () => runAvailabilitySims,
+    simulateUntil: () => simulateUntil,
+    snakeOrder: () => snakeOrder,
+    softmax: () => softmax,
     sumVector: () => sumVector,
+    tauFor: () => tauFor,
     teamNeedVector: () => teamNeedVector,
     toPlayerProjection: () => toPlayerProjection,
     topN: () => topN,
@@ -106,6 +146,41 @@ var LarryEngine = (() => {
     3: "AST",
     6: "REB"
   };
+  var DRAFT_NEIGHBOR_WINDOW = 8;
+  var DRAFT_PREMIUM_MAX_ROUND = 10;
+  var DRAFT_POSITION_LEAN_MAX_ROUND = 8;
+  var DRAFT_POSITION_LEAN_THRESHOLD = 8;
+  var DRAFT_AFFINITY_MIN_PICKS = 4;
+  var DRAFT_AFFINITY_RATE_MULTIPLE = 2;
+  var DRAFT_AFFINITY_TOP_N = 3;
+  var DRAFT_SMALL_SAMPLE_DRAFTS = 5;
+  var DRAFT_STRENGTH_STRONG_T = 2;
+  var DRAFT_STRENGTH_MODERATE_T = 1.2;
+  var DRAFT_PREMIUM_MIN_EFFECT = 0.02;
+  var DRAFT_PUNT_MAX_POSITIVE_SEASONS = 1;
+  var DRAFT_REACH_OFTEN_MEDIAN = 12;
+  var DRAFT_REACH_BOARD_MEDIAN = 0;
+  var MOCK_FITTED = false;
+  var MOCK_TAU_EARLY = 2;
+  var MOCK_TAU_MID = 3.33;
+  var MOCK_TAU_LATE = 6;
+  var MOCK_BETA = 0.04;
+  var MOCK_LAMBDA = 4;
+  var MOCK_GAMMA = 3;
+  var MOCK_ALPHA = 0;
+  var MOCK_REACH_SHRINK_K = 15;
+  var MOCK_WEIGHT_STRONG = 1;
+  var MOCK_WEIGHT_MODERATE = 0.5;
+  var MOCK_OVERLOAD_THRESHOLD = 3;
+  var MOCK_RANK_FALLBACK = 400;
+  var MOCK_Z_POOL_SIZE = 200;
+  var MOCK_CANDIDATE_POOL = 120;
+  var MOCK_SIM_CANDIDATE_POOL = 60;
+  var MOCK_AVAIL_SIMS = 500;
+  var MOCK_AVAIL_SIMS_REDUCED = 250;
+  var MOCK_AVAIL_CHUNK = 50;
+  var MOCK_AVAIL_TOP_N = 40;
+  var MOCK_CAN_WAIT_THRESHOLD = 0.7;
   var ESPN_POSITION_ID_TO_NAME = {
     1: "PG",
     2: "SG",
@@ -122,15 +197,15 @@ var LarryEngine = (() => {
     if (values.length === 0) return { mean: 0, stdev: STDEV_FLOOR };
     let sum = 0;
     for (const v of values) sum += v;
-    const mean = sum / values.length;
+    const mean3 = sum / values.length;
     let sqSum = 0;
     for (const v of values) {
-      const d = v - mean;
+      const d = v - mean3;
       sqSum += d * d;
     }
     const variance = values.length > 1 ? sqSum / (values.length - 1) : 0;
     const stdev = Math.max(Math.sqrt(variance), STDEV_FLOOR);
-    return { mean, stdev };
+    return { mean: mean3, stdev };
   }
   function statsFromPlayers(players, cats = CATEGORIES) {
     const stats = {
@@ -140,8 +215,8 @@ var LarryEngine = (() => {
     };
     for (const c of cats) {
       const values = players.map((p) => p.perGame[c]);
-      const { mean, stdev } = meanStdev(values);
-      stats.mean[c] = mean;
+      const { mean: mean3, stdev } = meanStdev(values);
+      stats.mean[c] = mean3;
       stats.stdev[c] = stdev;
     }
     return stats;
@@ -348,14 +423,14 @@ var LarryEngine = (() => {
       const values = teamTotals.map((t) => t[c]);
       let sum = 0;
       for (const v of values) sum += v;
-      const mean = sum / values.length;
+      const mean3 = sum / values.length;
       let sqSum = 0;
       for (const v of values) {
-        const d = v - mean;
+        const d = v - mean3;
         sqSum += d * d;
       }
       const variance = values.length > 1 ? sqSum / (values.length - 1) : 0;
-      meanPerTeam[c] = mean;
+      meanPerTeam[c] = mean3;
       stdevPerTeam[c] = Math.max(Math.sqrt(variance), STDEV_FLOOR);
     }
     return { meanPerTeam, stdevPerTeam, teamCount: teamTotals.length };
@@ -786,6 +861,905 @@ var LarryEngine = (() => {
       out.set(input.id, projectPlayer(input, league, { ...opts, override }));
     }
     return out;
+  }
+
+  // src/engine/draftProfiles.ts
+  function mean(values) {
+    if (!values.length) return 0;
+    let sum = 0;
+    for (const v of values) sum += v;
+    return sum / values.length;
+  }
+  function sampleStdev(values) {
+    if (values.length < 2) return 0;
+    const m = mean(values);
+    let sq = 0;
+    for (const v of values) sq += (v - m) * (v - m);
+    return Math.sqrt(sq / (values.length - 1));
+  }
+  function median(values) {
+    if (!values.length) return null;
+    const sorted = values.slice().sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    if (sorted.length % 2 === 1) return sorted[mid];
+    return (sorted[mid - 1] + sorted[mid]) / 2;
+  }
+  function emptyVector4() {
+    return { REB: 0, AST: 0, STL: 0, BLK: 0, PTS: 0 };
+  }
+  function normName(raw) {
+    return raw.normalize("NFKD").replace(/[^\x00-\x7F]/g, "").toLowerCase().replace(/\b(jr|sr|ii|iii|iv)\b\.?/g, "").replace(/[^a-z ]/g, "").split(/\s+/).filter(Boolean).join(" ");
+  }
+  function buildAdpLookup(adp) {
+    const out = /* @__PURE__ */ new Map();
+    if (!adp) return out;
+    for (const season of Object.keys(adp)) {
+      const inner = /* @__PURE__ */ new Map();
+      for (const row of adp[season] || []) {
+        const name = row[0];
+        const value = row[1];
+        if (typeof name === "string" && Number.isFinite(value) && !inner.has(name)) {
+          inner.set(name, value);
+        }
+      }
+      out.set(season, inner);
+    }
+    return out;
+  }
+  function phaseForRound(round) {
+    if (round <= 3) return "early";
+    if (round <= 7) return "mid";
+    return "late";
+  }
+  function seasonResiduals(seasonId, season, adpForSeason) {
+    const pool = [];
+    for (const pick of season.picks || []) {
+      const playerId = pick[3];
+      const row = season.players[String(playerId)];
+      if (!row) continue;
+      const gp = row[4];
+      if (!Number.isFinite(gp) || gp <= 0) continue;
+      const perGame = {
+        PTS: (row[5] || 0) / gp,
+        REB: (row[6] || 0) / gp,
+        AST: (row[7] || 0) / gp,
+        STL: (row[8] || 0) / gp,
+        BLK: (row[9] || 0) / gp
+      };
+      pool.push({
+        pick,
+        perGame,
+        z: emptyVector4(),
+        posId: row[1],
+        proTeamId: row[2],
+        name: row[0]
+      });
+    }
+    if (!pool.length) return [];
+    for (const c of CATEGORIES) {
+      const values = pool.map((p) => p.perGame[c]);
+      const m = mean(values);
+      const sd = Math.max(sampleStdev(values), STDEV_FLOOR);
+      for (const entry of pool) {
+        entry.z[c] = (entry.perGame[c] - m) / sd;
+      }
+    }
+    const out = [];
+    for (const entry of pool) {
+      const overall = entry.pick[0];
+      const neighbors = pool.filter(
+        (other) => other !== entry && Math.abs(other.pick[0] - overall) <= DRAFT_NEIGHBOR_WINDOW
+      );
+      if (!neighbors.length) continue;
+      const resid = emptyVector4();
+      for (const c of CATEGORIES) {
+        resid[c] = entry.z[c] - mean(neighbors.map((n) => n.z[c]));
+      }
+      const teamId = entry.pick[2];
+      const memberId = (season.owners || {})[String(teamId)];
+      if (!memberId) continue;
+      const adp = adpForSeason ? adpForSeason.get(normName(entry.name)) : void 0;
+      out.push({
+        memberId,
+        season: seasonId,
+        overall,
+        round: entry.pick[1],
+        playerId: entry.pick[3],
+        posId: entry.posId,
+        proTeamId: entry.proTeamId,
+        resid,
+        // Positive means they took the player EARLIER than ESPN drafters did.
+        // Players with no ESPN ADP that season get null and are left out
+        // entirely: they were off the board, so any number would be noise.
+        reach: adp === void 0 ? null : adp - overall
+      });
+    }
+    return out;
+  }
+  function strengthFor(t, premium) {
+    if (Math.abs(premium) < DRAFT_PREMIUM_MIN_EFFECT) return "none";
+    const abs = Math.abs(t);
+    if (abs >= DRAFT_STRENGTH_STRONG_T) return "strong";
+    if (abs >= DRAFT_STRENGTH_MODERATE_T) return "moderate";
+    return "none";
+  }
+  function premiumLabel(category, premium, strength, seasonsPositive) {
+    if (strength === "none") return "";
+    const positive = premium > 0;
+    if (strength === "strong") {
+      if (positive) return "Pays up for " + category;
+      return seasonsPositive <= DRAFT_PUNT_MAX_POSITIVE_SEASONS ? "Punts " + category : "Avoids " + category;
+    }
+    return positive ? "Leans " + category : "Light on " + category;
+  }
+  function reachLabel(med) {
+    if (med === null) return "No ESPN ADP overlap";
+    if (med >= DRAFT_REACH_OFTEN_MEDIAN) return "Reaches often";
+    if (med <= DRAFT_REACH_BOARD_MEDIAN) return "Drafts the board";
+    return "Slight reacher";
+  }
+  function joinList(parts) {
+    if (parts.length <= 1) return parts[0] || "";
+    if (parts.length === 2) return parts[0] + " and " + parts[1];
+    return parts.slice(0, -1).join(", ") + " and " + parts[parts.length - 1];
+  }
+  function buildSummary(premium) {
+    const strong = CATEGORIES.filter((c) => premium[c].strength === "strong");
+    const moderate = CATEGORIES.filter((c) => premium[c].strength === "moderate");
+    if (!strong.length && !moderate.length) return "No clear category lean";
+    const sentences = [];
+    for (const c of strong) {
+      const p = premium[c];
+      if (p.premium > 0) {
+        sentences.push("Pays up for " + c);
+      } else if (p.seasonsPositive <= DRAFT_PUNT_MAX_POSITIVE_SEASONS) {
+        sentences.push(
+          "Punts " + c + " (" + p.seasonsPositive + " of " + p.seasonsTotal + " seasons)"
+        );
+      } else {
+        sentences.push("Avoids " + c);
+      }
+    }
+    const up = moderate.filter((c) => premium[c].premium > 0);
+    const down = moderate.filter((c) => premium[c].premium <= 0);
+    if (up.length) sentences.push("Leans " + joinList(up.slice()));
+    if (down.length) sentences.push("Light on " + joinList(down.slice()));
+    return sentences.join(". ") + ".";
+  }
+  function buildDraftProfiles(history, adp, options = {}) {
+    const adpLookup = buildAdpLookup(adp);
+    const seasonsUsed = [];
+    const seasonsSkipped = [];
+    const allResiduals = [];
+    const allRaw = [];
+    const seasonsByMember = /* @__PURE__ */ new Map();
+    const seasonKeys = Object.keys(history.seasons || {}).map((k) => Number(k)).filter((n) => Number.isFinite(n)).sort((a, b) => a - b);
+    for (const seasonId of seasonKeys) {
+      if (options.asOfSeason !== void 0 && seasonId >= options.asOfSeason) continue;
+      const season = history.seasons[String(seasonId)];
+      if (!season || !season.picks || !season.picks.length) {
+        seasonsSkipped.push(seasonId);
+        continue;
+      }
+      seasonsUsed.push(seasonId);
+      const residuals = seasonResiduals(seasonId, season, adpLookup.get(String(seasonId)));
+      for (const r of residuals) allResiduals.push(r);
+      for (const pick of season.picks) {
+        const memberId = (season.owners || {})[String(pick[2])];
+        if (!memberId) continue;
+        const row = season.players[String(pick[3])];
+        allRaw.push({
+          memberId,
+          season: seasonId,
+          round: pick[1],
+          posId: row ? row[1] : 0,
+          proTeamId: row ? row[2] : 0
+        });
+        let set = seasonsByMember.get(memberId);
+        if (!set) {
+          set = /* @__PURE__ */ new Set();
+          seasonsByMember.set(memberId, set);
+        }
+        set.add(seasonId);
+      }
+    }
+    const leaguePosPicks = allRaw.filter(
+      (p) => p.round <= DRAFT_POSITION_LEAN_MAX_ROUND && p.posId >= 1 && p.posId <= 5
+    );
+    const leaguePosCounts = /* @__PURE__ */ new Map();
+    for (const p of leaguePosPicks) {
+      leaguePosCounts.set(p.posId, (leaguePosCounts.get(p.posId) || 0) + 1);
+    }
+    const leagueTeamCounts = /* @__PURE__ */ new Map();
+    let leagueTeamTotal = 0;
+    for (const p of allRaw) {
+      if (!p.proTeamId) continue;
+      leagueTeamCounts.set(p.proTeamId, (leagueTeamCounts.get(p.proTeamId) || 0) + 1);
+      leagueTeamTotal++;
+    }
+    const profiles = {};
+    const memberIds = Array.from(seasonsByMember.keys());
+    for (const memberId of memberIds) {
+      const seasons = Array.from(seasonsByMember.get(memberId) || []).sort((a, b) => a - b);
+      const draftCount = seasons.length;
+      const mine = allResiduals.filter((r) => r.memberId === memberId);
+      const myRaw = allRaw.filter((p) => p.memberId === memberId);
+      const premiumPicks = mine.filter((r) => r.round <= DRAFT_PREMIUM_MAX_ROUND);
+      const premium = {};
+      for (const c of CATEGORIES) {
+        const values = premiumPicks.map((r) => r.resid[c]);
+        const m = mean(values);
+        const sd = sampleStdev(values);
+        const n = values.length;
+        const t = n >= 2 && sd > 0 ? m / (sd / Math.sqrt(n)) : 0;
+        let seasonsPositive = 0;
+        for (const s of seasons) {
+          const inSeason = premiumPicks.filter((r) => r.season === s).map((r) => r.resid[c]);
+          if (inSeason.length && mean(inSeason) > 0) seasonsPositive++;
+        }
+        const strength = strengthFor(t, m);
+        premium[c] = {
+          category: c,
+          premium: m,
+          t,
+          n,
+          seasonsPositive,
+          seasonsTotal: draftCount,
+          strength,
+          label: premiumLabel(c, m, strength, seasonsPositive)
+        };
+      }
+      const order = CATEGORIES.slice().sort((a, b) => premium[b].premium - premium[a].premium);
+      const reaches = mine.filter((r) => r.reach !== null).map((r) => r.reach);
+      const byPhase = (phase) => mine.filter((r) => r.reach !== null && phaseForRound(r.round) === phase).map((r) => r.reach);
+      const reachMedian = median(reaches);
+      const reach = {
+        median: reachMedian,
+        early: median(byPhase("early")),
+        mid: median(byPhase("mid")),
+        late: median(byPhase("late")),
+        n: reaches.length,
+        label: reachLabel(reachMedian)
+      };
+      const myPosPicks = myRaw.filter(
+        (p) => p.round <= DRAFT_POSITION_LEAN_MAX_ROUND && p.posId >= 1 && p.posId <= 5
+      );
+      const positionLean = [];
+      if (myPosPicks.length && leaguePosPicks.length) {
+        const myCounts = /* @__PURE__ */ new Map();
+        for (const p of myPosPicks) myCounts.set(p.posId, (myCounts.get(p.posId) || 0) + 1);
+        for (const posId of [1, 2, 3, 4, 5]) {
+          const share = (myCounts.get(posId) || 0) / myPosPicks.length;
+          const leagueShare = (leaguePosCounts.get(posId) || 0) / leaguePosPicks.length;
+          const lean = (share - leagueShare) * 100;
+          if (Math.abs(lean) >= DRAFT_POSITION_LEAN_THRESHOLD) {
+            const position = ESPN_POSITION_ID_TO_NAME[posId];
+            if (position) {
+              positionLean.push({
+                position,
+                lean,
+                share: share * 100,
+                leagueShare: leagueShare * 100
+              });
+            }
+          }
+        }
+        positionLean.sort((a, b) => Math.abs(b.lean) - Math.abs(a.lean));
+      }
+      const myTeamCounts = /* @__PURE__ */ new Map();
+      let myTeamTotal = 0;
+      for (const p of myRaw) {
+        if (!p.proTeamId) continue;
+        myTeamCounts.set(p.proTeamId, (myTeamCounts.get(p.proTeamId) || 0) + 1);
+        myTeamTotal++;
+      }
+      const teamAffinity = [];
+      const ranked = Array.from(myTeamCounts.entries()).sort((a, b) => b[1] - a[1]);
+      for (const [proTeamId, count] of ranked.slice(0, DRAFT_AFFINITY_TOP_N)) {
+        if (count < DRAFT_AFFINITY_MIN_PICKS) continue;
+        const share = myTeamTotal ? count / myTeamTotal : 0;
+        const leagueShare = leagueTeamTotal ? (leagueTeamCounts.get(proTeamId) || 0) / leagueTeamTotal : 0;
+        if (leagueShare > 0 && share < leagueShare * DRAFT_AFFINITY_RATE_MULTIPLE) continue;
+        teamAffinity.push({
+          proTeamId,
+          count,
+          share: share * 100,
+          leagueShare: leagueShare * 100
+        });
+      }
+      profiles[memberId] = {
+        memberId,
+        name: (history.members || {})[memberId] || "Manager " + memberId,
+        seasons,
+        draftCount,
+        smallSample: draftCount < DRAFT_SMALL_SAMPLE_DRAFTS,
+        pickCount: myRaw.length,
+        premium,
+        order,
+        reach,
+        positionLean,
+        teamAffinity,
+        summary: buildSummary(premium)
+      };
+    }
+    return { profiles, seasonsUsed, seasonsSkipped };
+  }
+  function leagueReachMedians(profiles) {
+    const out = { early: 0, mid: 0, late: 0 };
+    const phases = ["early", "mid", "late"];
+    for (const phase of phases) {
+      const values = [];
+      for (const id of Object.keys(profiles)) {
+        const value = profiles[id]?.reach[phase];
+        if (value !== null && value !== void 0) values.push(value);
+      }
+      out[phase] = median(values) ?? 0;
+    }
+    return out;
+  }
+
+  // src/engine/mockDraft.ts
+  var DEFAULT_MOCK_PARAMS = {
+    tauEarly: MOCK_TAU_EARLY,
+    tauMid: MOCK_TAU_MID,
+    tauLate: MOCK_TAU_LATE,
+    beta: MOCK_BETA,
+    lambda: MOCK_LAMBDA,
+    gamma: MOCK_GAMMA,
+    alpha: MOCK_ALPHA
+  };
+  function mulberry32(seed) {
+    let a = seed >>> 0;
+    return function next() {
+      a = a + 1831565813 >>> 0;
+      let t = a;
+      t = Math.imul(t ^ t >>> 15, t | 1);
+      t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+  }
+  function mixSeed(seed, salt) {
+    let h = (seed ^ 2654435769) >>> 0;
+    h = (Math.imul(h ^ salt, 2246822507) ^ salt << 13) >>> 0;
+    h = (Math.imul(h ^ h >>> 13, 3266489909) ^ salt) >>> 0;
+    return (h ^ h >>> 16) >>> 0;
+  }
+  function rankOf(player) {
+    if (player.espnAdp !== null && Number.isFinite(player.espnAdp) && player.espnAdp > 0) {
+      return player.espnAdp;
+    }
+    if (player.espnDraftRank !== null && Number.isFinite(player.espnDraftRank) && player.espnDraftRank > 0) {
+      return player.espnDraftRank;
+    }
+    if (player.larryRank !== null && Number.isFinite(player.larryRank) && player.larryRank > 0) {
+      return player.larryRank;
+    }
+    return MOCK_RANK_FALLBACK;
+  }
+  function mean2(values) {
+    if (!values.length) return 0;
+    let sum = 0;
+    for (const v of values) sum += v;
+    return sum / values.length;
+  }
+  function sampleStdev2(values) {
+    if (values.length < 2) return 0;
+    const m = mean2(values);
+    let sq = 0;
+    for (const v of values) sq += (v - m) * (v - m);
+    return Math.sqrt(sq / (values.length - 1));
+  }
+  function prepareBoard(config) {
+    const entries = config.players.map((player) => ({
+      player,
+      rank: rankOf(player),
+      z: { REB: 0, AST: 0, STL: 0, BLK: 0, PTS: 0 }
+    }));
+    const byRank = entries.slice().sort((a, b) => a.rank - b.rank);
+    const pool = byRank.slice(0, MOCK_Z_POOL_SIZE);
+    for (const c of CATEGORIES) {
+      const values = pool.map((e) => e.player.perGame[c] || 0);
+      const m = mean2(values);
+      const sd = Math.max(sampleStdev2(values), STDEV_FLOOR);
+      for (const entry of entries) {
+        entry.z[c] = ((entry.player.perGame[c] || 0) - m) / sd;
+      }
+    }
+    const byId = /* @__PURE__ */ new Map();
+    for (const entry of entries) byId.set(entry.player.playerId, entry);
+    return {
+      entries,
+      byId,
+      rankOrder: byRank.map((e) => e.player.playerId),
+      rounds: config.teamCount > 0 ? Math.ceil(config.order.length / config.teamCount) : 0
+    };
+  }
+  function roundForIndex(index, teamCount) {
+    if (teamCount <= 0) return 1;
+    return Math.floor(index / teamCount) + 1;
+  }
+  function snakeOrder(firstRound, rounds) {
+    const out = [];
+    for (let r = 0; r < rounds; r++) {
+      const row = r % 2 === 0 ? firstRound : firstRound.slice().reverse();
+      for (const teamId of row) out.push(teamId);
+    }
+    return out;
+  }
+  function nextPickIndex(order, teamId, fromIndex) {
+    for (let i = Math.max(0, fromIndex); i < order.length; i++) {
+      if (order[i] === teamId) return i;
+    }
+    return -1;
+  }
+  function myUpcomingPicks(order, teamId, fromIndex) {
+    const out = [];
+    for (let i = Math.max(0, fromIndex); i < order.length; i++) {
+      if (order[i] === teamId) out.push(i);
+    }
+    return out;
+  }
+  function resolveParams(config) {
+    return { ...DEFAULT_MOCK_PARAMS, ...config.params || {} };
+  }
+  function categoryWeight(strength) {
+    if (strength === "strong") return MOCK_WEIGHT_STRONG;
+    if (strength === "moderate") return MOCK_WEIGHT_MODERATE;
+    return 0;
+  }
+  function reachShrunk(profile, phase, leagueReach) {
+    const league = leagueReach[phase] || 0;
+    if (!profile) return league;
+    const own = profile.reach[phase];
+    if (own === null || own === void 0) return league;
+    const n = profile.reach.n || 0;
+    const w = n / (n + MOCK_REACH_SHRINK_K);
+    return w * own + (1 - w) * league;
+  }
+  function tauFor(profile, phase, leagueReach, params) {
+    const base = phase === "early" ? params.tauEarly : phase === "mid" ? params.tauMid : params.tauLate;
+    const tau = base * Math.exp(params.beta * reachShrunk(profile, phase, leagueReach));
+    return Math.min(Math.max(tau, 0.01), 500);
+  }
+  function overloadFor(state, board, config, teamId, posId) {
+    let count = 0;
+    for (const pick of state.picks) {
+      if (pick[1] !== teamId) continue;
+      const round = roundForIndex(pick[0] - 1, config.teamCount);
+      if (round > DRAFT_PREMIUM_MAX_ROUND) continue;
+      const entry = board.byId.get(pick[2]);
+      if (entry && entry.player.posId === posId) count++;
+    }
+    return Math.max(0, count - MOCK_OVERLOAD_THRESHOLD);
+  }
+  function affinityFor(profile, proTeamId) {
+    if (!profile || !proTeamId) return 0;
+    for (const t of profile.teamAffinity) {
+      if (t.proTeamId === proTeamId) return 1;
+    }
+    return 0;
+  }
+  function pickUtilities(board, config, state, index, availableIds, candidatePool) {
+    const params = resolveParams(config);
+    const teamId = config.order[index];
+    if (teamId === void 0) return [];
+    const profile = config.profileByTeam[String(teamId)] || null;
+    const round = roundForIndex(index, config.teamCount);
+    const phase = phaseForRound(round);
+    const tau = tauFor(profile, phase, config.leagueReach, params);
+    const poolSize = candidatePool ?? config.candidatePool ?? MOCK_CANDIDATE_POOL;
+    const out = [];
+    for (const playerId of board.rankOrder) {
+      if (!availableIds.has(playerId)) continue;
+      const entry = board.byId.get(playerId);
+      if (!entry) continue;
+      let categoryTerm = 0;
+      let topCategory = null;
+      let topContribution = 0;
+      if (profile) {
+        for (const c of CATEGORIES) {
+          const p = profile.premium[c];
+          const w = categoryWeight(p.strength);
+          if (!w) continue;
+          const contribution = w * p.premium * entry.z[c];
+          categoryTerm += contribution;
+          if (Math.abs(contribution) > Math.abs(topContribution)) {
+            topContribution = contribution;
+            topCategory = c;
+          }
+        }
+      }
+      const rankTerm = -entry.rank / tau;
+      const catTerm = params.lambda * categoryTerm;
+      const overloadTerm = -params.gamma * overloadFor(state, board, config, teamId, entry.player.posId);
+      const affTerm = params.alpha * affinityFor(profile, entry.player.proTeamId);
+      out.push({
+        playerId,
+        utility: rankTerm + catTerm + overloadTerm + affTerm,
+        rankTerm,
+        categoryTerm: catTerm,
+        overloadTerm,
+        affinityTerm: affTerm,
+        topCategory: topContribution > 0 ? topCategory : null
+      });
+      if (out.length >= poolSize) break;
+    }
+    return out;
+  }
+  function softmax(utilities) {
+    if (!utilities.length) return [];
+    let max = -Infinity;
+    for (const u of utilities) if (u > max) max = u;
+    const exps = utilities.map((u) => Math.exp(u - max));
+    let sum = 0;
+    for (const e of exps) sum += e;
+    if (!(sum > 0)) return utilities.map(() => 1 / utilities.length);
+    return exps.map((e) => e / sum);
+  }
+  function drawIndex(probabilities, roll) {
+    let acc = 0;
+    for (let i = 0; i < probabilities.length; i++) {
+      acc += probabilities[i];
+      if (roll < acc) return i;
+    }
+    return probabilities.length - 1;
+  }
+  function reasonFor(board, chosen, profile, overall) {
+    const entry = board.byId.get(chosen.playerId);
+    const rank = entry ? Math.round(entry.rank) : 0;
+    if (rank && rank - overall >= 8) {
+      return "Reach: ESPN #" + rank + " at pick " + overall;
+    }
+    if (profile && chosen.topCategory) {
+      const p = profile.premium[chosen.topCategory];
+      if (p.label) return p.label;
+    }
+    if (rank && overall - rank >= 8) {
+      return "Value: ESPN #" + rank + " still there at " + overall;
+    }
+    return "Best available";
+  }
+  function decidePick(board, config, state, index, availableIds, candidatePool) {
+    const utilities = pickUtilities(board, config, state, index, availableIds, candidatePool);
+    if (!utilities.length) return null;
+    const probabilities = softmax(utilities.map((u) => u.utility));
+    const rng = mulberry32(mixSeed(state.seed, index + 1));
+    const chosen = utilities[drawIndex(probabilities, rng())];
+    if (!chosen) return null;
+    const teamId = config.order[index];
+    const profile = teamId === void 0 ? null : config.profileByTeam[String(teamId)] || null;
+    return {
+      playerId: chosen.playerId,
+      reason: reasonFor(board, chosen, profile, index + 1)
+    };
+  }
+  function availableIdsFor(board, state) {
+    const taken = /* @__PURE__ */ new Set();
+    for (const pick of state.picks) taken.add(pick[2]);
+    const out = /* @__PURE__ */ new Set();
+    for (const id of board.rankOrder) if (!taken.has(id)) out.add(id);
+    return out;
+  }
+  function simulateUntil(board, config, state, stopForTeamId, maxPicks = Infinity) {
+    const picks = state.picks.slice();
+    const available = availableIdsFor(board, state);
+    const made = [];
+    let count = 0;
+    while (picks.length < config.order.length && count < maxPicks) {
+      const index = picks.length;
+      const teamId = config.order[index];
+      if (teamId === void 0) break;
+      if (stopForTeamId !== null && teamId === stopForTeamId) break;
+      const working = { seed: state.seed, picks };
+      const decision = decidePick(board, config, working, index, available);
+      if (!decision) break;
+      available.delete(decision.playerId);
+      const pick = [index + 1, teamId, decision.playerId];
+      picks.push(pick);
+      made.push({ pick, reason: decision.reason });
+      count++;
+    }
+    return { state: { seed: state.seed, picks }, made };
+  }
+  function emptyAvailabilityCounts() {
+    return { sims: 0, atNext: /* @__PURE__ */ new Map(), atSecond: /* @__PURE__ */ new Map() };
+  }
+  function runAvailabilitySims(board, config, state, myTeamId, simOffset, simCount, counts) {
+    const fromIndex = state.picks.length;
+    const upcoming = myUpcomingPicks(config.order, myTeamId, fromIndex);
+    const firstTarget = upcoming[0];
+    const secondTarget = upcoming[1];
+    if (firstTarget === void 0) return counts;
+    const baseAvailable = availableIdsFor(board, state);
+    for (let s = 0; s < simCount; s++) {
+      const simSeed = mixSeed(state.seed, 24320 + simOffset + s);
+      const available = new Set(baseAvailable);
+      const picks = state.picks.slice();
+      const limit = secondTarget === void 0 ? firstTarget : secondTarget;
+      for (let index = fromIndex; index <= limit; index++) {
+        if (index === firstTarget) {
+          for (const id of available) counts.atNext.set(id, (counts.atNext.get(id) || 0) + 1);
+          if (secondTarget === void 0) break;
+          const mine = firstAvailableByRank(board, available);
+          if (mine !== null) {
+            available.delete(mine);
+            picks.push([index + 1, myTeamId, mine]);
+          }
+          continue;
+        }
+        if (index === secondTarget) {
+          for (const id of available) {
+            counts.atSecond.set(id, (counts.atSecond.get(id) || 0) + 1);
+          }
+          break;
+        }
+        const working = { seed: simSeed, picks };
+        const decision = decidePick(
+          board,
+          config,
+          working,
+          index,
+          available,
+          MOCK_SIM_CANDIDATE_POOL
+        );
+        if (!decision) break;
+        available.delete(decision.playerId);
+        const teamId = config.order[index];
+        if (teamId === void 0) break;
+        picks.push([index + 1, teamId, decision.playerId]);
+      }
+      counts.sims++;
+    }
+    return counts;
+  }
+  function firstAvailableByRank(board, available) {
+    for (const id of board.rankOrder) if (available.has(id)) return id;
+    return null;
+  }
+  function bestAvailableByLarry(board, available) {
+    let best = null;
+    let bestRank = Infinity;
+    for (const id of available) {
+      const entry = board.byId.get(id);
+      if (!entry) continue;
+      const rank = entry.player.larryRank;
+      if (rank === null || !Number.isFinite(rank) || rank <= 0) continue;
+      if (rank < bestRank) {
+        bestRank = rank;
+        best = id;
+      }
+    }
+    if (best !== null) return best;
+    return firstAvailableByRank(board, available);
+  }
+
+  // src/engine/draftFit.ts
+  var FIT_CANDIDATE_POOL = 1e5;
+  function emptyEval() {
+    return { picks: 0, meanLogLik: 0, top1: 0, top5: 0 };
+  }
+  function buildHistoricalBoard(history, seasonId, adpLookup) {
+    const season = history.seasons[String(seasonId)];
+    if (!season) return [];
+    const adp = adpLookup.get(String(seasonId));
+    const out = [];
+    for (const id of Object.keys(season.players)) {
+      const row = season.players[id];
+      if (!row) continue;
+      const gp = row[4];
+      const perGame = {
+        PTS: gp > 0 ? (row[5] || 0) / gp : 0,
+        REB: gp > 0 ? (row[6] || 0) / gp : 0,
+        AST: gp > 0 ? (row[7] || 0) / gp : 0,
+        STL: gp > 0 ? (row[8] || 0) / gp : 0,
+        BLK: gp > 0 ? (row[9] || 0) / gp : 0
+      };
+      const fromFile = adp ? adp.get(normName(row[0])) : void 0;
+      out.push({
+        playerId: Number(id),
+        name: row[0],
+        posId: row[1],
+        proTeamId: row[2],
+        // That season's ESPN ADP, from the committed history file. Never the
+        // stored espnRank: for a finished season that is an end-of-season
+        // rank, not the pre-draft board.
+        espnAdp: fromFile === void 0 ? null : fromFile,
+        espnDraftRank: row[3],
+        larryRank: null,
+        perGame
+      });
+    }
+    return out;
+  }
+  function configForSeason(history, seasonId, board, profiles, params) {
+    const season = history.seasons[String(seasonId)];
+    if (!season || !season.picks.length) return null;
+    const ordered = season.picks.slice().sort((a, b) => a[0] - b[0]);
+    const order = ordered.map((p) => p[2]);
+    const teamIds = new Set(order);
+    const profileByTeam = {};
+    for (const teamId of teamIds) {
+      const memberId = season.owners[String(teamId)];
+      profileByTeam[String(teamId)] = memberId && profiles[memberId] || null;
+    }
+    return {
+      order,
+      teamCount: teamIds.size,
+      players: board,
+      profileByTeam,
+      leagueReach: leagueReachMedians(profiles),
+      params
+    };
+  }
+  function evaluateDraft(history, seasonId, adpLookup, profiles, params) {
+    const season = history.seasons[String(seasonId)];
+    if (!season || !season.picks.length) return emptyEval();
+    const board = buildHistoricalBoard(history, seasonId, adpLookup);
+    const config = configForSeason(history, seasonId, board, profiles, params);
+    if (!config) return emptyEval();
+    const prepared = prepareBoard(config);
+    const ordered = season.picks.slice().sort((a, b) => a[0] - b[0]);
+    const available = /* @__PURE__ */ new Set();
+    for (const player of board) available.add(player.playerId);
+    const state = { seed: 1, picks: [] };
+    let logLikSum = 0;
+    let scored = 0;
+    let top1 = 0;
+    let top5 = 0;
+    for (let index = 0; index < ordered.length; index++) {
+      const pick = ordered[index];
+      if (!pick) continue;
+      const actual = pick[3];
+      if (!available.has(actual)) continue;
+      const utilities = pickUtilities(
+        prepared,
+        config,
+        state,
+        index,
+        available,
+        FIT_CANDIDATE_POOL
+      );
+      if (utilities.length > 1) {
+        const probabilities = softmax(utilities.map((u) => u.utility));
+        let actualP = 0;
+        let better = 0;
+        for (let i = 0; i < utilities.length; i++) {
+          const entry = utilities[i];
+          const p = probabilities[i];
+          if (!entry || p === void 0) continue;
+          if (entry.playerId === actual) actualP = p;
+        }
+        for (let i = 0; i < utilities.length; i++) {
+          const entry = utilities[i];
+          const p = probabilities[i];
+          if (!entry || p === void 0) continue;
+          if (entry.playerId !== actual && p > actualP) better++;
+        }
+        logLikSum += Math.log(Math.max(actualP, 1e-12));
+        if (better === 0) top1++;
+        if (better < 5) top5++;
+        scored++;
+      }
+      available.delete(actual);
+      state.picks.push([index + 1, pick[2], actual]);
+    }
+    return {
+      picks: scored,
+      meanLogLik: scored ? logLikSum / scored : 0,
+      top1: scored ? top1 / scored : 0,
+      top5: scored ? top5 / scored : 0
+    };
+  }
+  function combineEvals(results) {
+    let picks = 0;
+    let logLik = 0;
+    let top1 = 0;
+    let top5 = 0;
+    for (const r of results) {
+      picks += r.picks;
+      logLik += r.meanLogLik * r.picks;
+      top1 += r.top1 * r.picks;
+      top5 += r.top5 * r.picks;
+    }
+    if (!picks) return emptyEval();
+    return {
+      picks,
+      meanLogLik: logLik / picks,
+      top1: top1 / picks,
+      top5: top5 / picks
+    };
+  }
+  function profilesBySeason(history, seasons, adp) {
+    const out = {};
+    for (const seasonId of seasons) {
+      out[seasonId] = buildDraftProfiles(history, adp, { asOfSeason: seasonId }).profiles;
+    }
+    return out;
+  }
+  var TAU_KEYS = ["tauEarly", "tauMid", "tauLate"];
+  var TERM_KEYS = ["beta", "lambda", "gamma", "alpha"];
+  function fitMockDraft(history, fitSeasons, adp, options = {}) {
+    const adpLookup = buildAdpLookup(adp);
+    const profiles = profilesBySeason(history, fitSeasons, adp);
+    const trace = [];
+    const params = { ...DEFAULT_MOCK_PARAMS };
+    if (options.rankOnly) {
+      params.beta = 0;
+      params.lambda = 0;
+      params.gamma = 0;
+      params.alpha = 0;
+    }
+    const score = (candidate) => combineEvals(
+      fitSeasons.map(
+        (seasonId) => evaluateDraft(
+          history,
+          seasonId,
+          adpLookup,
+          profiles[seasonId] || {},
+          candidate
+        )
+      )
+    );
+    let best = score(params);
+    trace.push("start: mean log-likelihood " + best.meanLogLik.toFixed(4));
+    const iterations = options.iterations ?? 6;
+    for (let pass = 0; pass < iterations; pass++) {
+      const shrink = Math.pow(0.5, pass);
+      let improved = false;
+      for (const key of TAU_KEYS) {
+        for (const factor of [1 + 0.5 * shrink, 1 / (1 + 0.5 * shrink)]) {
+          const candidate = { ...params };
+          candidate[key] = Math.min(Math.max(params[key] * factor, 0.05), 200);
+          const result = score(candidate);
+          if (result.meanLogLik > best.meanLogLik) {
+            best = result;
+            params[key] = candidate[key];
+            improved = true;
+            trace.push(
+              key + " -> " + params[key].toFixed(3) + " (mean log-likelihood " + best.meanLogLik.toFixed(4) + ")"
+            );
+          }
+        }
+      }
+      if (!options.rankOnly) {
+        for (const key of TERM_KEYS) {
+          const step = (key === "beta" ? 0.04 : 4) * shrink;
+          for (const delta of [step, -step]) {
+            const candidate = { ...params };
+            candidate[key] = Math.max(params[key] + delta, 0);
+            const result = score(candidate);
+            if (result.meanLogLik > best.meanLogLik) {
+              best = result;
+              params[key] = candidate[key];
+              improved = true;
+              trace.push(
+                key + " -> " + params[key].toFixed(3) + " (mean log-likelihood " + best.meanLogLik.toFixed(4) + ")"
+              );
+            }
+          }
+        }
+      }
+      if (!improved) break;
+    }
+    return { params, fitEval: best, trace };
+  }
+  function checkModel(history, testSeason, adp, params = DEFAULT_MOCK_PARAMS) {
+    const adpLookup = buildAdpLookup(adp);
+    const profiles = buildDraftProfiles(history, adp, { asOfSeason: testSeason }).profiles;
+    const full = evaluateDraft(history, testSeason, adpLookup, profiles, params);
+    const baseline = evaluateDraft(history, testSeason, adpLookup, profiles, {
+      ...params,
+      beta: 0,
+      lambda: 0,
+      gamma: 0,
+      alpha: 0
+    });
+    return {
+      season: testSeason,
+      full,
+      baseline,
+      beatsBaseline: full.meanLogLik > baseline.meanLogLik
+    };
   }
   return __toCommonJS(index_exports);
 })();

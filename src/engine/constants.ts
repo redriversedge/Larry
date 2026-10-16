@@ -194,6 +194,196 @@ export const ESPN_STAT_ID_TO_CATEGORY: Record<number, Category> = {
   6: "REB",
 };
 
+// --- Draft Room: manager profiles (docs/DRAFT_ROOM_SPEC.md s3) ---
+
+// Half-width of the "picks made around here" comparison window, in overall
+// slots. A pick's category residual is its z minus the mean z of the OTHER
+// picks within this many slots. Wide enough to hold a comparison group at
+// any point in the draft, narrow enough that the group is genuinely picking
+// from the same board.
+export const DRAFT_NEIGHBOR_WINDOW = 8;
+
+// Category premium reads rounds 1 to 10 only. Deep-bench picks are mostly
+// noise and lottery tickets, and including them washes out the signal.
+export const DRAFT_PREMIUM_MAX_ROUND = 10;
+
+// Position lean reads rounds 1 to 8, and is reported in percentage points
+// of share against the league's share of the same picks.
+export const DRAFT_POSITION_LEAN_MAX_ROUND = 8;
+export const DRAFT_POSITION_LEAN_THRESHOLD = 8;
+
+// NBA team affinity is display-led: show a team only when the manager has
+// taken this many of its players AND at twice the league's rate.
+export const DRAFT_AFFINITY_MIN_PICKS = 4;
+export const DRAFT_AFFINITY_RATE_MULTIPLE = 2;
+export const DRAFT_AFFINITY_TOP_N = 3;
+
+// Under this many drafts a card is labelled "Small sample".
+export const DRAFT_SMALL_SAMPLE_DRAFTS = 5;
+
+// |t| thresholds on the category premium. Strong signals drive the AI;
+// moderate ones are halved; anything weaker is treated as no signal at all,
+// because a premium of 0.05 at t = 0.4 is a coin flip dressed as a read.
+export const DRAFT_STRENGTH_STRONG_T = 2;
+export const DRAFT_STRENGTH_MODERATE_T = 1.2;
+
+// Minimum premium magnitude, in z units, before |t| is allowed to call
+// anything a lean. t alone is not enough: it is mean over standard error, so
+// a manager whose residuals have almost no spread can post |t| = 2.4 on a
+// premium of 0.0003. That is a precisely measured non-effect. Every
+// moderate or strong value in the spec's reference table is at least 0.11,
+// so this floor cannot reclassify a real signal; it only rules out the
+// degenerate case where the standard error collapses.
+export const DRAFT_PREMIUM_MIN_EFFECT = 0.02;
+
+// A strong negative premium reads as a deliberate punt only when the manager
+// was positive in at most this many seasons. Otherwise it is "Avoids".
+export const DRAFT_PUNT_MAX_POSITIVE_SEASONS = 1;
+
+// Reach label cutoffs, in overall slots of ESPN ADP minus actual pick.
+export const DRAFT_REACH_OFTEN_MEDIAN = 12;
+export const DRAFT_REACH_BOARD_MEDIAN = 0;
+
+// --- Draft Room: AI pick model (docs/DRAFT_ROOM_SPEC.md s4) ---
+//
+// u_i = -rank_i / tau(m, phase)
+//       + lambda * w(m) . (premium(m) * z_i)
+//       - gamma * overload(m, pos_i)
+//       + alpha * affinity(m, team_i)
+// and the pick is drawn from softmax(u).
+//
+// rank_i is ESPN ADP, not Larry's rank, on purpose. The model predicts what
+// these managers will DO in the ESPN draft room, which is not a claim about
+// what the right pick is.
+//
+// MOCK_FITTED is false while these are the spec's starting values rather
+// than the output of tools/fit-mock-draft.ts. The UI footer reads it and
+// says so. Flip it to true in the same commit that replaces the numbers,
+// and record the measured log-likelihood and top-5 hit rate here.
+export const MOCK_FITTED = false;
+
+// Softmax temperature per phase, in units of ESPN ADP slots. Higher means
+// more willing to leave the board. It rises through the draft because late
+// rounds are where personal preference actually shows up; round 1 is close
+// to consensus for everyone.
+//
+// These are the spec's provisional 6 / 10 / 18 divided by 3. The spec's raw
+// values are too hot to be a draft. Measured over 400 simulated drafts on a
+// synthetic board with flat profiles:
+//
+//   tau_early   P(#1 goes 1st)   P(#1 alive at pick 10)   mean |rank - pick|
+//   6.00        0.165            0.1075                   5.5
+//   3.00        0.290            0.0025                   2.8
+//   2.00        0.370            0.0000                   1.9
+//   1.50        0.485            0.0000                   1.4
+//
+// At 6 the consensus number one slides out of the top nine in 11% of
+// drafts, which is not a thing that happens and which the spec's own
+// acceptance test in s8 rules out. At 2 the board drifts by about two slots
+// through the first two rounds, which is what a real draft looks like, and
+// there is room left for profiles to add their own deviation on top.
+//
+// All seven of these remain unfitted. tools/fit-mock-draft.ts replaces them
+// from the owner's real history; see MOCK_FITTED.
+export const MOCK_TAU_EARLY = 2;
+export const MOCK_TAU_MID = 3.33;
+export const MOCK_TAU_LATE = 6;
+
+// tau is scaled by exp(beta * shrunk phase reach), so a manager who
+// habitually reaches gets a flatter distribution over the board. Unitless
+// and inside an exponent, so the temperature rescaling above leaves it
+// alone.
+export const MOCK_BETA = 0.04;
+
+// Weight on category taste, on position overload, and on NBA team affinity.
+//
+// lambda and gamma keep the spec's literal values even though tau was cut
+// by 3, which makes the category term a third as influential relative to
+// rank as the spec intended. That is deliberate and measured. Mean
+// log-likelihood per pick on a held-out synthetic 2026 draft, scored by
+// tests/engine/draftFit.test.ts' generator, where seven of twelve managers
+// draft for a specific category:
+//
+//   weights                       tastes exist    nobody has a taste
+//   rank only                       -1.7488           -1.4177
+//   lambda 2,  gamma 3, alpha 0     -1.4537           -1.4177
+//   lambda 4,  gamma 3, alpha 0     -1.3997           -1.4177
+//   lambda 12, gamma 9, alpha 0     -2.0913           -1.4177
+//   lambda 4,  gamma 3, alpha 3     -1.5112           -1.4314
+//
+// lambda 4 / gamma 3 / alpha 0 is the only row with both properties worth
+// having: it beats rank-only by 0.35 nats when there is a taste to find,
+// and it costs exactly nothing when there is not. Scaling lambda up with
+// tau (the 12 row) is worse than ignoring profiles altogether.
+//
+// alpha ships at ZERO, which needs the honest version of the story. At
+// these tau values an alpha of 3 is worth six ADP slots, and at that size
+// NBA team affinity hurt in BOTH columns above, including the one where no
+// manager had a real affinity: a by-the-board drafter still accumulates 4+
+// players from some team at twice the league rate across nine seasons
+// purely by chance, and the term fires on those false positives. Run the
+// full fit, though, and the optimizer does want a SMALL nonzero alpha
+// (1.625 at a fitted tauEarly of 1.9, so about three slots), worth +0.075.
+//
+// So affinity is not worthless, it is just worth less than any weight that
+// can be guessed. Zero is the right unfitted default because it is exactly
+// neutral; the fit can turn it back on once there is real data. Affinity
+// stays on the profile card throughout, where it is an observation rather
+// than a prediction.
+//
+// All of this is synthetic. The real fit and ablation need the owner's
+// export; see tools/fit-mock-draft.ts and MOCK_FITTED.
+export const MOCK_LAMBDA = 4;
+export const MOCK_GAMMA = 3;
+export const MOCK_ALPHA = 0;
+
+// A manager's phase reach is shrunk toward the league median by
+// n / (n + k), where n is their pick count in that phase. Without this, a
+// manager with 3 late picks in one draft looks like a committed reacher.
+export const MOCK_REACH_SHRINK_K = 15;
+
+// Category weight by premium strength. Weak signals do not move the AI.
+export const MOCK_WEIGHT_STRONG = 1;
+export const MOCK_WEIGHT_MODERATE = 0.5;
+
+// Position overload starts biting past this many at one primary position,
+// counting rounds 1 to 10. Stops the AI building five centers by round 6.
+export const MOCK_OVERLOAD_THRESHOLD = 3;
+
+// Rank for a player with no ESPN ADP, no ESPN draft rank and no Larry rank.
+// Effectively "off the board" without being infinite.
+export const MOCK_RANK_FALLBACK = 400;
+
+// Category z for the pick model is computed against the top N by ESPN rank,
+// not the whole player universe, so "above average" means above a drafted
+// player rather than above a deep-league waiver body.
+export const MOCK_Z_POOL_SIZE = 200;
+
+// Only the top N available players by rank are scored for a pick. Past this
+// depth -rank/tau has made the softmax weight negligible, and evaluating the
+// whole 500-player board on every simulated pick is what would blow the
+// availability-odds budget on a phone. Sims use a tighter pool than real
+// picks because they run thousands of times.
+export const MOCK_CANDIDATE_POOL = 120;
+export const MOCK_SIM_CANDIDATE_POOL = 60;
+
+// --- Draft Room: availability odds (docs/DRAFT_ROOM_SPEC.md s6) ---
+
+// Simulations per recalculation, and the reduced count used when a device
+// cannot finish the full run inside the budget.
+export const MOCK_AVAIL_SIMS = 500;
+export const MOCK_AVAIL_SIMS_REDUCED = 250;
+
+// Simulations per setTimeout slice, so the main thread stays responsive.
+export const MOCK_AVAIL_CHUNK = 50;
+
+// Odds are shown for this many players at the top of the current sort.
+export const MOCK_AVAIL_TOP_N = 40;
+
+// "Can wait" threshold: a higher-ranked player is only suggested as
+// waitable at this availability or better.
+export const MOCK_CAN_WAIT_THRESHOLD = 0.7;
+
 // ESPN position ID -> position string. 1=PG, 2=SG, 3=SF, 4=PF, 5=C.
 // 12=Bench, 13=IR are slot ids, not positions; not included here.
 export const ESPN_POSITION_ID_TO_NAME: Record<number, "PG" | "SG" | "SF" | "PF" | "C"> = {

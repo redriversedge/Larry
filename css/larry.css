@@ -1233,3 +1233,80 @@ body {
   .pulse-once { animation: none; }
   .larry-move-chevron { transition: none; }
 }
+
+/* --- DRAFT ROOM (docs/DRAFT_ROOM_SPEC.md s5) --- */
+.draft-status {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 12px; margin-bottom: 10px;
+}
+.draft-you {
+  background: var(--accent-blue); color: #fff; border-radius: 10px;
+  padding: 1px 8px; font-size: 0.7rem; font-weight: 700; margin-left: 4px;
+}
+
+/* Every control is a 44px touch target: this page gets used one-handed
+   while the real draft is running. */
+.draft-controls { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.draft-controls .btn { min-height: 44px; flex: 1 1 auto; }
+
+.draft-build-card { text-align: center; }
+.draft-build-card p { margin-bottom: 10px; font-size: 0.85rem; }
+
+.draft-larry-pick { border-color: var(--accent-blue); }
+.draft-pick-name { font-size: 1.1rem; font-weight: 700; margin-bottom: 2px; }
+.draft-can-wait {
+  margin: 8px 0; padding: 8px; border-radius: var(--radius);
+  background: rgba(245,158,11,0.12); color: var(--text-primary); font-size: 0.8rem;
+}
+
+.draft-board-bar { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
+.draft-board-bar .sort-label { margin-bottom: 0; }
+.draft-board-bar .filter-search { flex: 1 1 140px; min-width: 120px; }
+.draft-name { text-align: left; cursor: pointer; }
+.draft-confirm-row td { background: var(--bg-surface); }
+.draft-confirm-row .confirm-row { gap: 8px; align-items: center; border-bottom: none; }
+.draft-confirm-row .btn { min-height: 44px; }
+
+.draft-teams-strip {
+  display: flex; gap: 6px; overflow-x: auto; -webkit-overflow-scrolling: touch;
+  padding-bottom: 6px; margin-bottom: 10px;
+}
+.draft-team-chip { min-height: 44px; }
+
+.draft-profile-name { font-weight: 700; font-size: 0.95rem; }
+.draft-summary { margin: 8px 0 4px; font-size: 0.85rem; }
+.draft-reach { font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 4px; }
+
+/* Category premium bars, centred on zero so the sign reads at a glance. */
+.draft-bars { display: flex; flex-direction: column; gap: 4px; margin: 10px 0; }
+.draft-bar-row { display: flex; align-items: center; gap: 6px; font-size: 0.75rem; }
+.draft-bar-label { width: 28px; font-weight: 700; flex-shrink: 0; }
+.draft-bar-track {
+  position: relative; flex: 1 1 auto; height: 10px; min-width: 60px;
+  background: var(--bg-surface); border-radius: 5px; overflow: hidden;
+}
+.draft-bar-zero {
+  position: absolute; left: 50%; top: 0; bottom: 0; width: 1px;
+  background: var(--border);
+}
+.draft-bar-fill { position: absolute; top: 0; bottom: 0; opacity: 0.85; }
+.draft-bar-value { width: 42px; text-align: right; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.draft-bar-strength { flex: 0 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.draft-how { margin-top: 8px; }
+.draft-how summary { font-size: 0.75rem; color: var(--text-secondary); cursor: pointer; min-height: 44px; display: flex; align-items: center; }
+
+.draft-roster { margin-top: 10px; }
+.draft-cat-totals { display: flex; gap: 6px; margin-bottom: 8px; }
+.draft-cat-total { flex: 1; text-align: center; background: var(--bg-surface); border-radius: var(--radius); padding: 6px 2px; }
+.draft-cat-abbr { font-size: 0.65rem; font-weight: 700; }
+.draft-cat-value { font-size: 0.85rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+.draft-ticker-row { display: flex; align-items: baseline; gap: 8px; padding: 4px 0; border-bottom: 1px solid var(--border); font-size: 0.8rem; }
+.draft-ticker-row:last-child { border-bottom: none; }
+.draft-ticker-pick { width: 26px; flex-shrink: 0; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.draft-ticker-team { width: 60px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.draft-ticker-name { font-weight: 600; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.draft-ticker-reason { margin-left: auto; flex-shrink: 0; }
+
+.draft-footer { margin-top: 10px; padding: 8px 0; }
