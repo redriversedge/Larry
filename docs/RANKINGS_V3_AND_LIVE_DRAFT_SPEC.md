@@ -1,17 +1,17 @@
 # Rankings v3, team fit, and live draft sync
 
 Spec date: 2026-10-15, written against `main` at 269ec2f (v3.26.0).
-**Real draft: Sun Oct 18 2026, 7:30 PM CT. Nothing to `main` after Sun 3:00 PM CT unless it fixes a broken Draft Room.** Opening night is Tue Oct 20.
+Real draft: Sun Oct 18 2026, 7:30 PM CT. Opening night is Tue Oct 20. All three parts are to be built now, in one pass.
 
 The owner has approved changing **both** the preseason board and the regular-season ranking. That overrides the CLAUDE.md "Do NOT change the regular-season ranking" rule for this work only, under the gates below. Update CLAUDE.md when it ships: the rule becomes "do not change the ranking without beating the backtest gates in `docs/RANKINGS_V3_AND_LIVE_DRAFT_SPEC.md`".
 
 CLAUDE.md applies otherwise: `dev` branch, `node --check`, `npm test`, `npx tsc --noEmit`, ASCII only, no em dashes, ES5 house style in `js/`, bump `CACHE_VERSION` on every push. The public-repo rule still holds: no league data in commits. Everything in Parts A and C runs on public ESPN and FantasyPros data, so it may be committed.
 
-| Part | What | Ships |
-|---|---|---|
-| A | Preseason board v3: durability and value above replacement | Sat Oct 17, by 6 PM CT |
-| B | Draft Room: team fit card and live draft sync | Sat Oct 17, by 6 PM CT |
-| C | Regular-season ranking v3 | After the draft, target Mon Oct 26 |
+| Part | What |
+|---|---|
+| A | Preseason board v3: durability and value above replacement |
+| B | Draft Room: team fit card and live draft sync |
+| C | Regular-season ranking v3 |
 
 Order of work: A1 (the backtest tool) first, because every other A and C decision is measured with it. Then A2 to A4, then B, then C.
 
@@ -161,9 +161,9 @@ Test: a synthetic roster strong in BLK and weak in AST makes the fit pick prefer
 **Toggle:** "Follow the real draft" at the top of the Draft Room, shown only when the current season's draft is not complete. Off by default; remembered per device in `larry_mock_draft`.
 
 **Polling.**
-- When on: fetch the current season `mDraftDetail` (league scope, the user's cookies, through the existing proxy) every **8 seconds** while the page is visible.
+- When on: fetch the current season `mDraftDetail` (league scope, the user's cookies, through the existing proxy) every **4 seconds** while the page is visible.
 - Stop on `visibilitychange` to hidden; on visible again, poll immediately. iPhones pause pages when the screen locks; the immediate poll on return is what catches up.
-- On network error: keep the last state, show "Last updated 40s ago", back off to 15s, 30s, then hold at 30s. A 401 uses the existing reconnect banner.
+- On network error: keep the last state, show "Last updated 40s ago", back off to 8s, 15s, then hold at 30s. A 401 uses the existing reconnect banner.
 - When `drafted` becomes true: stop polling, show "Draft complete", and run the normal sync so rosters load everywhere in the app.
 
 **Behaviour while following.**
@@ -173,7 +173,7 @@ Test: a synthetic roster strong in BLK and weak in AST makes the fit pick prefer
 - A real pick of a player not on Larry's board (deep pick) is added as a placeholder row so the count stays right.
 - Larry never makes or submits picks on ESPN.
 
-**Replay mode, so it can be tested before Sunday.** Settings gets "Draft Room: replay last season's draft". It feeds the stored 2026 picks from `larry_draft_history` through the exact same code path as live polling, one pick every 2 seconds, against the 2026 board. This is how the reviewer verifies B2 before the draft; there is no other way to see it work.
+**Replay mode, so it can be tested before the real draft.** Settings gets "Draft Room: replay last season's draft". It feeds the stored 2026 picks from `larry_draft_history` through the exact same code path as live polling, one pick every 2 seconds, against the 2026 board. This is how the reviewer verifies B2 before the draft; there is no other way to see it work.
 
 **Edge cases to test:** joining mid-draft (catch up in one poll), the user's own pick arriving, two picks landing in one poll, the toggle turned off and on mid-draft, page reload mid-draft, ESPN returning picks with `playerId` -1 or 0 for unfilled slots (ignore).
 
@@ -212,10 +212,10 @@ Score each at every checkpoint against ROS truth, and keep only what helps:
 ## Done means
 
 - [ ] `docs/RANKINGS_V3_BACKTEST.md`: every board in A1, both seasons, GP model MAE table, the named-player table, bootstrap results.
-- [ ] A shipped by Sat 6 PM CT with all A4 gates passing, or a written report of what failed and nothing shipped.
-- [ ] B1 and B2 shipped by Sat 6 PM CT, B2 verified with replay mode.
+- [ ] A shipped with all A4 gates passing, or a written report of what failed and nothing shipped.
+- [ ] B1 and B2 shipped, B2 verified with replay mode.
 - [ ] Settings: "Use previous rankings" and "Draft Room: replay last season's draft".
-- [ ] C1 data built or reported impossible; C shipped only past its gates, target Mon Oct 26.
+- [ ] C1 data built or reported impossible; C shipped only past its gates.
 - [ ] CLAUDE.md updated: v3 value formula, durability module, `rankingVersion`, the new ranking rule, the backtest commands, live sync.
 
 ## Suggested settings
