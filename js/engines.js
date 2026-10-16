@@ -395,6 +395,12 @@ var Engines = (function() {
     return v === 'v2' ? 'v2' : 'v3';
   }
 
+  // Rest of season is the default in-season view; the Players tab can
+  // switch to per-game. Preseason is unaffected either way.
+  function rosSortActive() {
+    return !(S && S.prefs && S.prefs.valueView === 'perGame');
+  }
+
   // Same normalization as the engine and the market files.
   function normName(raw) {
     return String(raw || '')
@@ -492,6 +498,94 @@ var Engines = (function() {
 
   function v2TeamCount() {
     return (S && S.league && S.league.teamCount) || 12;
+  }
+
+  // --- In-season rest-of-season value (spec C2, gated in C3) ----------
+  //
+  // Mid-season the useful question is not "who is the better player" but
+  // "who will produce more between now and the end of the season". Those
+  // differ whenever remaining availability does.
+  //
+  // rosValue = (rateValue - replacement) * expectedRemainingGames
+  //
+  // Measured over four checkpoints in each of the last two seasons
+  // (docs/RANKINGS_V3_INSEASON_BACKTEST.md): average rest-of-season rank
+  // correlation 0.455 against per-game value's 0.403, ahead at 8 of 8
+  // checkpoints, paired bootstrap 90.5% to 100%.
+  //
+  // Subtracting replacement FIRST is what makes it work. Multiplying raw
+  // per-game value by games scored 0.382, WORSE than per-game value
+  // alone, because it rewards durable mediocrity: a replacement-level
+  // player who suits up every night racks up a big number without being
+  // worth a roster spot. The quantity that scales with games is value
+  // ABOVE the waiver wire, not value.
+  //
+  // This never reaches the matchup engines. Weekly decisions use per-game
+  // value times games THIS WEEK, which is a different question with a
+  // different answer, and feeding season-long value into it would make
+  // the strategy engine prefer durable players in a week they barely play.
+  function applyRestOfSeason(players) {
+    var Eng = window.LarryEngine;
+    if (!Eng || typeof Eng.replacementLevel !== 'function') return;
+
+    var scored = [];
+    for (var i = 0; i < players.length; i++) {
+      var p = players[i];
+      if (p.rateValue === null || p.rateValue === undefined) continue;
+      if (p.noEvidence || p.durantScore === null || p.durantScore === undefined) continue;
+      scored.push(p);
+    }
+    if (!scored.length) return;
+
+    var rates = scored.map(function(p) { return p.rateValue; });
+    var replacement = Eng.replacementLevel(rates, v2TeamCount() * v2RosterSize());
+
+    for (var j = 0; j < scored.length; j++) {
+      var pl = scored[j];
+      var remaining = expectedRemainingGames(pl);
+      pl.expectedRemainingGames = remaining;
+      pl.rosValue = (pl.rateValue - replacement) * remaining / FULL_SEASON_GAMES_LOCAL;
+    }
+  }
+
+  var FULL_SEASON_GAMES_LOCAL = 82;
+
+  // Games left on the schedule times how often this player actually
+  // suits up. The schedule half is the same for everyone (every team
+  // plays 82), so what separates players is availability.
+  function expectedRemainingGames(p) {
+    var Eng = window.LarryEngine;
+    var played = p.gamesPlayed || 0;
+    // Share of the season already gone, from the team's own game count
+    // where we have it and the scoring period otherwise.
+    var elapsed = seasonElapsedShare();
+    var teamGamesSoFar = Math.max(1, FULL_SEASON_GAMES_LOCAL * elapsed);
+    var thisSeason = Math.min(1, played / teamGamesSoFar);
+
+    // Blend with the player's prior-season attendance, which carries the
+    // early weeks before this season has said much.
+    var histShare = thisSeason;
+    if (Eng && typeof Eng.weightedHistory === 'function' && _durabilityGP) {
+      var prior = _durabilityGP[String(p.id)];
+      if (prior && prior.length) {
+        var h = Eng.weightedHistory(prior);
+        if (h !== null) histShare = Math.min(1, h / FULL_SEASON_GAMES_LOCAL);
+      }
+    }
+    var w = played / (played + 15);
+    var availability = w * thisSeason + (1 - w) * histShare;
+
+    // A player with no NBA team plays no more games.
+    if (!p.proTeamId) return 0;
+    return FULL_SEASON_GAMES_LOCAL * (1 - elapsed) * availability;
+  }
+
+  function seasonElapsedShare() {
+    var period = (S && S.league && S.league.currentScoringPeriodId) || 0;
+    if (!(period > 0)) return 0;
+    // 174 scoring periods in a season; the share of DAYS gone is close
+    // enough to the share of games gone for this purpose.
+    return Math.min(1, period / 174);
   }
 
   // Loaded once per page, before the first board is built. Both files are
@@ -609,6 +703,10 @@ var Engines = (function() {
     // with the market. Preseason only, and only when the user has not
     // rolled back to v2 in Settings. The in-season path below is untouched.
     var v3 = preseason && rankingVersion() === 'v3' ? applyPreseasonV3(players) : null;
+    // In season, v3 adds rest-of-season value alongside the per-game
+    // score. Ranking surfaces sort on it; the matchup engines never see it.
+    var ros = !preseason && rankingVersion() === 'v3';
+    if (ros) applyRestOfSeason(players);
 
     // Rank. Evidenced players by score, then everyone we know nothing about,
     // ordered by ownership so the list is at least plausible rather than
@@ -628,6 +726,14 @@ var Engines = (function() {
         var ar = a.blendRank || Infinity;
         var br = b.blendRank || Infinity;
         if (ar !== br) return ar - br;
+      }
+      // In season the board sorts on rest-of-season value unless the user
+      // has switched the Players tab to per-game. Same split as preseason:
+      // the score says how good the player is, the rank says who to hold.
+      if (ros && rosSortActive() &&
+          typeof a.rosValue === 'number' && typeof b.rosValue === 'number' &&
+          a.rosValue !== b.rosValue) {
+        return b.rosValue - a.rosValue;
       }
       return b.durantScore - a.durantScore;
     });
@@ -1776,6 +1882,8 @@ var Engines = (function() {
     matchupAdjustedValue: matchupAdjustedValue,
     // Preseason board v3.
     loadPreseasonData: loadPreseasonData,
+    rosSortActive: rosSortActive,
+    applyRestOfSeason: applyRestOfSeason,
     marketPulledAt: marketPulledAt,
     rankingVersion: rankingVersion
   };

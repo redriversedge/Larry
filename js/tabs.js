@@ -805,6 +805,23 @@ function renderPlayers(container) {
 
   html += '<div class="filter-row">';
 
+  // Per game against rest of season. In season these answer different
+  // questions: per game is who is better, rest of season is who will
+  // produce more from here, which is what a hold-or-drop decision needs.
+  // Rest of season is the default and is what the board sorts on; the
+  // matchup engines are unaffected by this and always use per-game.
+  if (typeof isPreseason === 'function' && !isPreseason() &&
+      typeof Engines !== 'undefined' && Engines.rankingVersion &&
+      Engines.rankingVersion() === 'v3') {
+    var perGameView = !!(S.prefs && S.prefs.valueView === 'perGame');
+    html += '<select class="filter-select" onchange="setValueView(this.value)">';
+    html += '<option value="ros"' + (perGameView ? '' : ' selected') +
+      '>Rest of season</option>';
+    html += '<option value="perGame"' + (perGameView ? ' selected' : '') +
+      '>Per game</option>';
+    html += '</select>';
+  }
+
   // Position filter dropdown
   html += '<select class="filter-select" onchange="_playersPositionFilter=this.value;renderPlayersList()">';
   html += '<option value="ALL"' + (_playersPositionFilter === 'ALL' ? ' selected' : '') + '>All Pos</option>';
@@ -2212,8 +2229,19 @@ function renderTradeAnalysis() {
 
 // Flipping this changes every rank, so the cached board has to go and
 // DURANT has to run again before anything renders.
+// Which value the in-season board sorts on. Rest of season by default.
+function setValueView(view) {
+  S.prefs = S.prefs || {};
+  S.prefs.valueView = view === 'perGame' ? 'perGame' : 'ros';
+  S.analysisCache = S.analysisCache || {};
+  S.analysisCache.durantComputedAt = null;
+  saveState();
+  Engines.ensureDURANT(S.allPlayers || []);
+  render();
+}
+
 // Rollback switch for the whole v3 board. Preseason and in-season both
-// read S.prefs.rankingVersion; today only the preseason board differs.
+// read S.prefs.rankingVersion.
 function toggleRankingVersion(usePrevious) {
   S.prefs = S.prefs || {};
   S.prefs.rankingVersion = usePrevious ? 'v2' : 'v3';

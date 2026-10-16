@@ -59,6 +59,8 @@ function load(options: {
   durability?: Record<string, number[]> | null;
   market?: unknown;
   rankingVersion?: string;
+  prefs?: Record<string, unknown>;
+  preseason?: boolean;
 } = {}): Harness {
   const engineSrc = fs.readFileSync(path.join(ROOT, "dist/larry-engine.js"), "utf8");
   const enginesSrc = fs.readFileSync(path.join(ROOT, "js/engines.js"), "utf8");
@@ -69,6 +71,7 @@ function load(options: {
       teamCount: 12,
       rosterSize: 13,
       seasonId: 2027,
+      currentScoringPeriodId: options.preseason === false ? 80 : 0,
       categories: CATS.map((abbr) => ({ abbr, isNegative: false, isPercent: false })),
     },
     espn: { lastSync: "2026-10-15T00:00:00Z" },
@@ -76,7 +79,7 @@ function load(options: {
     teams: [],
     matchup: {},
     allPlayers: players,
-    prefs: options.rankingVersion ? { rankingVersion: options.rankingVersion } : {},
+    prefs: options.prefs ?? (options.rankingVersion ? { rankingVersion: options.rankingVersion } : {}),
     analysisCache: {},
   };
 
@@ -142,7 +145,7 @@ function load(options: {
     { splitGP: () => 0, loadProjectionData: () => Promise.resolve() },
     (v: unknown) => (v === null || v === undefined ? -Infinity : (v as number)),
     (v: unknown, d = 1) => (v === null || v === undefined ? "--" : Number(v).toFixed(d)),
-    () => true, // preseason
+    () => options.preseason !== false, // preseason
     fetchStub,
     () => {},
     (cb: () => void) => { cb(); return 0; },
@@ -281,6 +284,83 @@ describe("v3 preseason board: degradation", () => {
     const h = load({ durability: null, market: null });
     const players = await board(h);
     expect(players.filter((x) => x.blendRank).length).toBeGreaterThan(200);
+  });
+});
+
+describe("v3 in-season: rest-of-season value", () => {
+  // In season, everything above is off and rosValue takes over. Measured
+  // at 0.455 average rest-of-season rho against per-game's 0.403; see
+  // docs/RANKINGS_V3_INSEASON_BACKTEST.md.
+  function inSeason(options: Parameters<typeof load>[0] = {}): Harness {
+    const players = options.players ?? makePlayers(120);
+    // Give everyone real games so the in-season path has something to
+    // work with, and make one player a part-timer.
+    players.forEach((p: any, i: number) => {
+      p.gamesPlayed = i === 7 ? 10 : 40;
+      p.stats.season = { ...p.stats.projectedRate };
+      p.stats.totals = { season: {} };
+      p.stats.gp = { season: p.gamesPlayed };
+    });
+    return load({ ...options, players, preseason: false });
+  }
+
+  it("computes rest-of-season value and expected remaining games", async () => {
+    const h = inSeason();
+    const out = await board(h);
+    const scored = out.filter((p) => typeof p.rosValue === "number");
+    expect(scored.length).toBeGreaterThan(50);
+    for (const p of scored.slice(0, 10)) {
+      expect(Number.isFinite(p.expectedRemainingGames)).toBe(true);
+      expect(p.expectedRemainingGames).toBeGreaterThanOrEqual(0);
+    }
+    // The preseason fields stay off in season.
+    expect(scored[0].blendRank).toBeUndefined();
+  });
+
+  it("penalises a player who has been missing games", async () => {
+    const h = inSeason();
+    const out = await board(h);
+    const parttime = out.find((p) => p.id === 1007);
+    const peer = out.find((p) => p.id === 1006);
+    expect(parttime.expectedRemainingGames).toBeLessThan(peer.expectedRemainingGames);
+  });
+
+  it("gives a player with no NBA team no remaining games", async () => {
+    const players = makePlayers(120);
+    players[9].proTeamId = 0;
+    const h = inSeason({ players });
+    const out = await board(h);
+    expect(out.find((p) => p.id === 1009).expectedRemainingGames).toBe(0);
+  });
+
+  it("sorts on rest-of-season value by default and on per-game when asked", async () => {
+    const ros = await board(inSeason());
+    const rosOrder = ros.slice(0, 30).map((p: any) => p.id);
+
+    const perGame = await board(
+      inSeason({ prefs: { rankingVersion: "v3", valueView: "perGame" } }),
+    );
+    const perGameOrder = perGame.slice(0, 30).map((p: any) => p.id);
+
+    // Both are valid orderings; the point is that the toggle changes one.
+    expect(rosOrder).not.toEqual(perGameOrder);
+    // And per-game order follows the score, as it always did.
+    const scores = perGame
+      .filter((p: any) => typeof p.durantScore === "number")
+      .slice(0, 20)
+      .map((p: any) => p.durantScore);
+    for (let i = 1; i < scores.length; i++) {
+      expect(scores[i]).toBeLessThanOrEqual(scores[i - 1] as number);
+    }
+  });
+
+  it("leaves rest-of-season value off entirely under the v2 rollback", async () => {
+    const h = inSeason({ prefs: { rankingVersion: "v2" } });
+    const out = await board(h);
+    for (const p of out.slice(0, 20)) {
+      expect(p.rosValue).toBeUndefined();
+      expect(p.expectedRemainingGames).toBeUndefined();
+    }
   });
 });
 
