@@ -2253,6 +2253,17 @@ function renderSettingsPage() {
   if (typeof DraftRoom !== 'undefined' && DraftRoom.renderModelCheckCard) {
     html += '<div class="card"><div class="card-header">Draft Room</div>';
     html += DraftRoom.renderModelCheckCard();
+    // Replay feeds last season's stored picks through the same code path
+    // the live draft poller uses. It is the only way to see live sync
+    // working before the real draft starts.
+    html += '<div class="settings-row">';
+    html += '<div><strong>Replay last season\'s draft</strong>' +
+      '<div class="text-xs muted">Runs the stored picks through the live-sync path, ' +
+      'one every 2 seconds, so the Draft Room can be checked before draft night. ' +
+      'Most replayed players will not be on this season\'s board.</div></div>';
+    html += '<button class="btn btn-sm btn-secondary" style="min-height:44px" ' +
+      'onclick="S.leagueSubPage=\'draftRoom\';DraftRoom.startReplay()">Replay</button>';
+    html += '</div>';
     html += '</div>';
   }
 

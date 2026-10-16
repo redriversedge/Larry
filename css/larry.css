@@ -1310,3 +1310,18 @@ body {
 .draft-ticker-reason { margin-left: auto; flex-shrink: 0; }
 
 .draft-footer { margin-top: 10px; padding: 8px 0; }
+
+/* Best value and best fit, side by side on anything wider than a phone
+   and stacked on a phone. */
+.draft-pick-cards { display: flex; gap: 8px; flex-wrap: wrap; }
+.draft-pick-cards .draft-pick-card { flex: 1 1 240px; margin-bottom: 0; }
+.draft-fit-why { color: var(--text-secondary); margin: 4px 0; }
+
+/* Live draft sync */
+.draft-follow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.draft-follow-done { color: var(--text-secondary); font-size: 0.8rem; }
+.draft-onclock {
+  background: var(--accent-blue); color: #fff; font-weight: 700;
+  padding: 10px 12px; border-radius: var(--radius); margin-bottom: 8px; text-align: center;
+}
+.draft-onclock-soon { background: rgba(245,158,11,0.9); color: #1a1a2e; }

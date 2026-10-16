@@ -24,6 +24,11 @@ var LarryEngine = (() => {
     CATEGORIES: () => CATEGORIES,
     DEFAULT_MOCK_PARAMS: () => DEFAULT_MOCK_PARAMS,
     DURANT_SCALE: () => DURANT_SCALE,
+    FIT_LAMBDA: () => FIT_LAMBDA,
+    FIT_MIN_PICKS: () => FIT_MIN_PICKS,
+    FIT_WEIGHT_EVEN: () => FIT_WEIGHT_EVEN,
+    FIT_WEIGHT_STRONG: () => FIT_WEIGHT_STRONG,
+    FIT_WEIGHT_WEAK: () => FIT_WEIGHT_WEAK,
     MOCK_AVAIL_CHUNK: () => MOCK_AVAIL_CHUNK,
     MOCK_AVAIL_SIMS: () => MOCK_AVAIL_SIMS,
     MOCK_AVAIL_SIMS_REDUCED: () => MOCK_AVAIL_SIMS_REDUCED,
@@ -48,8 +53,10 @@ var LarryEngine = (() => {
     buildExplainPayload: () => buildExplainPayload,
     buildHistoricalBoard: () => buildHistoricalBoard,
     buildQPool: () => buildQPool,
+    categoryRanks: () => categoryRanks,
     categoryWeight: () => categoryWeight,
     checkModel: () => checkModel,
+    clampGames: () => clampGames,
     combineEvals: () => combineEvals,
     computeBaseValues: () => computeBaseValues,
     computeLeagueAverages: () => computeLeagueAverages,
@@ -57,11 +64,15 @@ var LarryEngine = (() => {
     createEspnProjectionSource: () => createEspnProjectionSource,
     createInMemoryProjectionSource: () => createInMemoryProjectionSource,
     decidePick: () => decidePick,
+    durabilityDetail: () => durabilityDetail,
     emptyAvailabilityCounts: () => emptyAvailabilityCounts,
     espnPerGameRate: () => espnPerGameRate,
     evaluateDraft: () => evaluateDraft,
+    expectedGames: () => expectedGames,
     firstAvailableByRank: () => firstAvailableByRank,
+    fitBonus: () => fitBonus2,
     fitMockDraft: () => fitMockDraft,
+    fitWeights: () => fitWeights,
     gScore: () => gScore,
     gVector: () => gVector,
     larryPickAdvice: () => larryPickAdvice,
@@ -87,6 +98,8 @@ var LarryEngine = (() => {
     rankUtility: () => rankUtility,
     reachShrunk: () => reachShrunk,
     recommend: () => recommend,
+    recommendValueAndFit: () => recommendValueAndFit,
+    rosterCategoryTotals: () => rosterCategoryTotals,
     rosterTotal: () => rosterTotal,
     roundForIndex: () => roundForIndex,
     runAvailabilitySims: () => runAvailabilitySims,
@@ -99,6 +112,7 @@ var LarryEngine = (() => {
     toPlayerProjection: () => toPlayerProjection,
     topN: () => topN,
     topPickRate: () => topPickRate,
+    weightedHistory: () => weightedHistory,
     zVector: () => zVector
   });
 
@@ -1211,6 +1225,149 @@ var LarryEngine = (() => {
       out[phase] = median(values) ?? 0;
     }
     return out;
+  }
+
+  // src/engine/draftTeamFit.ts
+  var FIT_WEIGHT_WEAK = 1.5;
+  var FIT_WEIGHT_EVEN = 1;
+  var FIT_WEIGHT_STRONG = 0.5;
+  var FIT_LAMBDA = 0.5;
+  var FIT_MIN_PICKS = 2;
+  var SEASON_GAMES = 82;
+  function emptyVector5() {
+    return { REB: 0, AST: 0, STL: 0, BLK: 0, PTS: 0 };
+  }
+  function rosterCategoryTotals(players) {
+    const out = emptyVector5();
+    for (const p of players) {
+      for (const c of CATEGORIES) {
+        out[c] += (p.perGame[c] || 0) * (p.expectedGP || 0);
+      }
+    }
+    return out;
+  }
+  function categoryRanks(totalsByTeam, myTeamId) {
+    const out = {};
+    const mine = totalsByTeam.get(myTeamId);
+    for (const c of CATEGORIES) {
+      const myValue = mine ? mine[c] : 0;
+      let better = 0;
+      for (const [teamId, totals] of totalsByTeam) {
+        if (teamId === myTeamId) continue;
+        if (totals[c] > myValue) better++;
+      }
+      out[c] = better + 1;
+    }
+    return out;
+  }
+  function fitWeights(ranks, teamCount) {
+    const third = Math.max(1, Math.round(teamCount / 4));
+    const out = emptyVector5();
+    for (const c of CATEGORIES) {
+      const rank = ranks[c];
+      if (rank <= third) out[c] = FIT_WEIGHT_STRONG;
+      else if (rank <= third * 2) out[c] = FIT_WEIGHT_EVEN;
+      else out[c] = FIT_WEIGHT_WEAK;
+    }
+    return out;
+  }
+  function fitBonus2(player, weights, lambda = FIT_LAMBDA) {
+    let sum = 0;
+    for (const c of CATEGORIES) {
+      sum += (weights[c] - 1) * (player.z[c] || 0);
+    }
+    return lambda * sum * (player.expectedGP || 0) / SEASON_GAMES;
+  }
+  function recommendValueAndFit(input) {
+    const ranks = categoryRanks(input.totalsByTeam, input.myTeamId);
+    const weights = fitWeights(ranks, input.teamCount);
+    const active = input.myPickCount >= FIT_MIN_PICKS;
+    let valueId = null;
+    let bestValue = -Infinity;
+    let fitId = null;
+    let bestFit = -Infinity;
+    for (const p of input.available) {
+      const value = input.valueOf(p.playerId);
+      if (!Number.isFinite(value)) continue;
+      if (value > bestValue) {
+        bestValue = value;
+        valueId = p.playerId;
+      }
+      const combined = value + fitBonus2(p, weights, input.lambda ?? FIT_LAMBDA);
+      if (combined > bestFit) {
+        bestFit = combined;
+        fitId = p.playerId;
+      }
+    }
+    const weakest = CATEGORIES.map((c) => ({ category: c, rank: ranks[c] })).filter((r) => weights[r.category] === FIT_WEIGHT_WEAK).sort((a, b) => b.rank - a.rank);
+    return {
+      valueId,
+      fitId: active ? fitId : valueId,
+      active,
+      ranks,
+      weights,
+      weakest
+    };
+  }
+
+  // src/engine/durability.ts
+  var DURABILITY_WEIGHTS = [5, 4, 3];
+  var DURABILITY_K = 1.25;
+  var DURABILITY_W = 0.2;
+  var DURABILITY_OVERRIDE_GAP = 15;
+  function weightedHistory(priorGP) {
+    if (!priorGP.length) return null;
+    let num3 = 0;
+    let den = 0;
+    for (let i = 0; i < priorGP.length && i < DURABILITY_WEIGHTS.length; i++) {
+      const gp = priorGP[i];
+      if (typeof gp !== "number" || !Number.isFinite(gp) || gp < 0) continue;
+      const weight = DURABILITY_WEIGHTS[i];
+      num3 += weight * gp;
+      den += weight;
+    }
+    return den > 0 ? num3 / den : null;
+  }
+  function durabilityDetail(input, options = {}) {
+    const k = options.k ?? DURABILITY_K;
+    const w = options.w ?? DURABILITY_W;
+    const espnGP = Number.isFinite(input.espnGP) && input.espnGP > 0 ? input.espnGP : 0;
+    if (input.onTeam === false) {
+      return { expectedGP: 0, histGP: null, blendGP: 0, overrideApplied: false, seasons: 0 };
+    }
+    const usable = input.priorGP.filter(
+      (gp) => typeof gp === "number" && Number.isFinite(gp) && gp >= 0
+    );
+    const raw = weightedHistory(usable);
+    if (raw === null) {
+      return {
+        expectedGP: clampGames(espnGP),
+        histGP: null,
+        blendGP: espnGP,
+        overrideApplied: false,
+        seasons: 0
+      };
+    }
+    const seasons = usable.length;
+    const shrink = k / (k + seasons);
+    const histGP = (1 - shrink) * raw + shrink * input.leagueMeanGP;
+    const blendGP = w * espnGP + (1 - w) * histGP;
+    const overrideApplied = espnGP > 0 && espnGP <= histGP - DURABILITY_OVERRIDE_GAP;
+    const expected = overrideApplied ? Math.min(blendGP, espnGP) : blendGP;
+    return {
+      expectedGP: clampGames(expected),
+      histGP,
+      blendGP,
+      overrideApplied,
+      seasons
+    };
+  }
+  function expectedGames(input, options = {}) {
+    return durabilityDetail(input, options).expectedGP;
+  }
+  function clampGames(gp) {
+    if (!Number.isFinite(gp) || gp < 0) return 0;
+    return Math.min(gp, GP_MAX - 4);
   }
 
   // src/engine/mockDraft.ts

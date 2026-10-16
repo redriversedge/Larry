@@ -67,6 +67,13 @@ export interface MockPlayer {
   larryRank: number | null;
   // Per-game projection, REB/AST/STL/BLK/PTS. From stats.projectedRate.
   perGame: CategoryVector;
+  // Larry's board value in z-sum units (durantScore / DURANT_SCALE), so it
+  // is commensurate with the team-fit bonus. Null when the player has no
+  // evidence; such a player is never recommended.
+  larryValue?: number | null;
+  // Games the player is expected to play. ESPN's projection today; the
+  // durability model when Part A ships.
+  expectedGP?: number;
 }
 
 export type RankForm = "linear" | "log";

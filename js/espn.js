@@ -1896,12 +1896,38 @@ var ESPNSync = (function() {
     };
   }
 
+  // Live draft state: the picks made so far in the CURRENT season's draft.
+  // Read-only. Larry never submits a pick to ESPN.
+  async function fetchLiveDraft() {
+    var data = await fetchESPN(['mDraftDetail']);
+    var detail = data.draftDetail || {};
+    var raw = detail.picks || [];
+
+    var picks = [];
+    for (var i = 0; i < raw.length; i++) {
+      var p = raw[i];
+      // Unfilled slots come back with playerId -1 or 0. They are the rest
+      // of the draft, not picks.
+      if (!p.playerId || p.playerId <= 0) continue;
+      if (!p.teamId) continue;
+      picks.push([p.overallPickNumber, p.teamId, p.playerId]);
+    }
+    picks.sort(function(a, b) { return a[0] - b[0]; });
+
+    return {
+      picks: picks,
+      drafted: !!detail.drafted,
+      inProgress: !!detail.inProgress
+    };
+  }
+
   var _lastLeagueData = null;
 
   return {
     fetchLeague: fetchLeague,
     fetchDraftHistory: fetchDraftHistory,
     fetchDraftOrder: fetchDraftOrder,
+    fetchLiveDraft: fetchLiveDraft,
     loadDraftHistory: loadDraftHistory,
     saveDraftHistory: saveDraftHistory,
     clearDraftHistory: clearDraftHistory,

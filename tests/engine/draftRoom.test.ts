@@ -25,6 +25,9 @@ interface Harness {
   state: any;
   store: Map<string, string>;
   renders: () => number;
+  // Live-draft control: what the next poll returns, and how to run timers.
+  live: { picks: number[][]; drafted: boolean; fail: string | null; calls: number };
+  timers: { run: () => void; count: () => number };
 }
 
 function makePlayers(count: number): any[] {
@@ -37,9 +40,14 @@ function makePlayers(count: number): any[] {
       defaultPositionId: (i % 5) + 1,
       proTeamId: (i % 30) + 1,
       durantRank: i + 1,
+      // The app's Engines.ensureDURANT writes this; the harness stubs that
+      // out, so set it here. Without it larryValue is null and the fit
+      // card degrades to the single "Larry's pick" card.
+      durantScore: (count - i) / 10,
       espnAdp: i + 1,
       espnDraftRank: i + 1,
       stats: {
+        projectedGP: 60 + (i % 20),
         projectedRate: {
           REB: 2 + 8 * quality,
           AST: 1 + 6 * quality,
@@ -100,7 +108,21 @@ function load(
   const ownersByTeam: Record<string, string> = {};
   for (let t = 1; t <= TEAMS; t++) ownersByTeam[String(t)] = "M" + t;
 
+  const live = { picks: [] as number[][], drafted: false, fail: null as string | null, calls: 0 };
+
   const ESPNSync = {
+    fetchLiveDraft: () => {
+      live.calls++;
+      if (live.fail) {
+        const err: Error & { status?: number } = new Error(live.fail);
+        return Promise.reject(err);
+      }
+      return Promise.resolve({
+        picks: live.picks.map((p) => p.slice()),
+        drafted: live.drafted,
+        inProgress: !live.drafted,
+      });
+    },
     fetchDraftOrder: () =>
       Promise.resolve({
         order: snakeOrder(),
@@ -131,10 +153,48 @@ function load(
     return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve(null) });
   };
 
+  // Timers. A zero delay runs inline, which is what the availability
+  // chunks use and what lets a test read a settled page. A real delay is
+  // queued, because the live-draft poller re-arms itself and an inline
+  // timer would recurse forever.
+  let nextTimerId = 1;
+  const pendingTimeouts = new Map<number, () => void>();
+  const intervals = new Map<number, () => void>();
+  const setTimeoutStub = (cb: () => void, ms?: number): number => {
+    if (!ms) { cb(); return 0; }
+    const id = nextTimerId++;
+    pendingTimeouts.set(id, cb);
+    return id;
+  };
+  const clearTimeoutStub = (id: number): void => { pendingTimeouts.delete(id); };
+  const setIntervalStub = (cb: () => void): number => {
+    const id = nextTimerId++;
+    intervals.set(id, cb);
+    return id;
+  };
+  const clearIntervalStub = (id: number): void => { intervals.delete(id); };
+  const runTimers = (): void => {
+    const due = Array.from(pendingTimeouts.entries());
+    pendingTimeouts.clear();
+    for (const [, cb] of due) cb();
+    for (const [, cb] of Array.from(intervals.entries())) cb();
+  };
+  const timerCount = (): number => pendingTimeouts.size + intervals.size;
+
+  const listeners: Record<string, Array<() => void>> = {};
+  const documentStub = {
+    getElementById: () => null,
+    hidden: false,
+    addEventListener: (event: string, cb: () => void) => {
+      (listeners[event] = listeners[event] || []).push(cb);
+    },
+  };
+
   const names = [
     "window", "S", "localStorage", "document", "console", "ESPNSync", "Engines",
     "esc", "fmt", "ESPN_POS_MAP", "ESPN_TEAM_MAP", "DEFAULT_CAT_COLORS",
     "openPlayerPopup", "setTimeout", "clearTimeout", "fetch",
+    "setInterval", "clearInterval",
   ];
   const fn = new Function(
     ...names,
@@ -148,7 +208,7 @@ function load(
     sandbox,
     state,
     localStorage,
-    { getElementById: () => null },
+    documentStub,
     console,
     ESPNSync,
     { ensureDURANT: () => {} },
@@ -160,14 +220,21 @@ function load(
     { 1: "ATL", 7: "DEN", 13: "LAL" },
     { PTS: "#3b82f6", REB: "#f97316", AST: "#22c55e", STL: "#a855f7", BLK: "#ef4444" },
     () => {},
-    // Synchronous, so the availability chunks run inline and the page is
-    // fully settled by the time a test reads it.
-    (cb: () => void) => { cb(); return 0; },
-    () => {},
+    setTimeoutStub,
+    clearTimeoutStub,
     fetchStub,
+    setIntervalStub,
+    clearIntervalStub,
   );
 
-  return { ...api, state, store, renders: () => renderCount };
+  return {
+    ...api,
+    state,
+    store,
+    renders: () => renderCount,
+    live,
+    timers: { run: runTimers, count: timerCount },
+  };
 }
 
 // The draft order and the ADP file both arrive by promise, so the first
@@ -419,6 +486,214 @@ describe("Draft Room: in-app model check", () => {
     await ready(h);
     h.DraftRoom.modelCheck();
     expect(h.DraftRoom.renderModelCheckCard()).toContain("at least two drafts");
+  });
+});
+
+describe("Draft Room: live draft sync", () => {
+  // Pick ids the harness's board knows about: makePlayers starts at 2000.
+  const P = (n: number): number => 2000 + n;
+
+  it("pulls the real picks in and makes the board read-only", async () => {
+    const h = load(baseState());
+    await ready(h);
+
+    h.live.picks = [[1, 1, P(5)], [2, 2, P(9)]];
+    h.DraftRoom.toggleFollow();
+    await new Promise((r) => setTimeout(r, 0));
+
+    const html = h.renderDraftRoom();
+    expect(html).toContain("Following the real draft");
+    expect(html).toContain("read-only");
+    // Sim, Undo and Auto-draft are gone while ESPN drives the board.
+    expect(html).not.toContain("Sim to my pick");
+    expect(html).not.toContain("Auto-draft me");
+
+    const saved = JSON.parse(h.store.get("larry_mock_draft") as string);
+    expect(saved.picks.length).toBe(2);
+    expect(saved.picks[0][2]).toBe(P(5));
+  });
+
+  it("catches up when joining mid-draft, in a single poll", async () => {
+    const h = load(baseState());
+    await ready(h);
+
+    h.live.picks = Array.from({ length: 18 }, (_, i) => [i + 1, ((i % TEAMS) + 1), P(i)]);
+    h.DraftRoom.toggleFollow();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(JSON.parse(h.store.get("larry_mock_draft") as string).picks.length).toBe(18);
+    expect(h.live.calls).toBe(1);
+  });
+
+  it("takes two picks landing in one poll", async () => {
+    const h = load(baseState());
+    await ready(h);
+    h.live.picks = [[1, 1, P(5)]];
+    h.DraftRoom.toggleFollow();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(JSON.parse(h.store.get("larry_mock_draft") as string).picks.length).toBe(1);
+
+    h.live.picks = [[1, 1, P(5)], [2, 2, P(9)], [3, 3, P(11)]];
+    h.timers.run();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(JSON.parse(h.store.get("larry_mock_draft") as string).picks.length).toBe(3);
+  });
+
+  it("keeps a pick of a player who is not on Larry's board, so the count stays right", async () => {
+    const h = load(baseState());
+    await ready(h);
+    // 999999 is nobody the board knows.
+    h.live.picks = [[1, 1, P(5)], [2, 2, 999999], [3, 3, P(9)]];
+    h.DraftRoom.toggleFollow();
+    await new Promise((r) => setTimeout(r, 0));
+
+    const saved = JSON.parse(h.store.get("larry_mock_draft") as string);
+    expect(saved.picks.length).toBe(3);
+    expect(saved.picks[1][2]).toBe(999999);
+    // The page still renders, with a placeholder rather than a crash.
+    const html = h.renderDraftRoom();
+    expect(html).toContain("Round 1, pick 4");
+  });
+
+  it("shows the on-the-clock banner and the run-up to it", async () => {
+    const h = load(baseState());
+    await ready(h);
+    // The user is team 3 and picks 3rd overall, so after one real pick
+    // there is exactly one pick to go.
+    h.live.picks = [[1, 1, P(5)]];
+    h.DraftRoom.toggleFollow();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(h.renderDraftRoom()).toContain("Your pick in 1");
+
+    h.live.picks = [[1, 1, P(5)], [2, 2, P(9)]];
+    h.timers.run();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(h.renderDraftRoom()).toContain("You are on the clock");
+  });
+
+  it("backs off on a network error and keeps the last state", async () => {
+    const h = load(baseState());
+    await ready(h);
+    h.live.picks = [[1, 1, P(5)]];
+    h.DraftRoom.toggleFollow();
+    await new Promise((r) => setTimeout(r, 0));
+
+    h.live.fail = "network down";
+    h.timers.run();
+    await new Promise((r) => setTimeout(r, 0));
+
+    const html = h.renderDraftRoom();
+    expect(html).toContain("network down");
+    expect(html).toMatch(/Retrying in (8|15|30)s/);
+    // The pick we already had survives the failure.
+    expect(JSON.parse(h.store.get("larry_mock_draft") as string).picks.length).toBe(1);
+  });
+
+  it("stops polling and reports completion when the draft finishes", async () => {
+    const h = load(baseState());
+    await ready(h);
+    h.live.picks = [[1, 1, P(5)]];
+    h.live.drafted = true;
+    h.DraftRoom.toggleFollow();
+    await new Promise((r) => setTimeout(r, 0));
+
+    const before = h.live.calls;
+    h.timers.run();
+    await new Promise((r) => setTimeout(r, 0));
+    // No further polling once ESPN says the draft is done.
+    expect(h.live.calls).toBe(before);
+  });
+
+  it("turns off into a normal mock seeded from the real picks", async () => {
+    const h = load(baseState());
+    await ready(h);
+    h.live.picks = [[1, 1, P(5)], [2, 2, P(9)]];
+    h.DraftRoom.toggleFollow();
+    await new Promise((r) => setTimeout(r, 0));
+    const seedWhileFollowing = JSON.parse(h.store.get("larry_mock_draft") as string).seed;
+
+    h.DraftRoom.toggleFollow();
+    const after = JSON.parse(h.store.get("larry_mock_draft") as string);
+    // Real picks kept, fresh seed, controls back.
+    expect(after.picks.length).toBe(2);
+    expect(after.seed).not.toBe(seedWhileFollowing);
+    const html = h.renderDraftRoom();
+    expect(html).toContain("Sim to my pick");
+    expect(html).toContain("Follow the real draft");
+  });
+
+  it("survives a reload mid-draft", async () => {
+    const h = load(baseState());
+    await ready(h);
+    h.live.picks = [[1, 1, P(5)], [2, 2, P(9)]];
+    h.DraftRoom.toggleFollow();
+    await new Promise((r) => setTimeout(r, 0));
+    const saved = h.store.get("larry_mock_draft") as string;
+
+    const reloaded = load(baseState());
+    reloaded.store.set("larry_mock_draft", saved);
+    const html = await ready(reloaded);
+    expect(html).toContain("On the clock: Team 3");
+  });
+
+  it("replays a stored draft through the same path", async () => {
+    const league = makeLeague({ seasons: [2025, 2026], strategies: {} });
+    const h = load(baseState(), { history: league.history, adp: league.adp });
+    await ready(h);
+
+    h.DraftRoom.startReplay();
+    const first = h.renderDraftRoom();
+    expect(first).toContain("Replaying the 2026 draft");
+
+    // Each tick advances by one pick, through applyRealPicks.
+    h.timers.run();
+    const after = JSON.parse(h.store.get("larry_mock_draft") as string);
+    expect(after.picks.length).toBeGreaterThan(0);
+    expect(h.renderDraftRoom()).toContain("Replaying the 2026 draft");
+
+    h.DraftRoom.stopReplay();
+    expect(h.renderDraftRoom()).toContain("Follow the real draft");
+  });
+});
+
+describe("Draft Room: best value and best fit", () => {
+  it("shows one card before the user has three picks", async () => {
+    const h = load(baseState());
+    await ready(h);
+    h.DraftRoom.simToMyPick();
+    const html = h.renderDraftRoom();
+    expect(html).toContain("Larry's pick");
+    expect(html).not.toContain("Best fit");
+  });
+
+  it("shows value and fit once the roster says something", async () => {
+    const h = load(baseState());
+    await ready(h);
+    // Run the user four picks into the draft, then stop on the clock.
+    // Not via auto-draft: that simulates to the END of the draft, so the
+    // user would never be on the clock at the final render.
+    for (let i = 0; i < 4; i++) {
+      h.DraftRoom.simToMyPick();
+      h.DraftRoom.autoPickForUser();
+    }
+    h.DraftRoom.simToMyPick();
+
+    const html = h.renderDraftRoom();
+    // Either the two cards differ, or they agree and say so. Both are
+    // valid; what must not happen is the fit logic never engaging.
+    const twoCards = html.indexOf("Best fit") >= 0;
+    const agreed = html.indexOf("Best value and best fit") >= 0;
+    expect(twoCards || agreed).toBe(true);
+    if (twoCards) {
+      expect(html).toContain("Best value");
+      // Two distinct Draft buttons, one per card.
+      const buttons = html.match(/DraftRoom\.draftPlayer\((\d+)\)">Draft/g) || [];
+      expect(buttons.length).toBe(2);
+      expect(new Set(buttons).size).toBe(2);
+      // The "why" line only appears when the user is actually weak
+      // somewhere, which depends on how the sim happened to fall. Its
+      // content is covered by tests/engine/draftTeamFit.test.ts.
+    }
   });
 });
 
