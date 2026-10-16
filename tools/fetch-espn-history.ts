@@ -18,7 +18,19 @@ const OUT = path.join(ROOT, "tests/fixtures/projections/espn-history.json");
 
 // ESPN's seasonId is the calendar year the season ENDS in, so 2026 is the
 // 2025-26 season. 2027 is the season about to start: projections only.
-const SEASONS = [2023, 2024, 2025, 2026, 2027];
+//
+// Back to 2020 so the durability model (src/engine/durability.ts) can read
+// three prior seasons of actual games for any board year it is backtested
+// on: a 2024 board needs 2021 to 2023, and the fit runs on 2024 to 2026.
+//
+// Two facts worth recording, both verified 2026-10-15 against the named
+// players in docs/RANKINGS_V3_AND_LIVE_DRAFT_SPEC.md:
+//   - Every one of these seasons returns a full ~1000-player actual line.
+//   - For a FINISHED season, statSourceId 1 is still ESPN's PRESEASON
+//     projection, not a rest-of-season update. Zion's 2025 line reads
+//     projected 64, actual 30, which is exactly what ESPN published before
+//     that season. That is what makes a preseason backtest possible at all.
+const SEASONS = [2020, 2021, 2022, 2023, 2024, 2025, 2026, 2027];
 const LIMIT = 1000;
 
 // Mirrors ESPN_STAT_MAP in js/core.js for the ids used here.
