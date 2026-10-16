@@ -25,15 +25,18 @@ import {
   type DraftHistory,
   type ManagerProfile,
 } from "./draftProfiles";
+import { MOCK_TOP_PICK_SIMS, MOCK_TOP_PICK_WINDOW } from "./constants";
 import {
   DEFAULT_MOCK_PARAMS,
   pickUtilities,
   prepareBoard,
   softmax,
+  topPickRate,
   type MockDraftConfig,
   type MockParams,
   type MockPlayer,
   type MockState,
+  type RankForm,
 } from "./mockDraft";
 
 // Large enough that every available player is scored, so the likelihood is
@@ -199,6 +202,24 @@ export function evaluateDraft(
   };
 }
 
+// The top-pick acceptance gate, measured on a historical season's board and
+// draft order. Lives here because it needs the same board-building logic as
+// the likelihood, so the gate and the fit always see the same players.
+export function topPickRateForSeason(
+  history: DraftHistory,
+  seasonId: number,
+  adpLookup: Map<string, Map<string, number>>,
+  profiles: Record<string, ManagerProfile>,
+  params: MockParams,
+  sims: number = MOCK_TOP_PICK_SIMS,
+  window: number = MOCK_TOP_PICK_WINDOW,
+): number {
+  const board = buildHistoricalBoard(history, seasonId, adpLookup);
+  const config = configForSeason(history, seasonId, board, profiles, params);
+  if (!config) return 0;
+  return topPickRate(prepareBoard(config), config, sims, window);
+}
+
 export function combineEvals(results: EvalResult[]): EvalResult {
   let picks = 0;
   let logLik = 0;
@@ -239,6 +260,34 @@ export interface FitOptions {
   // baseline, which refits tau with every profile term switched off.
   rankOnly?: boolean;
   iterations?: number;
+  // Which rank form to fit. The two live on completely different tau
+  // scales, so each gets its own starting point below.
+  rankForm?: RankForm;
+}
+
+// tau means different things in the two forms: linear tau is in ADP slots
+// (a few to a few dozen), log tau is in log-slots (ln(400) is only 6, so
+// sensible values are fractions). Starting the log fit at the linear
+// default would begin 20x too flat and coordinate descent would spend its
+// whole budget walking back.
+function startingParams(form: RankForm, rankOnly: boolean): MockParams {
+  const base: MockParams = { ...DEFAULT_MOCK_PARAMS, rankForm: form };
+  if (form === "log") {
+    base.tauEarly = 0.3;
+    base.tauMid = 0.5;
+    base.tauLate = 0.9;
+  } else {
+    base.tauEarly = 2;
+    base.tauMid = 3.33;
+    base.tauLate = 6;
+  }
+  if (rankOnly) {
+    base.beta = 0;
+    base.lambda = 0;
+    base.gamma = 0;
+    base.alpha = 0;
+  }
+  return base;
 }
 
 export interface FitResult {
@@ -264,13 +313,8 @@ export function fitMockDraft(
   const profiles = profilesBySeason(history, fitSeasons, adp);
   const trace: string[] = [];
 
-  const params: MockParams = { ...DEFAULT_MOCK_PARAMS };
-  if (options.rankOnly) {
-    params.beta = 0;
-    params.lambda = 0;
-    params.gamma = 0;
-    params.alpha = 0;
-  }
+  const form = options.rankForm ?? DEFAULT_MOCK_PARAMS.rankForm;
+  const params: MockParams = startingParams(form, !!options.rankOnly);
 
   const score = (candidate: MockParams): EvalResult =>
     combineEvals(

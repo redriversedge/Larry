@@ -30,11 +30,17 @@ var LarryEngine = (() => {
     MOCK_AVAIL_TOP_N: () => MOCK_AVAIL_TOP_N,
     MOCK_CAN_WAIT_THRESHOLD: () => MOCK_CAN_WAIT_THRESHOLD,
     MOCK_FITTED: () => MOCK_FITTED,
+    MOCK_RANK_FORM: () => MOCK_RANK_FORM,
+    MOCK_SCARCE_THRESHOLD: () => MOCK_SCARCE_THRESHOLD,
+    MOCK_TOP_PICK_SHARE: () => MOCK_TOP_PICK_SHARE,
+    MOCK_TOP_PICK_SIMS: () => MOCK_TOP_PICK_SIMS,
+    MOCK_TOP_PICK_WINDOW: () => MOCK_TOP_PICK_WINDOW,
     PRESEASON_GP_REFERENCE: () => PRESEASON_GP_REFERENCE,
     PRESEASON_LONG_TERM_GP: () => PRESEASON_LONG_TERM_GP,
     PRESEASON_SUSPECT_GP: () => PRESEASON_SUSPECT_GP,
     applyHaircut: () => applyHaircut,
     applyPreseasonDiscount: () => applyPreseasonDiscount,
+    availabilityTargets: () => availabilityTargets,
     availableIdsFor: () => availableIdsFor,
     bestAvailableByLarry: () => bestAvailableByLarry,
     buildAdpLookup: () => buildAdpLookup,
@@ -58,6 +64,7 @@ var LarryEngine = (() => {
     fitMockDraft: () => fitMockDraft,
     gScore: () => gScore,
     gVector: () => gVector,
+    larryPickAdvice: () => larryPickAdvice,
     leagueReachMedians: () => leagueReachMedians,
     median: () => median,
     mixSeed: () => mixSeed,
@@ -77,6 +84,7 @@ var LarryEngine = (() => {
     projectMinutesPerGame: () => projectMinutesPerGame,
     projectPlayer: () => projectPlayer,
     rankOf: () => rankOf,
+    rankUtility: () => rankUtility,
     reachShrunk: () => reachShrunk,
     recommend: () => recommend,
     rosterTotal: () => rosterTotal,
@@ -90,6 +98,7 @@ var LarryEngine = (() => {
     teamNeedVector: () => teamNeedVector,
     toPlayerProjection: () => toPlayerProjection,
     topN: () => topN,
+    topPickRate: () => topPickRate,
     zVector: () => zVector
   });
 
@@ -161,13 +170,17 @@ var LarryEngine = (() => {
   var DRAFT_REACH_OFTEN_MEDIAN = 12;
   var DRAFT_REACH_BOARD_MEDIAN = 0;
   var MOCK_FITTED = false;
-  var MOCK_TAU_EARLY = 2;
-  var MOCK_TAU_MID = 3.33;
-  var MOCK_TAU_LATE = 6;
-  var MOCK_BETA = 0.04;
-  var MOCK_LAMBDA = 4;
-  var MOCK_GAMMA = 3;
-  var MOCK_ALPHA = 0;
+  var MOCK_RANK_FORM = "log";
+  var MOCK_TOP_PICK_WINDOW = 3;
+  var MOCK_TOP_PICK_SHARE = 0.95;
+  var MOCK_TOP_PICK_SIMS = 500;
+  var MOCK_TAU_EARLY = 0.4;
+  var MOCK_TAU_MID = 0.67;
+  var MOCK_TAU_LATE = 1.2;
+  var MOCK_BETA = 0;
+  var MOCK_LAMBDA = 1.5;
+  var MOCK_GAMMA = 1;
+  var MOCK_ALPHA = 0.28;
   var MOCK_REACH_SHRINK_K = 15;
   var MOCK_WEIGHT_STRONG = 1;
   var MOCK_WEIGHT_MODERATE = 0.5;
@@ -181,6 +194,7 @@ var LarryEngine = (() => {
   var MOCK_AVAIL_CHUNK = 50;
   var MOCK_AVAIL_TOP_N = 40;
   var MOCK_CAN_WAIT_THRESHOLD = 0.7;
+  var MOCK_SCARCE_THRESHOLD = 0.5;
   var ESPN_POSITION_ID_TO_NAME = {
     1: "PG",
     2: "SG",
@@ -1206,8 +1220,13 @@ var LarryEngine = (() => {
     beta: MOCK_BETA,
     lambda: MOCK_LAMBDA,
     gamma: MOCK_GAMMA,
-    alpha: MOCK_ALPHA
+    alpha: MOCK_ALPHA,
+    rankForm: MOCK_RANK_FORM
   };
+  function rankUtility(rank, tau, form) {
+    if (form === "log") return -Math.log(Math.max(rank, 1)) / tau;
+    return -rank / tau;
+  }
   function mulberry32(seed) {
     let a = seed >>> 0;
     return function next() {
@@ -1292,6 +1311,15 @@ var LarryEngine = (() => {
     }
     return -1;
   }
+  function availabilityTargets(order, teamId, fromIndex) {
+    const upcoming = myUpcomingPicks(order, teamId, fromIndex);
+    const userIsOnTheClock = upcoming[0] === fromIndex;
+    const offset = userIsOnTheClock ? 1 : 0;
+    return {
+      first: upcoming[offset] ?? null,
+      second: upcoming[offset + 1] ?? null
+    };
+  }
   function myUpcomingPicks(order, teamId, fromIndex) {
     const out = [];
     for (let i = Math.max(0, fromIndex); i < order.length; i++) {
@@ -1319,7 +1347,7 @@ var LarryEngine = (() => {
   function tauFor(profile, phase, leagueReach, params) {
     const base = phase === "early" ? params.tauEarly : phase === "mid" ? params.tauMid : params.tauLate;
     const tau = base * Math.exp(params.beta * reachShrunk(profile, phase, leagueReach));
-    return Math.min(Math.max(tau, 0.01), 500);
+    return Math.min(Math.max(tau, 1e-6), 500);
   }
   function overloadFor(state, board, config, teamId, posId) {
     let count = 0;
@@ -1369,7 +1397,7 @@ var LarryEngine = (() => {
           }
         }
       }
-      const rankTerm = -entry.rank / tau;
+      const rankTerm = rankUtility(entry.rank, tau, params.rankForm);
       const catTerm = params.lambda * categoryTerm;
       const overloadTerm = -params.gamma * overloadFor(state, board, config, teamId, entry.player.posId);
       const affTerm = params.alpha * affinityFor(profile, entry.player.proTeamId);
@@ -1461,14 +1489,29 @@ var LarryEngine = (() => {
     }
     return { state: { seed: state.seed, picks }, made };
   }
+  function topPickRate(board, config, sims, window) {
+    const topId = board.rankOrder[0];
+    if (topId === void 0) return 0;
+    let hits = 0;
+    for (let s = 0; s < sims; s++) {
+      const result = simulateUntil(board, config, { seed: s + 1, picks: [] }, null, window);
+      for (const pick of result.state.picks) {
+        if (pick[2] === topId) {
+          hits++;
+          break;
+        }
+      }
+    }
+    return sims > 0 ? hits / sims : 0;
+  }
   function emptyAvailabilityCounts() {
     return { sims: 0, atNext: /* @__PURE__ */ new Map(), atSecond: /* @__PURE__ */ new Map() };
   }
   function runAvailabilitySims(board, config, state, myTeamId, simOffset, simCount, counts) {
     const fromIndex = state.picks.length;
-    const upcoming = myUpcomingPicks(config.order, myTeamId, fromIndex);
-    const firstTarget = upcoming[0];
-    const secondTarget = upcoming[1];
+    const targets = availabilityTargets(config.order, myTeamId, fromIndex);
+    const firstTarget = targets.first === null ? void 0 : targets.first;
+    const secondTarget = targets.second === null ? void 0 : targets.second;
     if (firstTarget === void 0) return counts;
     const baseAvailable = availableIdsFor(board, state);
     for (let s = 0; s < simCount; s++) {
@@ -1480,18 +1523,18 @@ var LarryEngine = (() => {
         if (index === firstTarget) {
           for (const id of available) counts.atNext.set(id, (counts.atNext.get(id) || 0) + 1);
           if (secondTarget === void 0) break;
-          const mine = firstAvailableByRank(board, available);
-          if (mine !== null) {
-            available.delete(mine);
-            picks.push([index + 1, myTeamId, mine]);
-          }
-          continue;
-        }
-        if (index === secondTarget) {
+        } else if (index === secondTarget) {
           for (const id of available) {
             counts.atSecond.set(id, (counts.atSecond.get(id) || 0) + 1);
           }
           break;
+        }
+        if (config.order[index] === myTeamId) {
+          const mine = firstAvailableByRank(board, available);
+          if (mine === null) break;
+          available.delete(mine);
+          picks.push([index + 1, myTeamId, mine]);
+          continue;
         }
         const working = { seed: simSeed, picks };
         const decision = decidePick(
@@ -1515,6 +1558,30 @@ var LarryEngine = (() => {
   function firstAvailableByRank(board, available) {
     for (const id of board.rankOrder) if (available.has(id)) return id;
     return null;
+  }
+  function larryPickAdvice(board, available, shares) {
+    const topId = bestAvailableByLarry(board, available);
+    const none = { recommendId: topId, waitId: null, waitShare: 0 };
+    if (topId === null || !shares || !shares.size) return none;
+    const topShare = shares.get(topId);
+    if (topShare === void 0 || topShare < MOCK_CAN_WAIT_THRESHOLD) return none;
+    let scarceId = null;
+    let scarceRank = Infinity;
+    for (const id of available) {
+      if (id === topId) continue;
+      const share = shares.get(id);
+      if (share === void 0 || share >= MOCK_SCARCE_THRESHOLD) continue;
+      const entry = board.byId.get(id);
+      if (!entry) continue;
+      const rank = entry.player.larryRank;
+      if (rank === null || !Number.isFinite(rank) || rank <= 0) continue;
+      if (rank < scarceRank) {
+        scarceRank = rank;
+        scarceId = id;
+      }
+    }
+    if (scarceId === null) return none;
+    return { recommendId: scarceId, waitId: topId, waitShare: topShare };
   }
   function bestAvailableByLarry(board, available) {
     let best = null;
@@ -1676,19 +1743,33 @@ var LarryEngine = (() => {
     }
     return out;
   }
+  function startingParams(form, rankOnly) {
+    const base = { ...DEFAULT_MOCK_PARAMS, rankForm: form };
+    if (form === "log") {
+      base.tauEarly = 0.3;
+      base.tauMid = 0.5;
+      base.tauLate = 0.9;
+    } else {
+      base.tauEarly = 2;
+      base.tauMid = 3.33;
+      base.tauLate = 6;
+    }
+    if (rankOnly) {
+      base.beta = 0;
+      base.lambda = 0;
+      base.gamma = 0;
+      base.alpha = 0;
+    }
+    return base;
+  }
   var TAU_KEYS = ["tauEarly", "tauMid", "tauLate"];
   var TERM_KEYS = ["beta", "lambda", "gamma", "alpha"];
   function fitMockDraft(history, fitSeasons, adp, options = {}) {
     const adpLookup = buildAdpLookup(adp);
     const profiles = profilesBySeason(history, fitSeasons, adp);
     const trace = [];
-    const params = { ...DEFAULT_MOCK_PARAMS };
-    if (options.rankOnly) {
-      params.beta = 0;
-      params.lambda = 0;
-      params.gamma = 0;
-      params.alpha = 0;
-    }
+    const form = options.rankForm ?? DEFAULT_MOCK_PARAMS.rankForm;
+    const params = startingParams(form, !!options.rankOnly);
     const score = (candidate) => combineEvals(
       fitSeasons.map(
         (seasonId) => evaluateDraft(

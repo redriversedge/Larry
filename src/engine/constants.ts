@@ -256,86 +256,123 @@ export const DRAFT_REACH_BOARD_MEDIAN = 0;
 // these managers will DO in the ESPN draft room, which is not a claim about
 // what the right pick is.
 //
-// MOCK_FITTED is false while these are the spec's starting values rather
-// than the output of tools/fit-mock-draft.ts. The UI footer reads it and
-// says so. Flip it to true in the same commit that replaces the numbers,
-// and record the measured log-likelihood and top-5 hit rate here.
+// Fitted on the owner's real draft history, or not.
+//
+// Currently FALSE, and the state is genuinely mixed. beta, lambda, gamma
+// and alpha below are real fitted values from the owner's 2019 to 2025
+// drafts. The three taus are not: that fit used the LINEAR rank form, and
+// linear and log taus do not convert, so the taus are calibrated against
+// the MOCK_TOP_PICK_* acceptance gate instead.
+//
+// For reference, the owner's linear fit, held out on 2026:
+//
+//   shipped defaults at the time   mean logLik  -7.15
+//   fitted linear                               -3.69
+//   rank-only refit                             -3.72
+//
+// so the linear model beat rank-only by 0.03 nats while putting the ADP #1
+// player first in only 19% of drafts. Rerunning the fit with the log form
+// is what flips this flag; until then the Draft Room footer says the model
+// is not fully fitted, which is the truth.
 export const MOCK_FITTED = false;
 
-// Softmax temperature per phase, in units of ESPN ADP slots. Higher means
-// more willing to leave the board. It rises through the draft because late
-// rounds are where personal preference actually shows up; round 1 is close
-// to consensus for everyone.
+// How the rank term enters the utility: -rank/tau or -ln(rank)/tau.
 //
-// These are the spec's provisional 6 / 10 / 18 divided by 3. The spec's raw
-// values are too hot to be a draft. Measured over 400 simulated drafts on a
+// The LOG form is what ships, and the reason is that one linear tau cannot
+// describe a draft. Under -rank/tau the gap between consecutive players is
+// the same everywhere on the board: 1/tau between ADP 1 and 2, and 1/tau
+// between ADP 100 and 101. But a real draft is nearly deterministic at the
+// top and nearly a free-for-all by round 10. Fitting one tau to both ends
+// splits the difference and gets both wrong, which is exactly what the
+// owner's fit on the real 2019 to 2025 drafts showed: held-out 2026 mean
+// log-likelihood -3.69 fitted against -3.72 for a rank-only refit, a gain
+// of 0.03 nats, while the ADP #1 player went first in only 19% of drafts.
+//
+// Under -ln(rank)/tau the gap is ln(2) - ln(1) = 0.69 at the top of the
+// board and ln(101) - ln(100) = 0.01 at pick 100. Same single parameter,
+// but the shape now matches how drafts actually behave: consensus early,
+// loose late. MOCK_TOP_PICK_* below is the acceptance test that pins it.
+export const MOCK_RANK_FORM: "linear" | "log" = "log";
+
+// Acceptance test on the shipped parameters, enforced by
+// tests/engine/mockDraft.test.ts and reported by tools/fit-mock-draft.ts.
+// The ADP #1 player has to go inside the first MOCK_TOP_PICK_WINDOW picks
+// in at least MOCK_TOP_PICK_SHARE of simulated drafts. This replaced a
+// weaker "not still there at pick 10" check, which the linear form could
+// pass while still letting the consensus number one slide to pick 6.
+export const MOCK_TOP_PICK_WINDOW = 3;
+export const MOCK_TOP_PICK_SHARE = 0.95;
+export const MOCK_TOP_PICK_SIMS = 500;
+
+// Softmax temperature per phase. Higher means more willing to leave the
+// board. It rises through the draft because late rounds are where personal
+// preference shows up; round 1 is close to consensus for everyone.
+//
+// These are LOG-form taus and are not comparable to linear ones: the units
+// are log-slots, and ln(400) is only 6, so sensible values are fractions.
+// The 1 : 1.67 : 3 ratio between phases is the spec's.
+//
+// Calibrated against MOCK_TOP_PICK_*, 500 simulated drafts per row on a
 // synthetic board with flat profiles:
 //
-//   tau_early   P(#1 goes 1st)   P(#1 alive at pick 10)   mean |rank - pick|
-//   6.00        0.165            0.1075                   5.5
-//   3.00        0.290            0.0025                   2.8
-//   2.00        0.370            0.0000                   1.9
-//   1.50        0.485            0.0000                   1.4
+//   form     tauEarly   P(ADP #1 goes inside the first 3 picks)
+//   linear   4.75         52.2%     <- the owner's fitted linear value
+//   linear   2.00         87.2%     <- the previously shipped value
+//   linear   1.00         99.0%
+//   log      0.60         91.0%
+//   log      0.45         98.2%
+//   log      0.40         99.2%     <- shipped
+//   log      0.35         99.6%
 //
-// At 6 the consensus number one slides out of the top nine in 11% of
-// drafts, which is not a thing that happens and which the spec's own
-// acceptance test in s8 rules out. At 2 the board drifts by about two slots
-// through the first two rounds, which is what a real draft looks like, and
-// there is room left for profiles to add their own deviation on top.
+// The linear form cannot satisfy the gate anywhere near its own fitted
+// optimum, which is the whole argument for the log form. Driving linear tau
+// down to 1.0 to pass would make the late rounds absurdly rigid, because
+// one linear tau controls both ends of the board at once.
 //
-// All seven of these remain unfitted. tools/fit-mock-draft.ts replaces them
-// from the owner's real history; see MOCK_FITTED.
-export const MOCK_TAU_EARLY = 2;
-export const MOCK_TAU_MID = 3.33;
-export const MOCK_TAU_LATE = 6;
+// tauEarly and tauMid and tauLate are the only values here NOT taken from
+// the owner's fit, because that fit was run on the linear form and the two
+// scales do not convert. They are calibrated to the acceptance gate with
+// margin. MOCK_FITTED stays false until the log form is refit on the real
+// export; see the note there.
+export const MOCK_TAU_EARLY = 0.4;
+export const MOCK_TAU_MID = 0.67;
+export const MOCK_TAU_LATE = 1.2;
 
 // tau is scaled by exp(beta * shrunk phase reach), so a manager who
-// habitually reaches gets a flatter distribution over the board. Unitless
-// and inside an exponent, so the temperature rescaling above leaves it
-// alone.
-export const MOCK_BETA = 0.04;
+// habitually reaches gets a flatter distribution over the board.
+//
+// Ships at ZERO: the fit on the owner's real 2019 to 2025 drafts put beta
+// at 0 and its ablation on held-out 2026 at ~0. Reach is real and it is on
+// the profile card, but it does not predict the next pick once ESPN ADP is
+// already in the model. Which is not that surprising: a manager who reaches
+// is telling you they disagree with the board, not which way.
+export const MOCK_BETA = 0;
 
 // Weight on category taste, on position overload, and on NBA team affinity.
+// These three come from the fit on the owner's real 2019 to 2025 drafts.
 //
-// lambda and gamma keep the spec's literal values even though tau was cut
-// by 3, which makes the category term a third as influential relative to
-// rank as the spec intended. That is deliberate and measured. Mean
-// log-likelihood per pick on a held-out synthetic 2026 draft, scored by
-// tests/engine/draftFit.test.ts' generator, where seven of twelve managers
-// draft for a specific category:
+// Ablation on held-out 2026, as mean log-likelihood per pick lost when the
+// term is zeroed:
 //
-//   weights                       tastes exist    nobody has a taste
-//   rank only                       -1.7488           -1.4177
-//   lambda 2,  gamma 3, alpha 0     -1.4537           -1.4177
-//   lambda 4,  gamma 3, alpha 0     -1.3997           -1.4177
-//   lambda 12, gamma 9, alpha 0     -2.0913           -1.4177
-//   lambda 4,  gamma 3, alpha 3     -1.5112           -1.4314
+//   lambda   +0.014
+//   alpha    +0.015
+//   beta      ~0      (ships at 0, see MOCK_BETA)
+//   gamma     ~0      (ships at 1 anyway, see below)
 //
-// lambda 4 / gamma 3 / alpha 0 is the only row with both properties worth
-// having: it beats rank-only by 0.35 nats when there is a taste to find,
-// and it costs exactly nothing when there is not. Scaling lambda up with
-// tau (the 12 row) is worse than ignoring profiles altogether.
+// These are small. The whole fitted model beats a rank-only refit by only
+// 0.03 nats on 2026, which is the honest headline: in this league, ESPN ADP
+// explains most of what happens, and nine years of profile data adds a
+// little on top. Worth having, not worth overselling.
 //
-// alpha ships at ZERO, which needs the honest version of the story. At
-// these tau values an alpha of 3 is worth six ADP slots, and at that size
-// NBA team affinity hurt in BOTH columns above, including the one where no
-// manager had a real affinity: a by-the-board drafter still accumulates 4+
-// players from some team at twice the league rate across nine seasons
-// purely by chance, and the term fires on those false positives. Run the
-// full fit, though, and the optimizer does want a SMALL nonzero alpha
-// (1.625 at a fitted tauEarly of 1.9, so about three slots), worth +0.075.
-//
-// So affinity is not worthless, it is just worth less than any weight that
-// can be guessed. Zero is the right unfitted default because it is exactly
-// neutral; the fit can turn it back on once there is real data. Affinity
-// stays on the profile card throughout, where it is an observation rather
-// than a prediction.
-//
-// All of this is synthetic. The real fit and ablation need the owner's
-// export; see tools/fit-mock-draft.ts and MOCK_FITTED.
-export const MOCK_LAMBDA = 4;
-export const MOCK_GAMMA = 3;
-export const MOCK_ALPHA = 0;
+// gamma ships at 1 as a GUARDRAIL rather than because the likelihood asked
+// for it. Measured neutral to slightly positive on both 2025 and 2026, so
+// it costs nothing, and it stops an AI team hoarding one position in a long
+// mock. A model can be well calibrated on average and still produce one
+// absurd roster, and an absurd roster is what the user would actually
+// notice.
+export const MOCK_LAMBDA = 1.5;
+export const MOCK_GAMMA = 1;
+export const MOCK_ALPHA = 0.28;
 
 // A manager's phase reach is shrunk toward the league median by
 // n / (n + k), where n is their pick count in that phase. Without this, a
@@ -380,9 +417,14 @@ export const MOCK_AVAIL_CHUNK = 50;
 // Odds are shown for this many players at the top of the current sort.
 export const MOCK_AVAIL_TOP_N = 40;
 
-// "Can wait" threshold: a higher-ranked player is only suggested as
-// waitable at this availability or better.
+// "Can wait" thresholds. If Larry's top available player is this likely or
+// better to still be there at the user's next pick, the card recommends
+// taking a SCARCE player now instead: the best Larry-ranked player whose
+// availability is below MOCK_SCARCE_THRESHOLD. Taking the player who will
+// not last and coming back for the one who will is strictly better when
+// both are true.
 export const MOCK_CAN_WAIT_THRESHOLD = 0.7;
+export const MOCK_SCARCE_THRESHOLD = 0.5;
 
 // ESPN position ID -> position string. 1=PG, 2=SG, 3=SF, 4=PF, 5=C.
 // 12=Bench, 13=IR are slot ids, not positions; not included here.

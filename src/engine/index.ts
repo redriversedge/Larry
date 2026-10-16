@@ -80,8 +80,12 @@ export {
 } from "./draftFit";
 export type { EvalResult, FitOptions, FitResult, ModelCheck } from "./draftFit";
 export {
+  availabilityTargets,
   availableIdsFor,
   bestAvailableByLarry,
+  larryPickAdvice,
+  rankUtility,
+  topPickRate,
   categoryWeight,
   decidePick,
   DEFAULT_MOCK_PARAMS,
@@ -105,6 +109,7 @@ export {
 } from "./mockDraft";
 export type {
   AvailabilityCounts,
+  LarryAdvice,
   MockDraftConfig,
   MockParams,
   MockPick,
@@ -112,6 +117,7 @@ export type {
   MockState,
   PickDecision,
   PreparedBoard,
+  RankForm,
   UtilityBreakdown,
 } from "./mockDraft";
 export {
@@ -122,6 +128,11 @@ export {
   MOCK_AVAIL_TOP_N,
   MOCK_CAN_WAIT_THRESHOLD,
   MOCK_FITTED,
+  MOCK_RANK_FORM,
+  MOCK_SCARCE_THRESHOLD,
+  MOCK_TOP_PICK_SHARE,
+  MOCK_TOP_PICK_SIMS,
+  MOCK_TOP_PICK_WINDOW,
   PRESEASON_GP_REFERENCE,
   PRESEASON_LONG_TERM_GP,
   PRESEASON_SUSPECT_GP,

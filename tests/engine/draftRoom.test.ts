@@ -428,4 +428,83 @@ describe("Draft Room: availability odds", () => {
     // The top of the board cannot survive to the user's pick.
     expect(html).toMatch(/\d+%/);
   });
+
+  it("does not show 100% for everyone when the user is on the clock", async () => {
+    // The bug: the odds were measured at the pick on the clock, which is
+    // the current board, so every player read 100%.
+    const h = load(baseState());
+    await ready(h);
+
+    // Team 3 is the user and picks 3rd, so put them on the clock.
+    h.DraftRoom.simToMyPick();
+    const html = h.renderDraftRoom();
+    expect(html).toContain("On the clock: Team 3");
+
+    // Team 3's next pick after pick 3 is pick 22 on the snake back, so the
+    // column is measured there and says so.
+    expect(html).toContain(">At 22<");
+    expect(html).toContain("still being on the board at pick 22");
+
+    // Count the percentages in the Avail column. If the bug were back,
+    // every one of them would be 100%.
+    const percents = (html.match(/>(\d+)%</g) || []).map((m) =>
+      Number(m.replace(/[^0-9]/g, "")),
+    );
+    expect(percents.length).toBeGreaterThan(10);
+    expect(percents.filter((p) => p === 100).length).toBeLessThan(percents.length);
+    // And the very top of the board cannot survive 19 more picks.
+    expect(Math.min(...percents)).toBe(0);
+  });
+
+  it("labels the column with the next pick when the user is NOT on the clock", async () => {
+    const h = load(baseState());
+    const html = await ready(h);
+    // Team 1 is on the clock at pick 1; team 3's next pick is pick 3.
+    expect(html).toContain(">At 3<");
+  });
+});
+
+describe("Draft Room: Larry's pick", () => {
+  it("tells the user to take the scarce player when Larry's top can wait", async () => {
+    const h = load(baseState());
+    await ready(h);
+    h.DraftRoom.simToMyPick();
+    const html = h.renderDraftRoom();
+
+    expect(html).toContain("Larry's pick");
+
+    // Either it recommends the top player outright, or it fires the
+    // can-wait advice. Both are valid; what must never happen is the old
+    // behaviour, where the advice could not fire at all because it looked
+    // for a player ranked above the top-ranked player.
+    if (html.indexOf("so take") >= 0) {
+      expect(html).toMatch(/is \d+% likely to be there at pick 22, so take .+ now\./);
+      // The player it tells you to take is the one on the Draft button.
+      const take = html.match(/so take (.+?) now\./);
+      const button = html.match(/>Draft (.+?)<\/button>/);
+      expect(take?.[1]).toBe(button?.[1]);
+    } else {
+      expect(html).toMatch(/>Draft .+?<\/button>/);
+    }
+  });
+
+  it("recommends a player who is actually still available", async () => {
+    const h = load(baseState());
+    await ready(h);
+    h.DraftRoom.simToMyPick();
+    const html = h.renderDraftRoom();
+
+    const id = Number((html.match(/DraftRoom\.draftPlayer\((\d+)\)">Draft/) || [])[1]);
+    expect(Number.isFinite(id)).toBe(true);
+
+    const taken = JSON.parse(h.store.get("larry_mock_draft") as string).picks.map(
+      (p: number[]) => p[2],
+    );
+    expect(taken).not.toContain(id);
+
+    // And drafting it works.
+    h.DraftRoom.draftPlayer(id);
+    const after = JSON.parse(h.store.get("larry_mock_draft") as string);
+    expect(after.picks[after.picks.length - 1][2]).toBe(id);
+  });
 });

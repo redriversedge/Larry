@@ -454,6 +454,32 @@ var DraftRoom = (function() {
     return (count === undefined ? 0 : count) / _avail.sims;
   }
 
+  // Shares as a Map, for the engine's larryPickAdvice.
+  function availShareMap() {
+    if (!_avail || !_avail.sims) return null;
+    var out = new Map();
+    var sims = _avail.sims;
+    _avail.atNext.forEach(function(count, playerId) {
+      out.set(playerId, count / sims);
+    });
+    // A player who never survived has a real 0, not a missing entry.
+    var available = engine().availableIdsFor(_board, _mock);
+    available.forEach(function(id) {
+      if (!out.has(id)) out.set(id, 0);
+    });
+    return out;
+  }
+
+  // The overall pick number the Avail column is measured at. Never the pick
+  // on the clock: see availabilityTargets in the engine.
+  function availTargetPick() {
+    var api = engine();
+    var me = myTeamId();
+    if (!api || !me || !_order || !_mock) return null;
+    var targets = api.availabilityTargets(_order, me, _mock.picks.length);
+    return targets.first === null ? null : targets.first + 1;
+  }
+
   function availSecondShare(playerId) {
     if (!_avail || !_avail.sims) return null;
     var count = _avail.atSecond.get(playerId);
@@ -581,7 +607,9 @@ var DraftRoom = (function() {
     if (_availRunning) return 'Calculating availability...';
     if (!_avail || !_avail.sims) return '';
     var reduced = _avail.sims < api.MOCK_AVAIL_SIMS;
-    return 'Avail from ' + _avail.sims + ' simulations' +
+    var target = availTargetPick();
+    return (target ? 'Chance of still being on the board at pick ' + target : 'Availability') +
+      ', from ' + _avail.sims + ' simulations' +
       (reduced ? ' (reduced from ' + api.MOCK_AVAIL_SIMS + ' to stay responsive)' : '') + '.';
   }
 
@@ -596,43 +624,36 @@ var DraftRoom = (function() {
     var api = engine();
     if (!userOnClock()) return '';
     var available = api.availableIdsFor(_board, _mock);
-    var bestId = api.bestAvailableByLarry(_board, available);
-    if (bestId === null) return '';
-    var best = _board.byId.get(bestId);
-    if (!best) return '';
+
+    // The advice is "take the best player by Larry rank" most of the time,
+    // but when Larry's top player is very likely to still be there next
+    // turn and a slightly lower-ranked one is not, taking the scarce player
+    // now gets you both.
+    var advice = api.larryPickAdvice(_board, available, availShareMap());
+    if (!advice || advice.recommendId === null) return '';
+    var pick = _board.byId.get(advice.recommendId);
+    if (!pick) return '';
 
     var html = '<div class="card draft-larry-pick">';
     html += '<div class="card-header"><h3>Larry\'s pick</h3></div>';
-    html += '<div class="draft-pick-name">' + esc(best.player.name) + '</div>';
+    html += '<div class="draft-pick-name">' + esc(pick.player.name) + '</div>';
     html += '<div class="text-xs muted">Larry ' +
-      (best.player.larryRank === null ? '--' : '#' + best.player.larryRank) +
-      ', ESPN #' + Math.round(best.rank) + '</div>';
+      (pick.player.larryRank === null ? '--' : '#' + pick.player.larryRank) +
+      ', ESPN #' + Math.round(pick.rank) + '</div>';
 
-    // "Can wait": a player Larry likes even more who is very likely to last
-    // until the next turn, so the scarcer one can be taken now.
-    if (_avail && _avail.sims) {
-      var picksAhead = api.myUpcomingPicks(_order, myTeamId(), _mock.picks.length);
-      var nextPick = picksAhead.length > 1 ? picksAhead[1] + 1 : null;
-      if (nextPick) {
-        var rows = sortedBoard();
-        for (var i = 0; i < Math.min(rows.length, api.MOCK_AVAIL_TOP_N); i++) {
-          var candidate = rows[i];
-          if (candidate.player.playerId === bestId) continue;
-          var larryRank = candidate.player.larryRank;
-          if (larryRank === null || best.player.larryRank === null) continue;
-          if (larryRank > best.player.larryRank) continue;
-          var share = availShare(candidate.player.playerId);
-          if (share === null || share < api.MOCK_CAN_WAIT_THRESHOLD) continue;
-          html += '<div class="draft-can-wait">Can wait: ' + esc(candidate.player.name) +
-            ' is ' + Math.round(share * 100) + '% likely to be there at pick ' + nextPick + '.</div>';
-          break;
-        }
+    if (advice.waitId !== null) {
+      var waiting = _board.byId.get(advice.waitId);
+      var nextPick = availTargetPick();
+      if (waiting && nextPick) {
+        html += '<div class="draft-can-wait">' + esc(waiting.player.name) + ' is ' +
+          Math.round(advice.waitShare * 100) + '% likely to be there at pick ' + nextPick +
+          ', so take ' + esc(pick.player.name) + ' now.</div>';
       }
     }
 
     html += '<button class="btn btn-primary btn-full" style="min-height:44px" ' +
-      'onclick="DraftRoom.draftPlayer(' + bestId + ')">Draft ' +
-      esc(best.player.name) + '</button>';
+      'onclick="DraftRoom.draftPlayer(' + advice.recommendId + ')">Draft ' +
+      esc(pick.player.name) + '</button>';
     html += '</div>';
     return html;
   }
@@ -1089,7 +1110,11 @@ var DraftRoom = (function() {
     for (var c = 0; c < CATS.length; c++) {
       html += '<th class="stat-col" style="color:' + catColor(CATS[c]) + '">' + CATS[c] + '</th>';
     }
-    html += '<th class="stat-col">Avail</th>';
+    // Labelled with the pick it is measured at, so "82%" cannot be
+    // mistaken for "available right now".
+    var target = availTargetPick();
+    html += '<th class="stat-col">' +
+      (target ? 'At ' + target : 'Avail') + '</th>';
     html += '</tr></thead><tbody id="draft-board-body">' + boardBodyHtml() + '</tbody></table></div>';
     html += '</div>';
 

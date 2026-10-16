@@ -143,7 +143,18 @@ export function makePool(options: PoolOptions): SynthPlayer[] {
       playerId: 1000 + i,
       name: playerName(i),
       posId: (i % 5) + 1,
-      proTeamId: (i % 30) + 1,
+      // Drawn, not derived from the board index.
+      //
+      // This used to be (i % 30) + 1, which made NBA team a deterministic
+      // function of board position. In a snake draft a manager's slots are
+      // also a deterministic function of position, so every manager picked
+      // up a spurious "affinity" for the teams that happened to land on
+      // their slots, and the fixture manufactured affinity signal out of
+      // nothing. It produced two confident and opposite conclusions about
+      // whether MOCK_ALPHA helps. Nothing about affinity can be concluded
+      // from synthetic data; this at least stops it being actively
+      // misleading.
+      proTeamId: Math.floor(next() * 30) + 1,
       gp,
       pts: Math.max(0, 8 + 20 * quality + 20 * noise()),
       reb: Math.max(0, 2 + 8 * quality + 8 * noise()),

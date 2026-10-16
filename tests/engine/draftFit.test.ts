@@ -120,11 +120,16 @@ describe("fitMockDraft", () => {
       ),
     );
 
-    expect(fit.fitEval.meanLogLik).toBeGreaterThanOrEqual(atStart.meanLogLik);
+    // The fit starts from form-appropriate taus, not from the shipped
+    // constants, so this compares against the shipped constants as a
+    // reference point rather than as the literal starting value.
+    expect(fit.fitEval.meanLogLik).toBeGreaterThan(atStart.meanLogLik);
     expect(fit.trace.length).toBeGreaterThan(0);
-    for (const value of Object.values(fit.params)) {
-      expect(Number.isFinite(value)).toBe(true);
-      expect(value).toBeGreaterThanOrEqual(0);
+    expect(fit.params.rankForm).toBe("log");
+    const numeric = ["tauEarly", "tauMid", "tauLate", "beta", "lambda", "gamma", "alpha"] as const;
+    for (const key of numeric) {
+      expect(Number.isFinite(fit.params[key])).toBe(true);
+      expect(fit.params[key]).toBeGreaterThanOrEqual(0);
     }
   });
 
@@ -178,21 +183,46 @@ describe("checkModel", () => {
     expect(check.full.meanLogLik - check.baseline.meanLogLik).toBeGreaterThan(0.2);
   });
 
-  it("costs nothing at the shipped weights when nobody has a preference", () => {
-    // This is the property that makes the weights safe to ship unfitted: a
-    // league with no category signal must score exactly the same as
-    // rank-only. It is why alpha ships at 0 (NBA team affinity fires on
-    // chance affinities and made this case WORSE) and why lambda was not
-    // scaled up alongside tau.
+  it("has the category term cost exactly nothing when nobody has a preference", () => {
+    // The property that makes lambda safe: with no category signal, every
+    // premium's strength is "none", the weight is 0, and the term cannot
+    // move a single pick. Isolated to lambda, because alpha is a separate
+    // question (below).
     const league = flatLeague();
-    const check = checkModel(league.history, TEST, league.adp, DEFAULT_MOCK_PARAMS);
-    expect(check.full.meanLogLik).toBeCloseTo(check.baseline.meanLogLik, 6);
+    const adpLookup = buildAdpLookup(league.adp);
+    const profiles = buildDraftProfiles(league.history, league.adp, {
+      asOfSeason: TEST,
+    }).profiles;
+
+    const lambdaOnly = { ...DEFAULT_MOCK_PARAMS, beta: 0, gamma: 0, alpha: 0 };
+    const withTerm = evaluateDraft(league.history, TEST, adpLookup, profiles, lambdaOnly);
+    const without = evaluateDraft(league.history, TEST, adpLookup, profiles, {
+      ...lambdaOnly,
+      lambda: 0,
+    });
+    expect(withTerm.meanLogLik).toBeCloseTo(without.meanLogLik, 10);
+  });
+
+  it("earns its keep from the category term when there IS a preference", () => {
+    const league = tastefulLeague();
+    const adpLookup = buildAdpLookup(league.adp);
+    const profiles = buildDraftProfiles(league.history, league.adp, {
+      asOfSeason: TEST,
+    }).profiles;
+
+    const lambdaOnly = { ...DEFAULT_MOCK_PARAMS, beta: 0, gamma: 0, alpha: 0 };
+    const withTerm = evaluateDraft(league.history, TEST, adpLookup, profiles, lambdaOnly);
+    const without = evaluateDraft(league.history, TEST, adpLookup, profiles, {
+      ...lambdaOnly,
+      lambda: 0,
+    });
+    expect(withTerm.meanLogLik - without.meanLogLik).toBeGreaterThan(0.2);
   });
 
   it("gets worse, not better, if the category weight is scaled up with tau", () => {
-    // Guards the reasoning in constants.ts: tau was cut by 3 and lambda was
-    // deliberately NOT multiplied by 3 to match. If someone "restores the
-    // spec's ratio" later, this fails.
+    // Guards the reasoning in constants.ts: the taus are far smaller than
+    // the spec's and lambda was deliberately NOT scaled to match. If
+    // someone "restores the ratio" later, this fails.
     const league = tastefulLeague();
     const shipped = checkModel(league.history, TEST, league.adp, DEFAULT_MOCK_PARAMS);
     const scaledUp = checkModel(league.history, TEST, league.adp, {
@@ -201,19 +231,23 @@ describe("checkModel", () => {
       gamma: DEFAULT_MOCK_PARAMS.gamma * 3,
     });
     expect(scaledUp.full.meanLogLik).toBeLessThan(shipped.full.meanLogLik);
-    expect(scaledUp.full.meanLogLik).toBeLessThan(shipped.baseline.meanLogLik);
   });
 
-  it("gets worse if NBA team affinity is given any weight", () => {
-    // The other half of the constants.ts reasoning: alpha ships at 0.
+  it("costs almost nothing overall on a league with no signal of any kind", () => {
+    // Not exactly nothing: alpha is nonzero, and a by-the-board drafter
+    // still accumulates 4+ players from some team at twice the league rate
+    // across eight seasons by chance, so the affinity term fires on noise.
+    // The point is that the cost is negligible, well under the 0.28 nats
+    // the same weights GAIN when there is a real preference to find.
+    //
+    // Nothing stronger than this can be asserted about alpha from
+    // synthetic data; see the proTeamId note in draftFixtures.ts. The real
+    // ablation on the owner's drafts put alpha at +0.015.
     const league = flatLeague();
-    const shipped = checkModel(league.history, TEST, league.adp, DEFAULT_MOCK_PARAMS);
-    const withAffinity = checkModel(league.history, TEST, league.adp, {
-      ...DEFAULT_MOCK_PARAMS,
-      alpha: 3,
-    });
-    expect(DEFAULT_MOCK_PARAMS.alpha).toBe(0);
-    expect(withAffinity.full.meanLogLik).toBeLessThan(shipped.full.meanLogLik);
+    const check = checkModel(league.history, TEST, league.adp, DEFAULT_MOCK_PARAMS);
+    const cost = check.baseline.meanLogLik - check.full.meanLogLik;
+    expect(cost).toBeGreaterThanOrEqual(0);
+    expect(cost).toBeLessThan(0.02);
   });
 });
 

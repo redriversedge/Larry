@@ -29,11 +29,14 @@ import {
   MOCK_ALPHA,
   MOCK_BETA,
   MOCK_CANDIDATE_POOL,
+  MOCK_CAN_WAIT_THRESHOLD,
   MOCK_GAMMA,
   MOCK_LAMBDA,
   MOCK_OVERLOAD_THRESHOLD,
   MOCK_RANK_FALLBACK,
+  MOCK_RANK_FORM,
   MOCK_REACH_SHRINK_K,
+  MOCK_SCARCE_THRESHOLD,
   MOCK_SIM_CANDIDATE_POOL,
   MOCK_TAU_EARLY,
   MOCK_TAU_LATE,
@@ -65,6 +68,8 @@ export interface MockPlayer {
   perGame: CategoryVector;
 }
 
+export type RankForm = "linear" | "log";
+
 export interface MockParams {
   tauEarly: number;
   tauMid: number;
@@ -73,6 +78,8 @@ export interface MockParams {
   lambda: number;
   gamma: number;
   alpha: number;
+  // -rank/tau or -ln(rank)/tau. See MOCK_RANK_FORM for why this matters.
+  rankForm: RankForm;
 }
 
 export const DEFAULT_MOCK_PARAMS: MockParams = {
@@ -83,7 +90,18 @@ export const DEFAULT_MOCK_PARAMS: MockParams = {
   lambda: MOCK_LAMBDA,
   gamma: MOCK_GAMMA,
   alpha: MOCK_ALPHA,
+  rankForm: MOCK_RANK_FORM,
 };
+
+// The rank term's contribution to utility.
+//
+// The log form is clamped at rank 1 because ESPN publishes fractional ADPs
+// (1.2, 0.9) and ln of anything below 1 is negative, which would make a
+// better-ranked player score WORSE than the reference point.
+export function rankUtility(rank: number, tau: number, form: RankForm): number {
+  if (form === "log") return -Math.log(Math.max(rank, 1)) / tau;
+  return -rank / tau;
+}
 
 export interface MockDraftConfig {
   // teamId for each overall pick, index 0 being pick 1. Length is the whole
@@ -244,6 +262,28 @@ export function nextPickIndex(order: number[], teamId: number, fromIndex: number
   return -1;
 }
 
+// Which picks the availability odds are measured AT.
+//
+// The bug this exists to prevent: myUpcomingPicks includes the pick
+// currently on the clock, so when the user is the one on the clock,
+// upcoming[0] is this very pick. Measuring availability there asks "who is
+// available right now", and the answer is everyone, so the whole column
+// read 100%. The odds the user wants are always about the pick AFTER the
+// one they are making.
+export function availabilityTargets(
+  order: number[],
+  teamId: number,
+  fromIndex: number,
+): { first: number | null; second: number | null } {
+  const upcoming = myUpcomingPicks(order, teamId, fromIndex);
+  const userIsOnTheClock = upcoming[0] === fromIndex;
+  const offset = userIsOnTheClock ? 1 : 0;
+  return {
+    first: upcoming[offset] ?? null,
+    second: upcoming[offset + 1] ?? null,
+  };
+}
+
 export function myUpcomingPicks(order: number[], teamId: number, fromIndex: number): number[] {
   const out: number[] = [];
   for (let i = Math.max(0, fromIndex); i < order.length; i++) {
@@ -290,7 +330,15 @@ export function tauFor(
     phase === "early" ? params.tauEarly : phase === "mid" ? params.tauMid : params.tauLate;
   const tau = base * Math.exp(params.beta * reachShrunk(profile, phase, leagueReach));
   // Clamped so a freak reach median cannot produce a degenerate softmax.
-  return Math.min(Math.max(tau, 0.01), 500);
+  //
+  // The floor is 1e-6, not 0.01. Log-form taus are fractions to begin with
+  // (the shipped tauEarly is 0.4), so a 0.01 floor is only 40x below the
+  // real value and silently caps how sharp the distribution can get: it
+  // turned "tau 0.001, so pick strictly by rank" into a coin flip between
+  // adjacent deep players, because the log gap at rank 125 is 0.008 and
+  // 0.008/0.01 is not a decisive utility difference. Only divide-by-zero
+  // needs guarding against.
+  return Math.min(Math.max(tau, 1e-6), 500);
 }
 
 // Count of a manager's already-drafted players at a primary position, over
@@ -374,7 +422,7 @@ export function pickUtilities(
       }
     }
 
-    const rankTerm = -entry.rank / tau;
+    const rankTerm = rankUtility(entry.rank, tau, params.rankForm);
     const catTerm = params.lambda * categoryTerm;
     const overloadTerm =
       -params.gamma * overloadFor(state, board, config, teamId, entry.player.posId);
@@ -511,6 +559,35 @@ export function simulateUntil(
   return { state: { seed: state.seed, picks }, made };
 }
 
+// --- Acceptance: does the consensus number one actually go at the top? ---
+//
+// The single most visible way this model can look wrong is the ADP #1
+// player sliding to pick 6. A log-likelihood cannot catch that on its own:
+// a model can score well on average and still be far too loose at the very
+// top of the board, because only 12 of 144 picks are in round 1. So the
+// shipped parameters are held to this directly.
+export function topPickRate(
+  board: PreparedBoard,
+  config: MockDraftConfig,
+  sims: number,
+  window: number,
+): number {
+  const topId = board.rankOrder[0];
+  if (topId === undefined) return 0;
+
+  let hits = 0;
+  for (let s = 0; s < sims; s++) {
+    const result = simulateUntil(board, config, { seed: s + 1, picks: [] }, null, window);
+    for (const pick of result.state.picks) {
+      if (pick[2] === topId) {
+        hits++;
+        break;
+      }
+    }
+  }
+  return sims > 0 ? hits / sims : 0;
+}
+
 // --- Availability odds (s6) ---
 
 export interface AvailabilityCounts {
@@ -538,9 +615,10 @@ export function runAvailabilitySims(
   counts: AvailabilityCounts,
 ): AvailabilityCounts {
   const fromIndex = state.picks.length;
-  const upcoming = myUpcomingPicks(config.order, myTeamId, fromIndex);
-  const firstTarget = upcoming[0];
-  const secondTarget = upcoming[1];
+  // Never the pick on the clock: see availabilityTargets.
+  const targets = availabilityTargets(config.order, myTeamId, fromIndex);
+  const firstTarget = targets.first === null ? undefined : targets.first;
+  const secondTarget = targets.second === null ? undefined : targets.second;
   if (firstTarget === undefined) return counts;
 
   const baseAvailable = availableIdsFor(board, state);
@@ -552,24 +630,26 @@ export function runAvailabilitySims(
 
     const limit = secondTarget === undefined ? firstTarget : secondTarget;
     for (let index = fromIndex; index <= limit; index++) {
+      // Record the board state AT a target pick, before anyone consumes it.
       if (index === firstTarget) {
         for (const id of available) counts.atNext.set(id, (counts.atNext.get(id) || 0) + 1);
         if (secondTarget === undefined) break;
-        // The user's own pick inside a simulation is unknown. Taking the
-        // best available by rank is the neutral assumption; it only shifts
-        // the second-pick odds by one player.
-        const mine = firstAvailableByRank(board, available);
-        if (mine !== null) {
-          available.delete(mine);
-          picks.push([index + 1, myTeamId, mine]);
-        }
-        continue;
-      }
-      if (index === secondTarget) {
+      } else if (index === secondTarget) {
         for (const id of available) {
           counts.atSecond.set(id, (counts.atSecond.get(id) || 0) + 1);
         }
         break;
+      }
+
+      // The user's own picks inside a simulation are unknown, including the
+      // one they are making right now. Taking the best available by rank is
+      // the neutral assumption; it shifts the later odds by one player.
+      if (config.order[index] === myTeamId) {
+        const mine = firstAvailableByRank(board, available);
+        if (mine === null) break;
+        available.delete(mine);
+        picks.push([index + 1, myTeamId, mine]);
+        continue;
       }
 
       const working: MockState = { seed: simSeed, picks };
@@ -600,6 +680,56 @@ export function firstAvailableByRank(
 ): number | null {
   for (const id of board.rankOrder) if (available.has(id)) return id;
   return null;
+}
+
+// What the Draft Room recommends when the user is on the clock.
+//
+// The naive version is "take the best player by Larry rank", and that is
+// still the answer most of the time. But when Larry's top player is very
+// likely to still be there next turn and a slightly lower-ranked one is
+// not, taking the scarce player now gets you both. The first cut of this
+// looked for a player Larry ranked ABOVE Larry's own top pick, which by
+// definition does not exist, so the advice never fired at all.
+export interface LarryAdvice {
+  // The player to take now.
+  recommendId: number | null;
+  // Set only when the advice is "take someone else first": the top-ranked
+  // player who can afford to wait, and how likely they are to last.
+  waitId: number | null;
+  waitShare: number;
+}
+
+export function larryPickAdvice(
+  board: PreparedBoard,
+  available: Set<number>,
+  shares: Map<number, number> | null,
+): LarryAdvice {
+  const topId = bestAvailableByLarry(board, available);
+  const none: LarryAdvice = { recommendId: topId, waitId: null, waitShare: 0 };
+  if (topId === null || !shares || !shares.size) return none;
+
+  const topShare = shares.get(topId);
+  if (topShare === undefined || topShare < MOCK_CAN_WAIT_THRESHOLD) return none;
+
+  // The best Larry-ranked player who will NOT be there next turn.
+  let scarceId: number | null = null;
+  let scarceRank = Infinity;
+  for (const id of available) {
+    if (id === topId) continue;
+    const share = shares.get(id);
+    if (share === undefined || share >= MOCK_SCARCE_THRESHOLD) continue;
+    const entry = board.byId.get(id);
+    if (!entry) continue;
+    const rank = entry.player.larryRank;
+    if (rank === null || !Number.isFinite(rank) || rank <= 0) continue;
+    if (rank < scarceRank) {
+      scarceRank = rank;
+      scarceId = id;
+    }
+  }
+
+  if (scarceId === null) return none;
+  return { recommendId: scarceId, waitId: topId, waitShare: topShare };
 }
 
 // Best available by LARRY rank. This is what the Draft Room recommends to
