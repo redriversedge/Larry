@@ -1,5 +1,5 @@
 // Larry v3.0 Service Worker
-var CACHE_VERSION = 'larry-v3.27.1';
+var CACHE_VERSION = 'larry-v3.28.0';
 var CACHE_FILES = [
   '/',
   '/index.html',
@@ -17,6 +17,9 @@ var CACHE_FILES = [
   // Historical ESPN ADP. Without it the Draft Room's profile cards lose
   // their reach line, so it is precached rather than fetched on demand.
   '/data/espn-adp-history.json',
+  // Preseason board v3: expected games and the market blend.
+  '/data/durability-history.json',
+  '/data/market-rankings-current.json',
   '/manifest.json',
   '/assets/larry-logo.svg',
   '/assets/icon-192.png',

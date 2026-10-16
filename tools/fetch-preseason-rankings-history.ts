@@ -24,6 +24,9 @@ import { parseAdpPage } from "./fetch-espn-adp-history";
 
 const ROOT = path.resolve(__dirname, "..");
 const OUT = path.join(ROOT, "data/preseason-rankings-history.json");
+// The CURRENT season's market, which the live board blends with. Same
+// pages with no year parameter. Re-run this right before the draft.
+const OUT_CURRENT = path.join(ROOT, "data/market-rankings-current.json");
 
 // The seasons the backtest scores. Both are complete, so ground truth
 // exists for them.
@@ -194,6 +197,41 @@ async function main(): Promise<void> {
     }
   }
 
+  // --- The current season, which the live board actually blends with ---
+  //
+  // No year parameter means "now". The ESPN column here is preseason ADP
+  // for the season about to start; the app prefers its own live ESPN ADP
+  // from the league fetch, but having it here keeps the file self
+  // contained if that is ever unavailable.
+  const currentEcrHtml = await get("https://www.fantasypros.com/nba/rankings/overall.php");
+  const currentAdpHtml = await get("https://www.fantasypros.com/nba/adp/overall.php");
+  const currentEcr = parseEcrPage(currentEcrHtml);
+  const current = {
+    pulledAt: new Date().toISOString(),
+    ecr: currentEcr.rows,
+    yahooAdp: parseAdpColumn(currentAdpHtml, "Yahoo"),
+    espnAdp: parseAdpPage(currentAdpHtml),
+    experts: currentEcr.experts,
+    ecrUpdated: currentEcr.updated,
+  };
+  console.log(
+    "current: ECR " + current.ecr.length + " players from " + current.experts +
+      " experts, updated " + current.ecrUpdated + "; Yahoo ADP " +
+      current.yahooAdp.length + "; ESPN ADP " + current.espnAdp.length,
+  );
+
+  // A current board identical to last season's means the un-parameterized
+  // pages are serving an archive, and the live blend would be a year out
+  // of date without anyone noticing.
+  const lastSeason = out[String(SEASONS[SEASONS.length - 1])];
+  if (lastSeason && JSON.stringify(lastSeason.ecr) === JSON.stringify(current.ecr)) {
+    console.error(
+      "The current ECR is identical to " + SEASONS[SEASONS.length - 1] +
+        ". FantasyPros is serving an archived board; not writing the current file.",
+    );
+    process.exit(1);
+  }
+
   if (checkOnly) {
     console.log("\n--check: parsed cleanly, nothing written.");
     return;
@@ -202,6 +240,11 @@ async function main(): Promise<void> {
   fs.mkdirSync(path.dirname(OUT), { recursive: true });
   fs.writeFileSync(OUT, JSON.stringify(out) + "\n");
   console.log("\nWrote " + OUT + " (" + Math.round(fs.statSync(OUT).size / 1024) + " KB)");
+  fs.writeFileSync(OUT_CURRENT, JSON.stringify(current) + "\n");
+  console.log(
+    "Wrote " + OUT_CURRENT + " (" +
+      Math.round(fs.statSync(OUT_CURRENT).size / 1024) + " KB)",
+  );
 }
 
 if (require.main === module) {

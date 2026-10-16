@@ -388,6 +388,150 @@ var Engines = (function() {
     return (S && S.league && S.league.rosterSize) || 13;
   }
 
+  // --- Preseason board v3 (docs/RANKINGS_V3_ADDENDUM.md) ---------------
+
+  function rankingVersion() {
+    var v = S && S.prefs ? S.prefs.rankingVersion : null;
+    return v === 'v2' ? 'v2' : 'v3';
+  }
+
+  // Same normalization as the engine and the market files.
+  function normName(raw) {
+    return String(raw || '')
+      .normalize('NFKD')
+      .replace(/[^\x00-\x7F]/g, '')
+      .toLowerCase()
+      .replace(/\b(jr|sr|ii|iii|iv)\b\.?/g, '')
+      .replace(/[^a-z ]/g, '')
+      .split(/\s+/)
+      .filter(Boolean)
+      .join(' ');
+  }
+
+  // Data files loaded once by loadPreseasonData(), below. Null until then,
+  // which simply means the board runs without that input rather than
+  // failing: no durability history falls back to ESPN's games, no market
+  // falls back to Larry's board alone.
+  var _durabilityGP = null;
+  var _market = null;
+  var _marketPulledAt = null;
+
+  function marketMap(rows) {
+    if (!rows || !rows.length) return null;
+    var m = new Map();
+    for (var i = 0; i < rows.length; i++) {
+      // Position in the sorted list is the rank, whether the file stores a
+      // rank or an average draft position.
+      if (!m.has(rows[i][0])) m.set(rows[i][0], i + 1);
+    }
+    return m;
+  }
+
+  function applyPreseasonV3(players) {
+    var Eng = window.LarryEngine;
+    if (!Eng || typeof Eng.buildPreseasonBoard !== 'function') return null;
+
+    var inputs = [];
+    for (var i = 0; i < players.length; i++) {
+      var p = players[i];
+      if (p.rateValue === null || p.rateValue === undefined) continue;
+      // A player we know nothing about must keep a null score and stay
+      // below everyone with a number. rateValue exists for them (the
+      // engine scores them against the pool mean) but durantScore is
+      // deliberately null, and giving them a season value here would put
+      // several hundred unprojected players back in the middle of the
+      // board. That is the exact bug the no-evidence rule exists to stop.
+      if (p.noEvidence || p.durantScore === null || p.durantScore === undefined) continue;
+      var gp = _durabilityGP ? _durabilityGP[String(p.id)] : null;
+      inputs.push({
+        id: p.id,
+        rateValue: p.rateValue,
+        key: normName(p.name),
+        espnGP: v2ProjectedGP(p),
+        priorGP: (gp && gp.length) ? gp.slice() : [],
+        // proTeamId 0 is a free agent with no NBA team, who plays no games.
+        onTeam: !!p.proTeamId,
+        suspect: !!p.projectionSuspect,
+        espnAdp: (typeof p.espnAdp === 'number' && p.espnAdp > 0) ? p.espnAdp : null
+      });
+    }
+    if (!inputs.length) return null;
+
+    var result;
+    try {
+      result = Eng.buildPreseasonBoard(inputs, {
+        poolSize: v2TeamCount() * v2RosterSize(),
+        market: _market || {}
+      });
+    } catch (e) {
+      console.warn('preseason v3 failed, falling back to v2:', e);
+      return null;
+    }
+
+    var scale = typeof Eng.DURANT_SCALE === 'number' ? Eng.DURANT_SCALE : 10;
+    var byId = {};
+    for (var r = 0; r < result.rows.length; r++) byId[result.rows[r].id] = result.rows[r];
+
+    for (var j = 0; j < players.length; j++) {
+      var pl = players[j];
+      var row = byId[pl.id];
+      if (!row) continue;
+      pl.expectedGP = row.expectedGP;
+      pl.durabilityDetail = row.durability;
+      pl.seasonValue = row.seasonValue;
+      pl.fiveCatRank = row.fiveCatRank;
+      pl.marketRank = row.marketRank;
+      pl.blendRank = row.blendRank;
+      // The displayed score becomes the SEASON value, which is what a
+      // draft pick actually buys. Per-game value stays on p.rateValue and
+      // is shown alongside it in the player popup.
+      pl.durantScore = row.seasonValue * scale;
+    }
+    return result;
+  }
+
+  function v2TeamCount() {
+    return (S && S.league && S.league.teamCount) || 12;
+  }
+
+  // Loaded once per page, before the first board is built. Both files are
+  // same-origin static assets, so this works offline from the service
+  // worker cache too.
+  function loadPreseasonData() {
+    if (typeof fetch !== 'function') return Promise.resolve();
+    var jobs = [];
+    if (_durabilityGP === null) {
+      jobs.push(fetch('/data/durability-history.json')
+        .then(function(r) { return r.ok ? r.json() : null; })
+        .then(function(d) { _durabilityGP = (d && d.gp) || {}; })
+        .catch(function(e) {
+          console.warn('durability history unavailable:', e);
+          _durabilityGP = {};
+        }));
+    }
+    if (_market === null) {
+      jobs.push(fetch('/data/market-rankings-current.json')
+        .then(function(r) { return r.ok ? r.json() : null; })
+        .then(function(d) {
+          if (!d) { _market = {}; return; }
+          _marketPulledAt = d.pulledAt || null;
+          _market = {
+            yahoo: marketMap(d.yahooAdp),
+            ecr: marketMap(d.ecr)
+            // ESPN ADP deliberately omitted: the app has it live from the
+            // league fetch, which is fresher than this file.
+          };
+        })
+        .catch(function(e) {
+          console.warn('market rankings unavailable:', e);
+          _market = {};
+        }));
+    }
+    return Promise.all(jobs);
+  }
+
+  function marketPulledAt() { return _marketPulledAt; }
+
   function computeDURANT(players, opts) {
     opts = opts || {};
     // Still needed: this is where p.trend and p.frustrationValue come from,
@@ -429,6 +573,7 @@ var Engines = (function() {
       var row = rowById[String(p.id)];
       if (!row) { p.durantScore = null; p.noEvidence = true; return; }
       p.projectionSuspect = preseason && v2ProjectionSuspect(p);
+      p.rateValue = row ? row.baseValue : null;
       // No games played and no projection means we know nothing at all.
       // Scoring such a player 0 reads as "average starter" and floats them
       // above every real player who is merely below average.
@@ -460,6 +605,11 @@ var Engines = (function() {
       p.perGameStats = row.perGame;
     });
 
+    // Preseason board v3: durability, value above replacement, and a blend
+    // with the market. Preseason only, and only when the user has not
+    // rolled back to v2 in Settings. The in-season path below is untouched.
+    var v3 = preseason && rankingVersion() === 'v3' ? applyPreseasonV3(players) : null;
+
     // Rank. Evidenced players by score, then everyone we know nothing about,
     // ordered by ownership so the list is at least plausible rather than
     // arbitrary. A null score sorts below every number, including negatives.
@@ -468,6 +618,17 @@ var Engines = (function() {
       var bNone = b.durantScore === null || b.durantScore === undefined;
       if (aNone !== bNone) return aNone ? 1 : -1;
       if (aNone && bNone) return (b.percentOwned || 0) - (a.percentOwned || 0);
+      // On the v3 preseason board the ORDER is the blend, while the score
+      // stays a 5-category season value on the familiar scale. They are
+      // deliberately different things: the score says how good Larry
+      // thinks the player is, the rank says where to draft him once the
+      // market is taken into account. Everything that sorts players reads
+      // the rank.
+      if (v3) {
+        var ar = a.blendRank || Infinity;
+        var br = b.blendRank || Infinity;
+        if (ar !== br) return ar - br;
+      }
       return b.durantScore - a.durantScore;
     });
     players.forEach(function(p, i) { p.durantRank = i + 1; });
@@ -533,12 +694,25 @@ var Engines = (function() {
     var stamp = (S.espn && S.espn.lastSync) || '';
     S.analysisCache = S.analysisCache || {};
     if (S.analysisCache.durantComputedAt === stamp &&
-        S.analysisCache.durantPlayerCount === players.length) {
+        S.analysisCache.durantPlayerCount === players.length &&
+        S.analysisCache.durantRankingVersion === rankingVersion() &&
+        S.analysisCache.durantMarketLoaded === (_market !== null)) {
       return;
     }
     computeDURANT(players);
     S.analysisCache.durantComputedAt = stamp;
     S.analysisCache.durantPlayerCount = players.length;
+    S.analysisCache.durantRankingVersion = rankingVersion();
+    S.analysisCache.durantMarketLoaded = (_market !== null);
+
+    // The durability history and the market lists arrive asynchronously.
+    // The first board is built without them, which is correct but not the
+    // best answer available; when they land, rebuild once and repaint.
+    if (_market === null || _durabilityGP === null) {
+      loadPreseasonData().then(function() {
+        if (typeof render === 'function') render();
+      });
+    }
   }
 
 
@@ -1599,6 +1773,10 @@ var Engines = (function() {
     getTeamCatRank: getTeamCatRank,
     getBlendedStat: getBlendedStat,
     computeMatchupStrategy: computeMatchupStrategy,
-    matchupAdjustedValue: matchupAdjustedValue
+    matchupAdjustedValue: matchupAdjustedValue,
+    // Preseason board v3.
+    loadPreseasonData: loadPreseasonData,
+    marketPulledAt: marketPulledAt,
+    rankingVersion: rankingVersion
   };
 })();
