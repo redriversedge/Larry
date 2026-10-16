@@ -28,16 +28,17 @@ import { CATEGORIES, type Category, type CategoryVector } from "../shared/types"
 import {
   MOCK_ALPHA,
   MOCK_BETA,
-  MOCK_CANDIDATE_POOL,
+  MOCK_CANDIDATE_POOL_EARLY,
+  MOCK_CANDIDATE_POOL_LATE,
   MOCK_CAN_WAIT_THRESHOLD,
   MOCK_GAMMA,
   MOCK_LAMBDA,
   MOCK_OVERLOAD_THRESHOLD,
+  MOCK_POOL_EARLY_ROUNDS,
   MOCK_RANK_FALLBACK,
   MOCK_RANK_FORM,
   MOCK_REACH_SHRINK_K,
   MOCK_SCARCE_THRESHOLD,
-  MOCK_SIM_CANDIDATE_POOL,
   MOCK_TAU_EARLY,
   MOCK_TAU_LATE,
   MOCK_TAU_MID,
@@ -238,6 +239,15 @@ export function prepareBoard(config: MockDraftConfig): PreparedBoard {
 
 // --- Order helpers ---
 
+// How many of the top available players get scored at a given round.
+// Tight early, looser from round 3. See MOCK_CANDIDATE_POOL_EARLY for the
+// measured reach frequencies that set these.
+export function candidatePoolFor(round: number): number {
+  return round <= MOCK_POOL_EARLY_ROUNDS
+    ? MOCK_CANDIDATE_POOL_EARLY
+    : MOCK_CANDIDATE_POOL_LATE;
+}
+
 export function roundForIndex(index: number, teamCount: number): number {
   if (teamCount <= 0) return 1;
   return Math.floor(index / teamCount) + 1;
@@ -397,7 +407,7 @@ export function pickUtilities(
   const round = roundForIndex(index, config.teamCount);
   const phase = phaseForRound(round);
   const tau = tauFor(profile, phase, config.leagueReach, params);
-  const poolSize = candidatePool ?? config.candidatePool ?? MOCK_CANDIDATE_POOL;
+  const poolSize = candidatePool ?? config.candidatePool ?? candidatePoolFor(round);
 
   const out: UtilityBreakdown[] = [];
   for (const playerId of board.rankOrder) {
@@ -652,15 +662,12 @@ export function runAvailabilitySims(
         continue;
       }
 
+      // No pool override: the simulations use the same candidate pool as
+      // real picks, so the odds the user reads come from the same model
+      // that makes the picks. The pool is small enough now that this is
+      // also faster than the old separate sim pool.
       const working: MockState = { seed: simSeed, picks };
-      const decision = decidePick(
-        board,
-        config,
-        working,
-        index,
-        available,
-        MOCK_SIM_CANDIDATE_POOL,
-      );
+      const decision = decidePick(board, config, working, index, available);
       if (!decision) break;
       available.delete(decision.playerId);
       const teamId = config.order[index];

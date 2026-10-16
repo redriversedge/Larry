@@ -25,16 +25,26 @@ import * as fs from "fs";
 import * as path from "path";
 
 import {
+  MOCK_CANDIDATE_POOL_EARLY,
+  MOCK_CANDIDATE_POOL_LATE,
+  MOCK_POOL_EARLY_ROUNDS,
+  MOCK_REACH_AHEAD_SLOTS,
+  MOCK_REACH_R1_MAX,
+  MOCK_REACH_R2_MAX,
+  MOCK_REACH_R35_TOLERANCE,
   MOCK_TOP_PICK_SHARE,
   MOCK_TOP_PICK_SIMS,
   MOCK_TOP_PICK_WINDOW,
 } from "../src/engine/constants";
 import {
   checkModel,
+  checkReachFrequency,
   combineEvals,
   evaluateDraft,
   fitMockDraft,
   profilesBySeason,
+  realReachFrequency,
+  simulatedReachFrequency,
   topPickRateForSeason as topPickRateFor,
   type EvalResult,
   type FitResult,
@@ -52,6 +62,10 @@ const ADP_PATH = path.join(ROOT, "data/espn-adp-history.json");
 const FIT_SEASONS = [2019, 2020, 2021, 2022, 2023, 2024, 2025];
 const TEST_SEASON = 2026;
 
+// Simulated drafts per season for the reach-frequency measurement. Only
+// rounds 1 to 5 are simulated, so this is cheap.
+const REACH_SIMS_PER_SEASON = 60;
+
 function fmt(n: number, digits = 4): string {
   return Number.isFinite(n) ? n.toFixed(digits) : "n/a";
 }
@@ -62,6 +76,7 @@ function reportLine(label: string, result: EvalResult): string {
     "logLik " + fmt(result.meanLogLik).padStart(9) +
     "   top-1 " + (result.top1 * 100).toFixed(1).padStart(5) + "%" +
     "   top-5 " + (result.top5 * 100).toFixed(1).padStart(5) + "%" +
+    "   in pool " + (result.poolCoverage * 100).toFixed(0).padStart(3) + "%" +
     "   picks " + String(result.picks).padStart(5)
   );
 }
@@ -265,13 +280,91 @@ function main(): void {
     console.log("");
   }
 
-  const pass = winnerHeld.full.meanLogLik > winnerHeld.baseline.meanLogLik;
+  // --- Reach frequency: the other thing the likelihood cannot see ---
+  //
+  // A model can be well calibrated pick by pick and still reach constantly,
+  // because reaching comes from the TAIL. Each deep candidate is unlikely
+  // on its own; it is their combined softmax mass that produces a silly
+  // pick. So this is measured directly, against what the managers did.
+  const reachSeasons = fitSeasons.concat([TEST_SEASON]);
+  const reachProfiles = profilesBySeason(history, reachSeasons, adp);
+  const real = realReachFrequency(history, reachSeasons, adpLookup);
+  const simulated = simulatedReachFrequency(
+    history,
+    reachSeasons,
+    adpLookup,
+    reachProfiles,
+    winnerFit.params,
+    REACH_SIMS_PER_SEASON,
+  );
+  const shippedSimulated = simulatedReachFrequency(
+    history,
+    reachSeasons,
+    adpLookup,
+    reachProfiles,
+    DEFAULT_MOCK_PARAMS,
+    REACH_SIMS_PER_SEASON,
+  );
+  const reachGate = checkReachFrequency(real, simulated);
+
+  const pct = (v: number): string => (v * 100).toFixed(1).padStart(5) + "%";
+  console.log(
+    "REACH FREQUENCY: share of picks taken " + MOCK_REACH_AHEAD_SLOTS +
+      "+ slots ahead of ESPN ADP",
+  );
+  console.log("  " + "".padEnd(24) + "round 1   round 2   rounds 3-5");
+  console.log(
+    "  " + "real drafts".padEnd(24) + pct(real.r1) + "    " + pct(real.r2) +
+      "    " + pct(real.r35) +
+      "      (n " + real.n1 + " / " + real.n2 + " / " + real.n35 + ")",
+  );
+  console.log(
+    "  " + (winner + " fitted").padEnd(24) + pct(simulated.r1) + "    " +
+      pct(simulated.r2) + "    " + pct(simulated.r35),
+  );
+  console.log(
+    "  " + "shipped constants".padEnd(24) + pct(shippedSimulated.r1) + "    " +
+      pct(shippedSimulated.r2) + "    " + pct(shippedSimulated.r35),
+  );
+  console.log(
+    "  gate: R1 <= " + (MOCK_REACH_R1_MAX * 100).toFixed(0) + "% " +
+      (reachGate.r1Pass ? "PASS" : "FAIL") +
+      ",  R2 <= " + (MOCK_REACH_R2_MAX * 100).toFixed(0) + "% " +
+      (reachGate.r2Pass ? "PASS" : "FAIL") +
+      ",  R3-5 within +/-" + (MOCK_REACH_R35_TOLERANCE * 100).toFixed(0) +
+      " points " + (reachGate.r35Pass ? "PASS" : "FAIL"),
+  );
+  console.log("");
+
+  // --- Candidate pool coverage ---
+  //
+  // The pool cap is a truncation, so a real pick can fall outside it. Those
+  // are scored with their uncapped probability rather than as impossible;
+  // this is how often that fallback was needed.
+  console.log("CANDIDATE POOL: " + MOCK_CANDIDATE_POOL_EARLY + " in rounds 1 to " +
+    MOCK_POOL_EARLY_ROUNDS + ", " + MOCK_CANDIDATE_POOL_LATE + " from round " +
+    (MOCK_POOL_EARLY_ROUNDS + 1));
+  console.log(
+    "  real picks inside the pool, held out:  " +
+      (winnerHeld.full.poolCoverage * 100).toFixed(1) + "%",
+  );
+  console.log(
+    "  real picks inside the pool, in sample: " +
+      (winnerFit.fitEval.poolCoverage * 100).toFixed(1) + "%",
+  );
+  console.log("");
+
+  const logLikPass = winnerHeld.full.meanLogLik > winnerHeld.baseline.meanLogLik;
+  const pass = logLikPass && reachGate.pass;
   console.log("=".repeat(78));
   console.log(
     "  GATE: full model beats rank-only on " + TEST_SEASON + "   " +
-      (pass ? "PASS" : "FAIL") +
+      (logLikPass ? "PASS" : "FAIL") +
       "  (" + fmt(winnerHeld.full.meanLogLik) + " vs " +
       fmt(winnerHeld.baseline.meanLogLik) + ")",
+  );
+  console.log(
+    "  GATE: reach frequency                  " + (reachGate.pass ? "PASS" : "FAIL"),
   );
   console.log("=".repeat(78));
   console.log("");

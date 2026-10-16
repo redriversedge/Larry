@@ -169,26 +169,27 @@ var LarryEngine = (() => {
   var DRAFT_PUNT_MAX_POSITIVE_SEASONS = 1;
   var DRAFT_REACH_OFTEN_MEDIAN = 12;
   var DRAFT_REACH_BOARD_MEDIAN = 0;
-  var MOCK_FITTED = false;
+  var MOCK_FITTED = true;
   var MOCK_RANK_FORM = "log";
   var MOCK_TOP_PICK_WINDOW = 3;
   var MOCK_TOP_PICK_SHARE = 0.95;
   var MOCK_TOP_PICK_SIMS = 500;
-  var MOCK_TAU_EARLY = 0.4;
-  var MOCK_TAU_MID = 0.67;
-  var MOCK_TAU_LATE = 1.2;
+  var MOCK_TAU_EARLY = 0.32;
+  var MOCK_TAU_MID = 0.31;
+  var MOCK_TAU_LATE = 0.84;
   var MOCK_BETA = 0;
-  var MOCK_LAMBDA = 1.5;
+  var MOCK_LAMBDA = 0.84;
   var MOCK_GAMMA = 1;
-  var MOCK_ALPHA = 0.28;
+  var MOCK_ALPHA = 0.19;
   var MOCK_REACH_SHRINK_K = 15;
   var MOCK_WEIGHT_STRONG = 1;
   var MOCK_WEIGHT_MODERATE = 0.5;
   var MOCK_OVERLOAD_THRESHOLD = 3;
   var MOCK_RANK_FALLBACK = 400;
   var MOCK_Z_POOL_SIZE = 200;
-  var MOCK_CANDIDATE_POOL = 120;
-  var MOCK_SIM_CANDIDATE_POOL = 60;
+  var MOCK_POOL_EARLY_ROUNDS = 2;
+  var MOCK_CANDIDATE_POOL_EARLY = 24;
+  var MOCK_CANDIDATE_POOL_LATE = 40;
   var MOCK_AVAIL_SIMS = 500;
   var MOCK_AVAIL_SIMS_REDUCED = 250;
   var MOCK_AVAIL_CHUNK = 50;
@@ -1293,6 +1294,9 @@ var LarryEngine = (() => {
       rounds: config.teamCount > 0 ? Math.ceil(config.order.length / config.teamCount) : 0
     };
   }
+  function candidatePoolFor(round) {
+    return round <= MOCK_POOL_EARLY_ROUNDS ? MOCK_CANDIDATE_POOL_EARLY : MOCK_CANDIDATE_POOL_LATE;
+  }
   function roundForIndex(index, teamCount) {
     if (teamCount <= 0) return 1;
     return Math.floor(index / teamCount) + 1;
@@ -1375,7 +1379,7 @@ var LarryEngine = (() => {
     const round = roundForIndex(index, config.teamCount);
     const phase = phaseForRound(round);
     const tau = tauFor(profile, phase, config.leagueReach, params);
-    const poolSize = candidatePool ?? config.candidatePool ?? MOCK_CANDIDATE_POOL;
+    const poolSize = candidatePool ?? config.candidatePool ?? candidatePoolFor(round);
     const out = [];
     for (const playerId of board.rankOrder) {
       if (!availableIds.has(playerId)) continue;
@@ -1537,14 +1541,7 @@ var LarryEngine = (() => {
           continue;
         }
         const working = { seed: simSeed, picks };
-        const decision = decidePick(
-          board,
-          config,
-          working,
-          index,
-          available,
-          MOCK_SIM_CANDIDATE_POOL
-        );
+        const decision = decidePick(board, config, working, index, available);
         if (!decision) break;
         available.delete(decision.playerId);
         const teamId = config.order[index];
@@ -1601,9 +1598,9 @@ var LarryEngine = (() => {
   }
 
   // src/engine/draftFit.ts
-  var FIT_CANDIDATE_POOL = 1e5;
+  var UNCAPPED_POOL = 1e5;
   function emptyEval() {
-    return { picks: 0, meanLogLik: 0, top1: 0, top5: 0 };
+    return { picks: 0, meanLogLik: 0, top1: 0, top5: 0, poolCoverage: 0 };
   }
   function buildHistoricalBoard(history, seasonId, adpLookup) {
     const season = history.seasons[String(seasonId)];
@@ -1673,31 +1670,28 @@ var LarryEngine = (() => {
     let scored = 0;
     let top1 = 0;
     let top5 = 0;
+    let inPool = 0;
     for (let index = 0; index < ordered.length; index++) {
       const pick = ordered[index];
       if (!pick) continue;
       const actual = pick[3];
       if (!available.has(actual)) continue;
-      const utilities = pickUtilities(
-        prepared,
-        config,
-        state,
-        index,
-        available,
-        FIT_CANDIDATE_POOL
-      );
-      if (utilities.length > 1) {
-        const probabilities = softmax(utilities.map((u) => u.utility));
+      const utilities = pickUtilities(prepared, config, state, index, available);
+      const capped = utilities.length > 1 ? utilities : null;
+      const actualInPool = capped ? capped.some((u) => u.playerId === actual) : false;
+      const scoring = actualInPool ? capped : pickUtilities(prepared, config, state, index, available, UNCAPPED_POOL);
+      if (scoring && scoring.length > 1) {
+        const probabilities = softmax(scoring.map((u) => u.utility));
         let actualP = 0;
-        let better = 0;
-        for (let i = 0; i < utilities.length; i++) {
-          const entry = utilities[i];
+        for (let i = 0; i < scoring.length; i++) {
+          const entry = scoring[i];
           const p = probabilities[i];
           if (!entry || p === void 0) continue;
           if (entry.playerId === actual) actualP = p;
         }
-        for (let i = 0; i < utilities.length; i++) {
-          const entry = utilities[i];
+        let better = 0;
+        for (let i = 0; i < scoring.length; i++) {
+          const entry = scoring[i];
           const p = probabilities[i];
           if (!entry || p === void 0) continue;
           if (entry.playerId !== actual && p > actualP) better++;
@@ -1705,6 +1699,7 @@ var LarryEngine = (() => {
         logLikSum += Math.log(Math.max(actualP, 1e-12));
         if (better === 0) top1++;
         if (better < 5) top5++;
+        if (actualInPool) inPool++;
         scored++;
       }
       available.delete(actual);
@@ -1714,7 +1709,8 @@ var LarryEngine = (() => {
       picks: scored,
       meanLogLik: scored ? logLikSum / scored : 0,
       top1: scored ? top1 / scored : 0,
-      top5: scored ? top5 / scored : 0
+      top5: scored ? top5 / scored : 0,
+      poolCoverage: scored ? inPool / scored : 0
     };
   }
   function combineEvals(results) {
@@ -1722,18 +1718,21 @@ var LarryEngine = (() => {
     let logLik = 0;
     let top1 = 0;
     let top5 = 0;
+    let coverage = 0;
     for (const r of results) {
       picks += r.picks;
       logLik += r.meanLogLik * r.picks;
       top1 += r.top1 * r.picks;
       top5 += r.top5 * r.picks;
+      coverage += r.poolCoverage * r.picks;
     }
     if (!picks) return emptyEval();
     return {
       picks,
       meanLogLik: logLik / picks,
       top1: top1 / picks,
-      top5: top5 / picks
+      top5: top5 / picks,
+      poolCoverage: coverage / picks
     };
   }
   function profilesBySeason(history, seasons, adp) {

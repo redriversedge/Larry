@@ -25,11 +25,21 @@ import {
   type DraftHistory,
   type ManagerProfile,
 } from "./draftProfiles";
-import { MOCK_TOP_PICK_SIMS, MOCK_TOP_PICK_WINDOW } from "./constants";
+import {
+  MOCK_REACH_AHEAD_SLOTS,
+  MOCK_REACH_R1_MAX,
+  MOCK_REACH_R2_MAX,
+  MOCK_REACH_R35_TOLERANCE,
+  MOCK_TOP_PICK_SIMS,
+  MOCK_TOP_PICK_WINDOW,
+} from "./constants";
 import {
   DEFAULT_MOCK_PARAMS,
+  mixSeed,
   pickUtilities,
   prepareBoard,
+  roundForIndex,
+  simulateUntil,
   softmax,
   topPickRate,
   type MockDraftConfig,
@@ -39,9 +49,9 @@ import {
   type RankForm,
 } from "./mockDraft";
 
-// Large enough that every available player is scored, so the likelihood is
-// a true probability over the pool rather than over a truncation of it.
-const FIT_CANDIDATE_POOL = 100000;
+// Large enough that every available player is scored. Used for the fallback
+// when a real pick lands outside the capped candidate pool.
+const UNCAPPED_POOL = 100000;
 
 export interface EvalResult {
   picks: number;
@@ -51,10 +61,14 @@ export interface EvalResult {
   // where it was among the model's five most likely.
   top1: number;
   top5: number;
+  // Share of real picks that fell INSIDE the capped candidate pool. The cap
+  // is a truncation of the model, so this is how much of the data the
+  // capped model can actually speak to; the rest is scored by fallback.
+  poolCoverage: number;
 }
 
 export function emptyEval(): EvalResult {
-  return { picks: 0, meanLogLik: 0, top1: 0, top5: 0 };
+  return { picks: 0, meanLogLik: 0, top1: 0, top5: 0, poolCoverage: 0 };
 }
 
 export function buildHistoricalBoard(
@@ -152,6 +166,7 @@ export function evaluateDraft(
   let scored = 0;
   let top1 = 0;
   let top5 = 0;
+  let inPool = 0;
 
   for (let index = 0; index < ordered.length; index++) {
     const pick = ordered[index];
@@ -159,26 +174,40 @@ export function evaluateDraft(
     const actual = pick[3];
     if (!available.has(actual)) continue;
 
-    const utilities = pickUtilities(
-      prepared,
-      config,
-      state,
-      index,
-      available,
-      FIT_CANDIDATE_POOL,
-    );
-    if (utilities.length > 1) {
-      const probabilities = softmax(utilities.map((u) => u.utility));
+    // The candidate pool is capped by round (see MOCK_CANDIDATE_POOL_EARLY),
+    // so the model genuinely assigns zero probability to a player outside
+    // it. Scoring a real pick that lands outside as -Infinity would make
+    // the likelihood meaningless: at a cap of 24 that is about 13% of real
+    // picks, and a handful of -Infinity terms dominate everything else.
+    //
+    // Instead those picks are scored with their UNCAPPED probability. This
+    // is a scoring convention, not a probability model: the two sets of
+    // probabilities do not share a normalizer, so the result is a
+    // comparable score rather than a true log-likelihood. Both the full
+    // model and the baseline are scored the same way, and poolCoverage
+    // reports how often the fallback was needed.
+    const utilities = pickUtilities(prepared, config, state, index, available);
+    const capped = utilities.length > 1 ? utilities : null;
+    const actualInPool = capped
+      ? capped.some((u) => u.playerId === actual)
+      : false;
+
+    const scoring = actualInPool
+      ? capped
+      : pickUtilities(prepared, config, state, index, available, UNCAPPED_POOL);
+
+    if (scoring && scoring.length > 1) {
+      const probabilities = softmax(scoring.map((u) => u.utility));
       let actualP = 0;
-      let better = 0;
-      for (let i = 0; i < utilities.length; i++) {
-        const entry = utilities[i];
+      for (let i = 0; i < scoring.length; i++) {
+        const entry = scoring[i];
         const p = probabilities[i];
         if (!entry || p === undefined) continue;
         if (entry.playerId === actual) actualP = p;
       }
-      for (let i = 0; i < utilities.length; i++) {
-        const entry = utilities[i];
+      let better = 0;
+      for (let i = 0; i < scoring.length; i++) {
+        const entry = scoring[i];
         const p = probabilities[i];
         if (!entry || p === undefined) continue;
         if (entry.playerId !== actual && p > actualP) better++;
@@ -187,6 +216,7 @@ export function evaluateDraft(
       logLikSum += Math.log(Math.max(actualP, 1e-12));
       if (better === 0) top1++;
       if (better < 5) top5++;
+      if (actualInPool) inPool++;
       scored++;
     }
 
@@ -199,6 +229,7 @@ export function evaluateDraft(
     meanLogLik: scored ? logLikSum / scored : 0,
     top1: scored ? top1 / scored : 0,
     top5: scored ? top5 / scored : 0,
+    poolCoverage: scored ? inPool / scored : 0,
   };
 }
 
@@ -225,11 +256,13 @@ export function combineEvals(results: EvalResult[]): EvalResult {
   let logLik = 0;
   let top1 = 0;
   let top5 = 0;
+  let coverage = 0;
   for (const r of results) {
     picks += r.picks;
     logLik += r.meanLogLik * r.picks;
     top1 += r.top1 * r.picks;
     top5 += r.top5 * r.picks;
+    coverage += r.poolCoverage * r.picks;
   }
   if (!picks) return emptyEval();
   return {
@@ -237,6 +270,172 @@ export function combineEvals(results: EvalResult[]): EvalResult {
     meanLogLik: logLik / picks,
     top1: top1 / picks,
     top5: top5 / picks,
+    poolCoverage: coverage / picks,
+  };
+}
+
+// --- Reach frequency: the second thing a per-pick likelihood cannot see ---
+//
+// A model can be well calibrated pick by pick and still reach far too often,
+// because reaching is about the TAIL of the distribution. Each deep player
+// is individually unlikely; it is their combined mass that produces a
+// silly pick. So the shipped parameters are held to the observed frequency
+// of reaches directly, by round band.
+
+export interface ReachFrequency {
+  // Share of picks taken MOCK_REACH_AHEAD_SLOTS or more ahead of ESPN ADP.
+  r1: number;
+  r2: number;
+  r35: number;
+  // Denominators, so a thin band is visible rather than silently noisy.
+  n1: number;
+  n2: number;
+  n35: number;
+}
+
+function emptyBands(): { hits: number[]; totals: number[] } {
+  return { hits: [0, 0, 0], totals: [0, 0, 0] };
+}
+
+// 0 for round 1, 1 for round 2, 2 for rounds 3 to 5, -1 for anything later.
+function bandFor(round: number): number {
+  if (round === 1) return 0;
+  if (round === 2) return 1;
+  if (round >= 3 && round <= 5) return 2;
+  return -1;
+}
+
+function finishBands(bands: { hits: number[]; totals: number[] }): ReachFrequency {
+  const rate = (i: number): number =>
+    (bands.totals[i] || 0) > 0 ? (bands.hits[i] || 0) / (bands.totals[i] as number) : 0;
+  return {
+    r1: rate(0),
+    r2: rate(1),
+    r35: rate(2),
+    n1: bands.totals[0] || 0,
+    n2: bands.totals[1] || 0,
+    n35: bands.totals[2] || 0,
+  };
+}
+
+// What the managers actually did.
+export function realReachFrequency(
+  history: DraftHistory,
+  seasonIds: number[],
+  adpLookup: Map<string, Map<string, number>>,
+): ReachFrequency {
+  const bands = emptyBands();
+
+  for (const seasonId of seasonIds) {
+    const season = history.seasons[String(seasonId)];
+    if (!season) continue;
+    const adp = adpLookup.get(String(seasonId));
+    if (!adp) continue;
+
+    for (const pick of season.picks) {
+      const band = bandFor(pick[1]);
+      if (band < 0) continue;
+      const row = season.players[String(pick[3])];
+      if (!row) continue;
+      const value = adp.get(normName(row[0]));
+      // No ADP means the player was off the board, so "ahead of ADP" has
+      // no meaning. Excluded from both numerator and denominator.
+      if (value === undefined) continue;
+      bands.totals[band] = (bands.totals[band] || 0) + 1;
+      if (value - pick[0] >= MOCK_REACH_AHEAD_SLOTS) {
+        bands.hits[band] = (bands.hits[band] || 0) + 1;
+      }
+    }
+  }
+
+  return finishBands(bands);
+}
+
+// What the model does, on the same boards and the same draft orders.
+export function simulatedReachFrequency(
+  history: DraftHistory,
+  seasonIds: number[],
+  adpLookup: Map<string, Map<string, number>>,
+  profilesFor: Record<number, Record<string, ManagerProfile>>,
+  params: MockParams,
+  simsPerSeason: number,
+  // Override the round-based candidate pool. The pool is the lever that
+  // controls reach frequency, so being able to sweep it is how that was
+  // established in the first place.
+  candidatePool?: number,
+): ReachFrequency {
+  const bands = emptyBands();
+
+  for (const seasonId of seasonIds) {
+    const season = history.seasons[String(seasonId)];
+    if (!season) continue;
+    const adp = adpLookup.get(String(seasonId));
+    if (!adp) continue;
+
+    const board = buildHistoricalBoard(history, seasonId, adpLookup);
+    const base = configForSeason(
+      history,
+      seasonId,
+      board,
+      profilesFor[seasonId] || {},
+      params,
+    );
+    if (!base) continue;
+    const config = candidatePool === undefined ? base : { ...base, candidatePool };
+    const prepared = prepareBoard(config);
+    const teamCount = config.teamCount;
+
+    for (let s = 0; s < simsPerSeason; s++) {
+      const result = simulateUntil(
+        prepared,
+        config,
+        { seed: mixSeed(seasonId, s + 1), picks: [] },
+        null,
+        // Only rounds 1 to 5 are measured, so stop there.
+        teamCount * 5,
+      );
+      for (const pick of result.state.picks) {
+        const round = roundForIndex(pick[0] - 1, teamCount);
+        const band = bandFor(round);
+        if (band < 0) continue;
+        const entry = prepared.byId.get(pick[2]);
+        if (!entry) continue;
+        const value = adp.get(normName(entry.player.name));
+        if (value === undefined) continue;
+        bands.totals[band] = (bands.totals[band] || 0) + 1;
+        if (value - pick[0] >= MOCK_REACH_AHEAD_SLOTS) {
+          bands.hits[band] = (bands.hits[band] || 0) + 1;
+        }
+      }
+    }
+  }
+
+  return finishBands(bands);
+}
+
+export interface ReachGate {
+  real: ReachFrequency;
+  simulated: ReachFrequency;
+  r1Pass: boolean;
+  r2Pass: boolean;
+  r35Pass: boolean;
+  pass: boolean;
+}
+
+export function checkReachFrequency(
+  real: ReachFrequency,
+  simulated: ReachFrequency,
+): ReachGate {
+  const r1Pass = simulated.r1 <= MOCK_REACH_R1_MAX;
+  const r2Pass = simulated.r2 <= MOCK_REACH_R2_MAX;
+  const r35Pass = Math.abs(simulated.r35 - real.r35) <= MOCK_REACH_R35_TOLERANCE;
+  return {
+    real,
+    simulated,
+    r1Pass,
+    r2Pass,
+    r35Pass,
+    pass: r1Pass && r2Pass && r35Pass,
   };
 }
 

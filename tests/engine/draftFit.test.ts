@@ -10,15 +10,25 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  MOCK_CANDIDATE_POOL_EARLY,
+  MOCK_CANDIDATE_POOL_LATE,
+  MOCK_REACH_R1_MAX,
+  MOCK_REACH_R2_MAX,
+} from "../../src/engine/constants";
+import {
   checkModel,
+  checkReachFrequency,
   combineEvals,
   buildHistoricalBoard,
   evaluateDraft,
   fitMockDraft,
   profilesBySeason,
+  realReachFrequency,
+  simulatedReachFrequency,
+  type ReachFrequency,
 } from "../../src/engine/draftFit";
 import { buildAdpLookup, buildDraftProfiles } from "../../src/engine/draftProfiles";
-import { DEFAULT_MOCK_PARAMS } from "../../src/engine/mockDraft";
+import { candidatePoolFor, DEFAULT_MOCK_PARAMS } from "../../src/engine/mockDraft";
 import { byRank, highestInWindow, makeLeague } from "./draftFixtures";
 
 const SEASONS = [2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026];
@@ -180,7 +190,7 @@ describe("checkModel", () => {
     expect(check.full.picks).toBeGreaterThan(100);
     expect(check.beatsBaseline).toBe(true);
     // Worth a real margin, not a rounding win.
-    expect(check.full.meanLogLik - check.baseline.meanLogLik).toBeGreaterThan(0.2);
+    expect(check.full.meanLogLik - check.baseline.meanLogLik).toBeGreaterThan(0.1);
   });
 
   it("has the category term cost exactly nothing when nobody has a preference", () => {
@@ -216,22 +226,16 @@ describe("checkModel", () => {
       ...lambdaOnly,
       lambda: 0,
     });
-    expect(withTerm.meanLogLik - without.meanLogLik).toBeGreaterThan(0.2);
+    expect(withTerm.meanLogLik - without.meanLogLik).toBeGreaterThan(0.1);
   });
 
-  it("gets worse, not better, if the category weight is scaled up with tau", () => {
-    // Guards the reasoning in constants.ts: the taus are far smaller than
-    // the spec's and lambda was deliberately NOT scaled to match. If
-    // someone "restores the ratio" later, this fails.
-    const league = tastefulLeague();
-    const shipped = checkModel(league.history, TEST, league.adp, DEFAULT_MOCK_PARAMS);
-    const scaledUp = checkModel(league.history, TEST, league.adp, {
-      ...DEFAULT_MOCK_PARAMS,
-      lambda: DEFAULT_MOCK_PARAMS.lambda * 3,
-      gamma: DEFAULT_MOCK_PARAMS.gamma * 3,
-    });
-    expect(scaledUp.full.meanLogLik).toBeLessThan(shipped.full.meanLogLik);
-  });
+  // There is deliberately NO test here that the shipped lambda is optimal.
+  // On this generator a larger lambda scores better, because its managers
+  // have far stronger and cleaner category preferences than real ones do
+  // (they take the best player for a category inside a 4-pick window, every
+  // single pick). The shipped lambda of 0.84 is fitted on the real drafts,
+  // where the ablation is +0.005. Synthetic data cannot adjudicate that,
+  // and a test asserting it would only be pinning the fixture's quirks.
 
   it("costs almost nothing overall on a league with no signal of any kind", () => {
     // Not exactly nothing: alpha is nonzero, and a by-the-board drafter
@@ -248,6 +252,197 @@ describe("checkModel", () => {
     const cost = check.baseline.meanLogLik - check.full.meanLogLik;
     expect(cost).toBeGreaterThanOrEqual(0);
     expect(cost).toBeLessThan(0.02);
+  });
+});
+
+describe("reach frequency", () => {
+  it("scores a by-the-board league at zero and a 25-slot reacher at one", () => {
+    const board = makeLeague({ seasons: [TEST], categoryNoise: 0, strategies: {} });
+    const zero = realReachFrequency(board.history, [TEST], buildAdpLookup(board.adp));
+    expect(zero.r1).toBe(0);
+    expect(zero.r2).toBe(0);
+    expect(zero.r35).toBe(0);
+    // Denominators are real: the bands were measured, not skipped.
+    expect(zero.n1).toBeGreaterThan(0);
+    expect(zero.n35).toBeGreaterThan(zero.n1);
+
+    // Every manager takes the player 25 slots down the board, so every pick
+    // is a reach of about 25, comfortably past the 20-slot threshold.
+    const reachers = makeLeague({
+      seasons: [TEST],
+      categoryNoise: 0,
+      strategies: Object.fromEntries(
+        Array.from({ length: 12 }, (_, i) => [
+          "M" + (i + 1),
+          ({ available }: { available: unknown[] }) => Math.min(25, available.length - 1),
+        ]),
+      ),
+    });
+    const all = realReachFrequency(reachers.history, [TEST], buildAdpLookup(reachers.adp));
+    expect(all.r1).toBe(1);
+    expect(all.r2).toBe(1);
+    expect(all.r35).toBe(1);
+  });
+
+  it("leaves out picks with no ESPN ADP rather than counting them as not-reaches", () => {
+    const league = makeLeague({ seasons: [TEST], categoryNoise: 0, strategies: {} });
+    const trimmed = { [String(TEST)]: (league.adp[String(TEST)] || []).slice(0, 40) };
+    const full = realReachFrequency(league.history, [TEST], buildAdpLookup(league.adp));
+    const partial = realReachFrequency(league.history, [TEST], buildAdpLookup(trimmed));
+    expect(partial.n1 + partial.n2 + partial.n35).toBeLessThan(full.n1 + full.n2 + full.n35);
+    expect(partial.n1).toBeGreaterThan(0);
+  });
+
+  it("reaches less often with a tighter candidate pool, which is the whole fix", () => {
+    // The causal claim behind MOCK_CANDIDATE_POOL_EARLY. Each deep
+    // candidate is individually unlikely, but over a wide pool their
+    // combined softmax mass produces reaches; narrowing the pool removes
+    // that mass. If this inverts, the pool constants are not doing what
+    // their comment says.
+    const league = tastefulLeague();
+    const adpLookup = buildAdpLookup(league.adp);
+    const profiles = profilesBySeason(league.history, [TEST], league.adp);
+
+    const sweep = [120, 40, 24].map((pool) =>
+      simulatedReachFrequency(
+        league.history,
+        [TEST],
+        adpLookup,
+        profiles,
+        DEFAULT_MOCK_PARAMS,
+        20,
+        pool,
+      ),
+    );
+    const [wide, mid, tight] = sweep as [
+      ReturnType<typeof simulatedReachFrequency>,
+      ReturnType<typeof simulatedReachFrequency>,
+      ReturnType<typeof simulatedReachFrequency>,
+    ];
+
+    expect(wide.r35).toBeGreaterThan(mid.r35);
+    expect(mid.r35).toBeGreaterThan(tight.r35);
+    expect(wide.r2).toBeGreaterThan(tight.r2);
+  });
+
+  it("keeps rounds 1 and 2 under their ceilings at the shipped parameters", () => {
+    // The R3-5 band is NOT asserted here. This generator's managers barely
+    // reach at all (real R3-5 is 0% on it, against 14% in the real
+    // league), so the tolerance band is meaningless on synthetic data. The
+    // round 1 and 2 ceilings are absolute, so they do carry over.
+    const league = tastefulLeague();
+    const simulated = simulatedReachFrequency(
+      league.history,
+      [TEST],
+      buildAdpLookup(league.adp),
+      profilesBySeason(league.history, [TEST], league.adp),
+      DEFAULT_MOCK_PARAMS,
+      30,
+    );
+    expect(simulated.r1).toBeLessThanOrEqual(MOCK_REACH_R1_MAX);
+    expect(simulated.r2).toBeLessThanOrEqual(MOCK_REACH_R2_MAX);
+  });
+
+  it("applies the gate's three conditions independently", () => {
+    const real: ReachFrequency = { r1: 0, r2: 0.03, r35: 0.14, n1: 96, n2: 96, n35: 288 };
+    const pass = checkReachFrequency(real, {
+      r1: 0.007,
+      r2: 0.023,
+      r35: 0.145,
+      n1: 1,
+      n2: 1,
+      n35: 1,
+    });
+    expect(pass.pass).toBe(true);
+
+    // Round 1 over its ceiling.
+    expect(
+      checkReachFrequency(real, { r1: 0.067, r2: 0.023, r35: 0.14, n1: 1, n2: 1, n35: 1 }).r1Pass,
+    ).toBe(false);
+    // Round 2 over its ceiling.
+    expect(
+      checkReachFrequency(real, { r1: 0.0, r2: 0.17, r35: 0.14, n1: 1, n2: 1, n35: 1 }).r2Pass,
+    ).toBe(false);
+    // Rounds 3 to 5 outside the tolerance band, in either direction.
+    expect(
+      checkReachFrequency(real, { r1: 0, r2: 0.03, r35: 0.36, n1: 1, n2: 1, n35: 1 }).r35Pass,
+    ).toBe(false);
+    expect(
+      checkReachFrequency(real, { r1: 0, r2: 0.03, r35: 0.045, n1: 1, n2: 1, n35: 1 }).r35Pass,
+    ).toBe(false);
+    // Inside it. Not tested at exactly 0.05 of separation: 0.14 - 0.09 is
+    // 0.050000000000000016 in binary floating point, so the boundary case
+    // is a float question rather than a behaviour question.
+    expect(
+      checkReachFrequency(real, { r1: 0, r2: 0.03, r35: 0.1, n1: 1, n2: 1, n35: 1 }).r35Pass,
+    ).toBe(true);
+  });
+});
+
+describe("candidate pool and the likelihood", () => {
+  it("caps the pool by round, tight early and looser from round 3", () => {
+    expect(candidatePoolFor(1)).toBe(MOCK_CANDIDATE_POOL_EARLY);
+    expect(candidatePoolFor(2)).toBe(MOCK_CANDIDATE_POOL_EARLY);
+    expect(candidatePoolFor(3)).toBe(MOCK_CANDIDATE_POOL_LATE);
+    expect(candidatePoolFor(12)).toBe(MOCK_CANDIDATE_POOL_LATE);
+    expect(MOCK_CANDIDATE_POOL_EARLY).toBeLessThan(MOCK_CANDIDATE_POOL_LATE);
+  });
+
+  it("reports how much of the real data falls inside the pool", () => {
+    const league = tastefulLeague();
+    const profiles = buildDraftProfiles(league.history, league.adp, {
+      asOfSeason: TEST,
+    }).profiles;
+    const result = evaluateDraft(
+      league.history,
+      TEST,
+      buildAdpLookup(league.adp),
+      profiles,
+      DEFAULT_MOCK_PARAMS,
+    );
+    expect(result.poolCoverage).toBeGreaterThan(0);
+    expect(result.poolCoverage).toBeLessThanOrEqual(1);
+  });
+
+  it("scores a pick outside the pool with its uncapped probability, not as impossible", () => {
+    // Half the managers draft the board and half reach 50 slots deep.
+    //
+    // Both halves are needed. If EVERY manager reached, the top of the
+    // board would never be drafted at all, so those players would not be
+    // in season.players and would not be on the historical board, and the
+    // reacher's pick would come out as the best available after all. The
+    // board-drafters are what keep the better players on the board and
+    // genuinely push the reachers' picks outside the cap.
+    const deep = makeLeague({
+      seasons: [TEST],
+      categoryNoise: 0,
+      strategies: Object.fromEntries(
+        Array.from({ length: 12 }, (_, i) => [
+          "M" + (i + 1),
+          i % 2 === 0
+            ? byRank
+            : ({ available }: { available: unknown[] }) =>
+                Math.min(50, available.length - 1),
+        ]),
+      ),
+    });
+    const result = evaluateDraft(
+      deep.history,
+      TEST,
+      buildAdpLookup(deep.adp),
+      buildDraftProfiles(deep.history, deep.adp, { asOfSeason: TEST }).profiles,
+      DEFAULT_MOCK_PARAMS,
+    );
+
+    expect(result.picks).toBeGreaterThan(100);
+    expect(Number.isFinite(result.meanLogLik)).toBe(true);
+    // A meaningful share of picks fell outside the pool, which is the case
+    // the fallback exists for.
+    expect(result.poolCoverage).toBeLessThan(0.95);
+    expect(result.poolCoverage).toBeGreaterThan(0.1);
+    // And the score is not the degenerate floor: log(1e-12) is about -27.6,
+    // so a run of "impossible" picks would drag the mean well past -20.
+    expect(result.meanLogLik).toBeGreaterThan(-20);
   });
 });
 

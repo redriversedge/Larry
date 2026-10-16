@@ -198,12 +198,14 @@ describe("Draft Room: page renders", () => {
     }
   });
 
-  it("offers to build profiles and says the model is unfitted", async () => {
+  it("offers to build profiles and shows the seed", async () => {
     const h = load(baseState());
     const html = await ready(h);
     expect(html).toContain("Build manager profiles");
-    expect(html).toContain("unfitted");
     expect(html).toContain("Seed ");
+    // The model is fitted now, so the footer must NOT carry the unfitted
+    // warning. It reappears automatically if MOCK_FITTED goes back to false.
+    expect(html).not.toContain("unfitted");
   });
 
   it("lists the user's upcoming picks", async () => {
