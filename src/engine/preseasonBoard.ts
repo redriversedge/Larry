@@ -90,6 +90,9 @@ export function buildPreseasonBoard(
         priorGP: p.priorGP,
         leagueMeanGP,
         onTeam: p.onTeam,
+        // A broken ESPN projection must not become this player's expected
+        // games, nor a ceiling on them.
+        suspect: p.suspect,
       }),
     );
   }

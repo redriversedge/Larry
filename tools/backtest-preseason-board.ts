@@ -345,6 +345,7 @@ function v3Board(
       priorGP: c.priorGP,
       leagueMeanGP,
       onTeam: true,
+      suspect: c.espnGP > 0 && c.espnGP < PRESEASON_SUSPECT_GP,
     };
     expGP.set(c.id, expectedGames(input, opts));
   }

@@ -22,6 +22,7 @@ import {
   type FitSample,
 } from "../../src/engine/durability";
 import { replacementLevel, seasonValueFor, seasonValues } from "../../src/engine/replacement";
+import { durabilityBand } from "../../src/engine/preseasonBoard";
 
 const ROOT = path.resolve(__dirname, "../..");
 const HISTORY = path.join(ROOT, "tests/fixtures/projections/espn-history.json");
@@ -131,6 +132,60 @@ describe("durability: expected games", () => {
   it("does not let the override fire on a small disagreement", () => {
     const d = durabilityDetail({ espnGP: 66, priorGP: [72, 70, 74], leagueMeanGP });
     expect(d.overrideApplied).toBe(false);
+  });
+
+  it("ignores ESPN entirely for a suspect projection, rather than letting it cap the estimate", () => {
+    // The Haliburton case. ESPN publishes 1 game for a player whose own
+    // record says 70, which is a data error, not an injury report. The
+    // override's trigger (ESPN far BELOW history) is exactly the shape of
+    // a broken projection, so without the suspect guard the broken number
+    // became a hard ceiling and the board showed "Exp GP 1" with a red
+    // dot on a healthy star.
+    const broken = { espnGP: 1, priorGP: [70, 69, 74], leagueMeanGP };
+
+    const unguarded = durabilityDetail(broken);
+    expect(unguarded.overrideApplied).toBe(true);
+    expect(unguarded.expectedGP).toBeLessThanOrEqual(1);
+
+    const guarded = durabilityDetail({ ...broken, suspect: true });
+    expect(guarded.overrideApplied).toBe(false);
+    // History only: no 20% of ESPN's 1 mixed in either.
+    expect(guarded.expectedGP).toBeCloseTo(guarded.histGP as number, 10);
+    expect(guarded.expectedGP).toBeGreaterThan(60);
+    expect(durabilityBand(guarded.expectedGP)).not.toBe("red");
+  });
+
+  it("falls back to the league mean for a suspect projection with no history", () => {
+    // A rookie ESPN projects for 2 games. There is no record to fall back
+    // on, so the league mean is the honest placeholder; ESPN's 2 is not.
+    const d = durabilityDetail({
+      espnGP: 2,
+      priorGP: [],
+      leagueMeanGP,
+      suspect: true,
+    });
+    expect(d.seasons).toBe(0);
+    expect(d.expectedGP).toBe(leagueMeanGP);
+  });
+
+  it("still gives a suspect player with no NBA team zero games", () => {
+    // The no-team rule outranks everything: no team, no games.
+    const d = durabilityDetail({
+      espnGP: 1,
+      priorGP: [70, 70],
+      leagueMeanGP,
+      suspect: true,
+      onTeam: false,
+    });
+    expect(d.expectedGP).toBe(0);
+  });
+
+  it("leaves the ranking alone, because a suspect player is charged a full season", () => {
+    // seasonValueFor ignores expectedGP when suspect, so the fix above
+    // moves the Exp GP column and the fit bonus without touching value.
+    const histOnly = seasonValueFor(8, 2, 70, true);
+    const broken = seasonValueFor(8, 2, 1, true);
+    expect(histOnly).toBe(broken);
   });
 
   it("falls back to ESPN for a rookie", () => {
