@@ -71,6 +71,26 @@ export type {
   TeamAffinity,
 } from "./draftProfiles";
 export {
+  categoryRanks,
+  fitBonus,
+  fitWeights,
+  recommendValueAndFit,
+  rosterCategoryTotals,
+  FIT_LAMBDA,
+  FIT_MIN_PICKS,
+  FIT_WEIGHT_EVEN,
+  FIT_WEIGHT_STRONG,
+  FIT_WEIGHT_WEAK,
+} from "./draftTeamFit";
+export type { FitInput, FitPlayer, FitRecommendation } from "./draftTeamFit";
+export {
+  clampGames,
+  durabilityDetail,
+  expectedGames,
+  weightedHistory,
+} from "./durability";
+export type { DurabilityDetail, DurabilityInput } from "./durability";
+export {
   buildHistoricalBoard,
   checkModel,
   combineEvals,

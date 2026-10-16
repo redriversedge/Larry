@@ -220,6 +220,8 @@ var DraftRoom = (function() {
         BLK: rate ? (rate.BLK || 0) : 0,
         PTS: rate ? (rate.PTS || 0) : 0
       };
+      var api = engine();
+      var scale = (api && typeof api.DURANT_SCALE === 'number') ? api.DURANT_SCALE : 10;
       out.push({
         playerId: p.id,
         name: p.name || '',
@@ -229,6 +231,14 @@ var DraftRoom = (function() {
         espnDraftRank: (typeof p.espnDraftRank === 'number' && p.espnDraftRank > 0) ?
           p.espnDraftRank : null,
         larryRank: (typeof p.durantRank === 'number' && p.durantRank > 0) ? p.durantRank : null,
+        // Board value in z-sum units, so it is on the same scale as the
+        // team-fit bonus and the two can be added.
+        larryValue: (typeof p.durantScore === 'number' && isFinite(p.durantScore))
+          ? p.durantScore / scale : null,
+        // ESPN's projected games. Part A's durability model would replace
+        // this, but its board gates failed and it did not ship.
+        expectedGP: (p.stats && typeof p.stats.projectedGP === 'number' &&
+          p.stats.projectedGP > 0) ? p.stats.projectedGP : 0,
         perGame: perGame
       });
     }
@@ -614,48 +624,138 @@ var DraftRoom = (function() {
   }
 
   function rowTap(playerId) {
-    if (userOnClock()) { confirmRow(playerId); return; }
+    // Read-only while the real draft is driving the board.
+    if (userOnClock() && !followingActive()) { confirmRow(playerId); return; }
     if (typeof openPlayerPopup === 'function') openPlayerPopup(playerId);
   }
 
   // --- Render: Larry's pick --------------------------------------------
+
+  // Per-team category totals in SEASON production (per-game rate times
+  // expected games), which is what team fit is measured on. Distinct from
+  // categoryTotals(), which the team card shows as per-game sums.
+  function fitTotalsByTeam() {
+    var totals = new Map();
+    var teams = S.teams || [];
+    for (var i = 0; i < teams.length; i++) {
+      totals.set(String(teams[i].teamId), { REB: 0, AST: 0, STL: 0, BLK: 0, PTS: 0 });
+    }
+    for (var j = 0; j < _mock.picks.length; j++) {
+      var pick = _mock.picks[j];
+      var entry = _board.byId.get(pick[2]);
+      if (!entry) continue;
+      var bucket = totals.get(String(pick[1]));
+      if (!bucket) continue;
+      var games = entry.player.expectedGP || 0;
+      for (var c = 0; c < CATS.length; c++) {
+        bucket[CATS[c]] += (entry.player.perGame[CATS[c]] || 0) * games;
+      }
+    }
+    return totals;
+  }
+
+  function myPickCount() {
+    var me = myTeamId();
+    var n = 0;
+    for (var i = 0; i < _mock.picks.length; i++) {
+      if (_mock.picks[i][1] === me) n++;
+    }
+    return n;
+  }
+
+  // One card per recommendation: best value by the board, best fit for the
+  // roster the user has actually built. Side by side rather than blended,
+  // because they answer different questions and the trade-off is the
+  // user's to make.
+  function pickCardHtml(title, entry, note, subtitle) {
+    var html = '<div class="card draft-larry-pick draft-pick-card">';
+    html += '<div class="card-header"><h3>' + esc(title) + '</h3></div>';
+    html += '<div class="draft-pick-name">' + esc(entry.player.name) + '</div>';
+    html += '<div class="text-xs muted">Larry ' +
+      (entry.player.larryRank === null ? '--' : '#' + entry.player.larryRank) +
+      ', ESPN #' + Math.round(entry.rank) +
+      (entry.player.expectedGP ? ', ' + Math.round(entry.player.expectedGP) + ' g' : '') +
+      '</div>';
+    if (subtitle) html += '<div class="text-xs draft-fit-why">' + esc(subtitle) + '</div>';
+    if (note) html += '<div class="draft-can-wait">' + note + '</div>';
+    html += '<button class="btn btn-primary btn-full" style="min-height:44px" ' +
+      'onclick="DraftRoom.draftPlayer(' + entry.player.playerId + ')">Draft ' +
+      esc(entry.player.name) + '</button>';
+    html += '</div>';
+    return html;
+  }
 
   function larryPickHtml() {
     var api = engine();
     if (!userOnClock()) return '';
     var available = api.availableIdsFor(_board, _mock);
 
-    // The advice is "take the best player by Larry rank" most of the time,
-    // but when Larry's top player is very likely to still be there next
-    // turn and a slightly lower-ranked one is not, taking the scarce player
-    // now gets you both.
+    // Value side keeps the existing "can wait" logic: when Larry's top
+    // player is very likely to last and a lower-ranked one is not, take
+    // the scarce player now and come back for the other.
     var advice = api.larryPickAdvice(_board, available, availShareMap());
     if (!advice || advice.recommendId === null) return '';
-    var pick = _board.byId.get(advice.recommendId);
-    if (!pick) return '';
+    var valueEntry = _board.byId.get(advice.recommendId);
+    if (!valueEntry) return '';
 
-    var html = '<div class="card draft-larry-pick">';
-    html += '<div class="card-header"><h3>Larry\'s pick</h3></div>';
-    html += '<div class="draft-pick-name">' + esc(pick.player.name) + '</div>';
-    html += '<div class="text-xs muted">Larry ' +
-      (pick.player.larryRank === null ? '--' : '#' + pick.player.larryRank) +
-      ', ESPN #' + Math.round(pick.rank) + '</div>';
-
+    var waitNote = '';
     if (advice.waitId !== null) {
       var waiting = _board.byId.get(advice.waitId);
       var nextPick = availTargetPick();
       if (waiting && nextPick) {
-        html += '<div class="draft-can-wait">' + esc(waiting.player.name) + ' is ' +
+        waitNote = esc(waiting.player.name) + ' is ' +
           Math.round(advice.waitShare * 100) + '% likely to be there at pick ' + nextPick +
-          ', so take ' + esc(pick.player.name) + ' now.</div>';
+          ', so take ' + esc(valueEntry.player.name) + ' now.';
       }
     }
 
-    html += '<button class="btn btn-primary btn-full" style="min-height:44px" ' +
-      'onclick="DraftRoom.draftPlayer(' + advice.recommendId + ')">Draft ' +
-      esc(pick.player.name) + '</button>';
-    html += '</div>';
-    return html;
+    // Fit side.
+    var fitPlayers = [];
+    available.forEach(function(id) {
+      var e = _board.byId.get(id);
+      if (!e || e.player.larryValue === null || e.player.larryValue === undefined) return;
+      fitPlayers.push({
+        playerId: id,
+        perGame: e.player.perGame,
+        z: e.z,
+        expectedGP: e.player.expectedGP || 0
+      });
+    });
+
+    var rec = api.recommendValueAndFit({
+      available: fitPlayers,
+      valueOf: function(id) {
+        var e = _board.byId.get(id);
+        return (e && typeof e.player.larryValue === 'number') ? e.player.larryValue : -Infinity;
+      },
+      totalsByTeam: fitTotalsByTeam(),
+      myTeamId: String(myTeamId()),
+      myPickCount: myPickCount(),
+      teamCount: _config.teamCount
+    });
+
+    var fitEntry = (rec.active && rec.fitId !== null) ? _board.byId.get(rec.fitId) : null;
+
+    // Both cards pointing at the same player is the common case and does
+    // not need two cards.
+    if (!fitEntry || fitEntry.player.playerId === valueEntry.player.playerId) {
+      var title = (rec.active && fitEntry) ? 'Best value and best fit' : 'Larry\'s pick';
+      return '<div class="draft-pick-cards">' +
+        pickCardHtml(title, valueEntry, waitNote, '') + '</div>';
+    }
+
+    var why = '';
+    if (rec.weakest.length) {
+      var parts = rec.weakest.slice(0, 2).map(function(w) {
+        return w.category + ' (' + ordinal(w.rank) + ')';
+      });
+      why = 'Your weakest categories right now: ' + parts.join(', ') + '.';
+    }
+
+    return '<div class="draft-pick-cards">' +
+      pickCardHtml('Best value', valueEntry, waitNote, '') +
+      pickCardHtml('Best fit', fitEntry, '', why) +
+      '</div>';
   }
 
   function refreshLarryPick() {
@@ -823,6 +923,14 @@ var DraftRoom = (function() {
   // --- Render: page -----------------------------------------------------
 
   function controlsHtml() {
+    // While following the real draft the picks are ESPN's, so simulating
+    // or undoing them is meaningless. Restart stays available as the way
+    // out, alongside the toggle.
+    if (followingActive()) {
+      return '<div class="draft-controls">' +
+        '<span class="text-xs muted">Following the real draft. Picks are read-only; ' +
+        'turn the toggle off to simulate from here.</span></div>';
+    }
     var done = _mock.picks.length >= _order.length;
     var html = '<div class="draft-controls">';
     html += '<button class="btn btn-primary" onclick="DraftRoom.simToMyPick()"' +
@@ -947,6 +1055,248 @@ var DraftRoom = (function() {
     html += '<p class="text-xs muted">Reads your league\'s past drafts from ESPN. ' +
       'Stored on this device only.</p>';
     html += '</div>';
+    return html;
+  }
+
+  // --- Live draft sync (RANKINGS_V3_AND_LIVE_DRAFT_SPEC B2) ------------
+  //
+  // Read-only. Larry follows the real ESPN draft and keeps the board, the
+  // availability odds and the recommendations in step with it. It never
+  // makes or submits a pick on ESPN.
+
+  var POLL_BASE_MS = 4000;
+  var POLL_BACKOFF_MS = [8000, 15000, 30000];
+  var REPLAY_STEP_MS = 2000;
+
+  var _following = false;
+  var _pollTimer = null;
+  var _pollFails = 0;
+  var _lastPollAt = null;
+  var _pollError = null;
+  var _draftComplete = false;
+  var _visibilityHooked = false;
+  var _replay = null;   // { picks: [...], index: number }
+  var _replayTimer = null;
+
+  function followingActive() {
+    return _following || !!_replay;
+  }
+
+  function currentPollDelay() {
+    if (!_pollFails) return POLL_BASE_MS;
+    var i = Math.min(_pollFails, POLL_BACKOFF_MS.length) - 1;
+    return POLL_BACKOFF_MS[i];
+  }
+
+  function secondsSincePoll() {
+    if (!_lastPollAt) return null;
+    return Math.round((Date.now() - _lastPollAt) / 1000);
+  }
+
+  function hookVisibility() {
+    if (_visibilityHooked || typeof document.addEventListener !== 'function') return;
+    _visibilityHooked = true;
+    document.addEventListener('visibilitychange', function() {
+      if (!followingActive()) return;
+      if (document.hidden) {
+        stopPolling();
+      } else {
+        // A phone pauses the page on screen lock, so several picks can land
+        // while it is asleep. Poll immediately on return rather than
+        // waiting out the interval.
+        pollOnce();
+        schedulePoll();
+      }
+    });
+  }
+
+  function schedulePoll() {
+    if (_pollTimer) clearTimeout(_pollTimer);
+    if (!_following || _draftComplete) return;
+    _pollTimer = setTimeout(function() {
+      pollOnce();
+      schedulePoll();
+    }, currentPollDelay());
+  }
+
+  function stopPolling() {
+    if (_pollTimer) { clearTimeout(_pollTimer); _pollTimer = null; }
+  }
+
+  // Replace the mock's picks with the real ones. Real picks are the truth
+  // while following, so this overwrites rather than merges.
+  function applyRealPicks(picks) {
+    if (!_mock) return false;
+    var changed = picks.length !== _mock.picks.length;
+    if (!changed) {
+      for (var i = 0; i < picks.length; i++) {
+        if (_mock.picks[i] && _mock.picks[i][2] !== picks[i][2]) { changed = true; break; }
+      }
+    }
+    if (!changed) return false;
+
+    _mock.picks = picks.slice();
+    // A player ESPN has but Larry's board does not (a deep pick) stays in
+    // the list as a placeholder, so pick numbers and roster counts line up.
+    // Rendering already falls back to "?" for an unknown id.
+    _reasons = {};
+    for (var j = 0; j < picks.length; j++) {
+      _reasons[String(picks[j][0])] = 'Real pick';
+    }
+    invalidateAvail();
+    saveMock();
+    return true;
+  }
+
+  function pollOnce() {
+    if (_replay) { replayStep(); return; }
+    if (!_following) return;
+
+    ESPNSync.fetchLiveDraft()
+      .then(function(state) {
+        _pollFails = 0;
+        _pollError = null;
+        _lastPollAt = Date.now();
+        var changed = applyRealPicks(state.picks);
+        if (state.drafted) {
+          _draftComplete = true;
+          stopPolling();
+          // Rosters have changed everywhere in the app, not just here.
+          if (typeof doManualSync === 'function') {
+            try { doManualSync(); } catch (e) { console.warn('post-draft sync failed', e); }
+          }
+          render();
+          return;
+        }
+        if (changed) render();
+      })
+      .catch(function(err) {
+        _pollFails++;
+        _pollError = (err && err.message) ? err.message : 'Could not reach ESPN.';
+        // A 401 is a cookie problem, which the app already has a banner for.
+        if (err && err.status === 401 && typeof setEspnExpired === 'function') {
+          setEspnExpired(true);
+        }
+        render();
+      });
+  }
+
+  function toggleFollow() {
+    if (_replay) { stopReplay(); return; }
+    _following = !_following;
+    _pollFails = 0;
+    _pollError = null;
+
+    if (_following) {
+      _draftComplete = false;
+      hookVisibility();
+      pollOnce();
+      schedulePoll();
+    } else {
+      stopPolling();
+      // Turning it off leaves the real picks in place as the starting
+      // point of a normal mock, so the user can simulate the rest.
+      _mock.seed = newSeed();
+      saveMock();
+    }
+    render();
+  }
+
+  // --- Replay, so live sync can be verified before the real draft ---
+  //
+  // Feeds last season's stored picks through applyRealPicks on a timer,
+  // which is the same path the live poller uses. The board is the current
+  // season's, so most replayed players are placeholders; that is fine and
+  // expected. The point is to exercise the mechanics, not to produce a
+  // meaningful 2026 board.
+
+  function startReplay() {
+    var history = ESPNSync.loadDraftHistory();
+    if (!history) { _pollError = 'Build manager profiles first.'; render(); return; }
+    var seasons = Object.keys(history.seasons || {}).map(Number)
+      .filter(function(n) { return isFinite(n); })
+      .sort(function(a, b) { return a - b; });
+    var last = seasons.length ? seasons[seasons.length - 1] : null;
+    if (!last) { _pollError = 'No stored draft to replay.'; render(); return; }
+
+    var season = history.seasons[String(last)];
+    var picks = (season.picks || []).slice().sort(function(a, b) { return a[0] - b[0]; })
+      .map(function(p) { return [p[0], p[2], p[3]]; });
+    if (!picks.length) { _pollError = 'That draft has no picks.'; render(); return; }
+
+    _replay = { picks: picks, index: 0, season: last };
+    _following = false;
+    _draftComplete = false;
+    resetMock(false);
+    hookVisibility();
+    _replayTimer = setInterval(replayStep, REPLAY_STEP_MS);
+    render();
+  }
+
+  function replayStep() {
+    if (!_replay) return;
+    _replay.index++;
+    if (_replay.index >= _replay.picks.length) {
+      applyRealPicks(_replay.picks.slice());
+      _draftComplete = true;
+      stopReplay(true);
+      return;
+    }
+    _lastPollAt = Date.now();
+    applyRealPicks(_replay.picks.slice(0, _replay.index));
+    render();
+  }
+
+  function stopReplay(keepPicks) {
+    if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
+    _replay = null;
+    if (!keepPicks) resetMock(false);
+    render();
+  }
+
+  function followBannerHtml() {
+    var api = engine();
+    if (!_order || !_mock) return '';
+    // Only offered while the real draft is still open.
+    if (_draftComplete && !followingActive()) {
+      return '<div class="draft-follow draft-follow-done">Draft complete.</div>';
+    }
+
+    var html = '<div class="draft-follow">';
+    html += '<button class="btn btn-sm ' + (followingActive() ? 'btn-success' : 'btn-secondary') +
+      '" style="min-height:44px" onclick="DraftRoom.toggleFollow()">' +
+      (followingActive() ? 'Following the real draft' : 'Follow the real draft') + '</button>';
+
+    if (_replay) {
+      html += '<span class="text-xs muted">Replaying the ' + _replay.season +
+        ' draft, pick ' + _replay.index + ' of ' + _replay.picks.length + '.</span>';
+    } else if (_following) {
+      var ago = secondsSincePoll();
+      if (_pollError) {
+        html += '<span class="text-xs error-msg">' + esc(_pollError) +
+          (ago === null ? '' : ' Last updated ' + ago + 's ago.') +
+          ' Retrying in ' + Math.round(currentPollDelay() / 1000) + 's.</span>';
+      } else {
+        html += '<span class="text-xs muted">Live' +
+          (ago === null ? '' : ', updated ' + ago + 's ago') + '.</span>';
+      }
+    }
+    html += '</div>';
+
+    // On the clock, and the run-up to it.
+    if (followingActive() && !_draftComplete && myTeamId()) {
+      var index = _mock.picks.length;
+      var upcoming = api.myUpcomingPicks(_order, myTeamId(), index);
+      if (upcoming.length) {
+        var away = upcoming[0] - index;
+        if (away === 0) {
+          html += '<div class="draft-onclock">You are on the clock.</div>';
+        } else if (away <= 3) {
+          html += '<div class="draft-onclock draft-onclock-soon">Your pick in ' +
+            away + '.</div>';
+        }
+      }
+    }
     return html;
   }
 
@@ -1085,6 +1435,7 @@ var DraftRoom = (function() {
     if (myTeamId() && _mock.picks.length < _order.length) startAvail();
 
     var html = '';
+    html += followBannerHtml();
     html += statusHtml();
     html += controlsHtml();
     html += profilesBannerHtml();
@@ -1141,6 +1492,10 @@ var DraftRoom = (function() {
     openTeam: openTeam,
     modelCheck: modelCheck,
     renderModelCheckCard: renderModelCheckCard,
+    toggleFollow: toggleFollow,
+    startReplay: startReplay,
+    stopReplay: stopReplay,
+    isFollowing: followingActive,
     MOCK_KEY: MOCK_KEY
   };
 })();
