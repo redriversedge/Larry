@@ -66,6 +66,11 @@ export interface DurabilityInput {
   leagueMeanGP: number;
   // proTeamId 0 means no NBA team, so no games.
   onTeam?: boolean;
+  // ESPN's projection for this player is a data error rather than a
+  // forecast (PRESEASON_SUSPECT_GP: under 10 projected games and not
+  // tagged OUT). When set, ESPN's number is ignored entirely rather than
+  // being treated as information.
+  suspect?: boolean;
 }
 
 export interface DurabilityOptions {
@@ -113,12 +118,16 @@ export function durabilityDetail(
   );
   const raw = weightedHistory(usable);
 
-  // Rookies and anyone else with no history: ESPN's number is all there is.
+  // Rookies and anyone else with no history: ESPN's number is all there
+  // is. Unless it is a SUSPECT number, in which case there is nothing to
+  // go on at all and the league mean is the honest placeholder; ESPN's 1
+  // would put "Exp GP 1" and a red dot on a healthy player.
   if (raw === null) {
+    const fallback = input.suspect ? input.leagueMeanGP : espnGP;
     return {
-      expectedGP: clampGames(espnGP),
+      expectedGP: clampGames(fallback),
       histGP: null,
-      blendGP: espnGP,
+      blendGP: fallback,
       overrideApplied: false,
       seasons: 0,
     };
@@ -130,12 +139,35 @@ export function durabilityDetail(
   const shrink = k / (k + seasons);
   const histGP = (1 - shrink) * raw + shrink * input.leagueMeanGP;
 
+  // A suspect projection is a data error, so ESPN contributes nothing:
+  // not to the blend, and not as a ceiling. History alone it is.
+  //
+  // This matters because the two rules collide exactly where they are both
+  // loudest. The override below fires when ESPN is far BELOW a player's
+  // own record, which is precisely the shape of a broken projection, so
+  // without this guard a suspect player gets ESPN's number as a hard
+  // ceiling. Haliburton read "Exp GP 1" with a red dot off a 1-game
+  // projection while his history says 70.
+  //
+  // The RANKING never saw this: seasonValueFor ignores games for a suspect
+  // player and charges them a full season. This only ever affected the
+  // Exp GP column, the durability dot, and the Draft Room's fit bonus,
+  // which is enough to matter on draft night.
+  if (input.suspect) {
+    return {
+      expectedGP: clampGames(histGP),
+      histGP,
+      blendGP: histGP,
+      overrideApplied: false,
+      seasons,
+    };
+  }
+
   const blendGP = w * espnGP + (1 - w) * histGP;
 
   // ESPN's projection as a ceiling when it is far below the player's own
-  // record. This is what keeps a Haliburton or a Tatum handled correctly:
-  // their history says 70 games, and ESPN saying 20 is information, not
-  // pessimism to be averaged away.
+  // record. An Achilles tear in May is not in last season's game count,
+  // and ESPN knows about it.
   const overrideApplied = espnGP > 0 && espnGP <= histGP - DURABILITY_OVERRIDE_GAP;
   const expected = overrideApplied ? Math.min(blendGP, espnGP) : blendGP;
 

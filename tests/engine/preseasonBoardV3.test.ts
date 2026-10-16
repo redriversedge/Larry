@@ -222,6 +222,28 @@ describe("v3 preseason board: wiring", () => {
     expect(fragile.expectedGP).toBeLessThan(70);
   });
 
+  it("does not show a broken ESPN projection as a star's expected games", async () => {
+    // The Haliburton case, end to end. ESPN publishes 1 projected game
+    // for a player whose own record says 70. projectionSuspect catches it
+    // for the ranking; this asserts the Exp GP column and the dot are
+    // right too, which is what the user actually looks at on draft night.
+    const players = makePlayers(60);
+    players[3].stats.projectedGP = 1;
+    players[3].injuryStatus = "ACTIVE";
+    const h = load({
+      players,
+      durability: { "1003": [70, 69, 74] },
+    });
+    const out = await board(h);
+    const p = out.find((x) => x.id === 1003);
+
+    expect(p.projectionSuspect).toBe(true);
+    expect(p.expectedGP).toBeGreaterThan(60);
+    expect(p.durabilityDetail.overrideApplied).toBe(false);
+    // And he is still ranked like a star rather than buried.
+    expect(p.durantRank).toBeLessThan(20);
+  });
+
   it("gives a player with no NBA team zero expected games", async () => {
     const players = makePlayers(60);
     players[5].proTeamId = 0;

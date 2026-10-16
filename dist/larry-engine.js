@@ -1356,10 +1356,11 @@ var LarryEngine = (() => {
     );
     const raw = weightedHistory(usable);
     if (raw === null) {
+      const fallback = input.suspect ? input.leagueMeanGP : espnGP;
       return {
-        expectedGP: clampGames(espnGP),
+        expectedGP: clampGames(fallback),
         histGP: null,
-        blendGP: espnGP,
+        blendGP: fallback,
         overrideApplied: false,
         seasons: 0
       };
@@ -1367,6 +1368,15 @@ var LarryEngine = (() => {
     const seasons = usable.length;
     const shrink = k / (k + seasons);
     const histGP = (1 - shrink) * raw + shrink * input.leagueMeanGP;
+    if (input.suspect) {
+      return {
+        expectedGP: clampGames(histGP),
+        histGP,
+        blendGP: histGP,
+        overrideApplied: false,
+        seasons
+      };
+    }
     const blendGP = w * espnGP + (1 - w) * histGP;
     const overrideApplied = espnGP > 0 && espnGP <= histGP - DURABILITY_OVERRIDE_GAP;
     const expected = overrideApplied ? Math.min(blendGP, espnGP) : blendGP;
@@ -1478,7 +1488,10 @@ var LarryEngine = (() => {
           espnGP: p.espnGP,
           priorGP: p.priorGP,
           leagueMeanGP,
-          onTeam: p.onTeam
+          onTeam: p.onTeam,
+          // A broken ESPN projection must not become this player's expected
+          // games, nor a ceiling on them.
+          suspect: p.suspect
         })
       );
     }
