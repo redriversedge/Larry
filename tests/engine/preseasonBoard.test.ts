@@ -72,7 +72,14 @@ function baseState(): any {
     teams: [],
     matchup: {},
     allPlayers: [],
-    prefs: {},
+    // These tests pin the v2 preseason board: the soft projected-games
+    // discount, and where unprojected players land. v3 (the shipped
+    // default) replaces the discount with expected games and value above
+    // replacement and then blends with the market, so it is a different
+    // board and is covered by tests/engine/preseasonBoardV3.test.ts.
+    // v2 stays selectable in Settings as the draft-day rollback, so its
+    // behaviour still needs pinning.
+    prefs: { rankingVersion: "v2" },
     analysisCache: {},
   };
 }

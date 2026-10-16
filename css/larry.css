@@ -1325,3 +1325,12 @@ body {
   padding: 10px 12px; border-radius: var(--radius); margin-bottom: 8px; text-align: center;
 }
 .draft-onclock-soon { background: rgba(245,158,11,0.9); color: #1a1a2e; }
+
+/* Durability dot on the draft board */
+.dura-dot {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  margin-right: 4px; vertical-align: middle;
+}
+.dura-green { background: var(--positive, #22c55e); }
+.dura-yellow { background: #f59e0b; }
+.dura-red { background: var(--negative, #ef4444); }

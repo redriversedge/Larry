@@ -21,6 +21,9 @@ var LarryEngine = (() => {
   // src/engine/index.ts
   var index_exports = {};
   __export(index_exports, {
+    BLEND_LARRY_WEIGHT: () => BLEND_LARRY_WEIGHT,
+    BLEND_MARKET_DEPTH: () => BLEND_MARKET_DEPTH,
+    BLEND_MISSING_RANK: () => BLEND_MISSING_RANK,
     CATEGORIES: () => CATEGORIES,
     DEFAULT_MOCK_PARAMS: () => DEFAULT_MOCK_PARAMS,
     DURANT_SCALE: () => DURANT_SCALE,
@@ -29,6 +32,7 @@ var LarryEngine = (() => {
     FIT_WEIGHT_EVEN: () => FIT_WEIGHT_EVEN,
     FIT_WEIGHT_STRONG: () => FIT_WEIGHT_STRONG,
     FIT_WEIGHT_WEAK: () => FIT_WEIGHT_WEAK,
+    MARKET_STALE_DAYS: () => MARKET_STALE_DAYS,
     MOCK_AVAIL_CHUNK: () => MOCK_AVAIL_CHUNK,
     MOCK_AVAIL_SIMS: () => MOCK_AVAIL_SIMS,
     MOCK_AVAIL_SIMS_REDUCED: () => MOCK_AVAIL_SIMS_REDUCED,
@@ -48,10 +52,13 @@ var LarryEngine = (() => {
     availabilityTargets: () => availabilityTargets,
     availableIdsFor: () => availableIdsFor,
     bestAvailableByLarry: () => bestAvailableByLarry,
+    blendBoard: () => blendBoard,
+    blendScore: () => blendScore,
     buildAdpLookup: () => buildAdpLookup,
     buildDraftProfiles: () => buildDraftProfiles,
     buildExplainPayload: () => buildExplainPayload,
     buildHistoricalBoard: () => buildHistoricalBoard,
+    buildPreseasonBoard: () => buildPreseasonBoard,
     buildQPool: () => buildQPool,
     categoryRanks: () => categoryRanks,
     categoryWeight: () => categoryWeight,
@@ -64,6 +71,7 @@ var LarryEngine = (() => {
     createEspnProjectionSource: () => createEspnProjectionSource,
     createInMemoryProjectionSource: () => createInMemoryProjectionSource,
     decidePick: () => decidePick,
+    durabilityBand: () => durabilityBand,
     durabilityDetail: () => durabilityDetail,
     emptyAvailabilityCounts: () => emptyAvailabilityCounts,
     espnPerGameRate: () => espnPerGameRate,
@@ -77,6 +85,8 @@ var LarryEngine = (() => {
     gVector: () => gVector,
     larryPickAdvice: () => larryPickAdvice,
     leagueReachMedians: () => leagueReachMedians,
+    marketAgeDays: () => marketAgeDays,
+    marketRankOrMissing: () => marketRankOrMissing,
     median: () => median,
     mixSeed: () => mixSeed,
     mulberry32: () => mulberry32,
@@ -99,10 +109,13 @@ var LarryEngine = (() => {
     reachShrunk: () => reachShrunk,
     recommend: () => recommend,
     recommendValueAndFit: () => recommendValueAndFit,
+    replacementLevel: () => replacementLevel,
     rosterCategoryTotals: () => rosterCategoryTotals,
     rosterTotal: () => rosterTotal,
     roundForIndex: () => roundForIndex,
     runAvailabilitySims: () => runAvailabilitySims,
+    seasonValueFor: () => seasonValueFor,
+    seasonValues: () => seasonValues,
     simulateUntil: () => simulateUntil,
     snakeOrder: () => snakeOrder,
     softmax: () => softmax,
@@ -210,6 +223,9 @@ var LarryEngine = (() => {
   var MOCK_AVAIL_TOP_N = 40;
   var MOCK_CAN_WAIT_THRESHOLD = 0.7;
   var MOCK_SCARCE_THRESHOLD = 0.5;
+  var BLEND_LARRY_WEIGHT = 3;
+  var BLEND_MARKET_DEPTH = 250;
+  var BLEND_MISSING_RANK = 300;
   var ESPN_POSITION_ID_TO_NAME = {
     1: "PG",
     2: "SG",
@@ -1368,6 +1384,177 @@ var LarryEngine = (() => {
   function clampGames(gp) {
     if (!Number.isFinite(gp) || gp < 0) return 0;
     return Math.min(gp, GP_MAX - 4);
+  }
+
+  // src/engine/blend.ts
+  function marketRankOrMissing(rank) {
+    if (rank === void 0 || !Number.isFinite(rank) || rank <= 0) return BLEND_MISSING_RANK;
+    if (rank > BLEND_MARKET_DEPTH) return BLEND_MISSING_RANK;
+    return rank;
+  }
+  function blendScore(larryRank, marketRanks, options = {}) {
+    const larryWeight = options.larryWeight ?? BLEND_LARRY_WEIGHT;
+    const safeLarry = Math.max(larryRank, 1);
+    let sum = larryWeight * Math.log(safeLarry);
+    let weight = larryWeight;
+    for (const r of marketRanks) {
+      sum += Math.log(marketRankOrMissing(r));
+      weight += 1;
+    }
+    return weight > 0 ? sum / weight : Math.log(safeLarry);
+  }
+  function blendBoard(players, options = {}) {
+    const rows = players.map((p) => {
+      const used = p.marketRanks.filter(
+        (r) => r !== void 0 && Number.isFinite(r) && r > 0
+      );
+      return {
+        id: p.id,
+        blendScore: blendScore(p.larryRank, p.marketRanks, options),
+        blendRank: 0,
+        larryRank: p.larryRank,
+        marketRank: used.length ? used.reduce((a, b) => a + b, 0) / used.length : null
+      };
+    });
+    const valueById = /* @__PURE__ */ new Map();
+    for (const p of players) valueById.set(p.id, p.larryValue ?? 0);
+    rows.sort((a, b) => {
+      if (a.blendScore !== b.blendScore) return a.blendScore - b.blendScore;
+      const va = valueById.get(a.id) ?? 0;
+      const vb = valueById.get(b.id) ?? 0;
+      if (va !== vb) return vb - va;
+      return a.id - b.id;
+    });
+    rows.forEach((r, i) => {
+      r.blendRank = i + 1;
+    });
+    return rows;
+  }
+  var MARKET_STALE_DAYS = 7;
+  function marketAgeDays(pulledAt, now) {
+    if (!pulledAt) return null;
+    const then = Date.parse(pulledAt);
+    if (!Number.isFinite(then)) return null;
+    return (now - then) / (1e3 * 60 * 60 * 24);
+  }
+
+  // src/engine/replacement.ts
+  var SEASON_GAMES2 = 82;
+  function replacementLevel(rateValues, poolSize) {
+    if (!rateValues.length) return 0;
+    const sorted = rateValues.slice().sort((a, b) => b - a);
+    const index = Math.min(poolSize, sorted.length - 1);
+    return sorted[index];
+  }
+  function seasonValues(players, poolSize) {
+    const replacement = replacementLevel(
+      players.map((p) => p.rateValue),
+      poolSize
+    );
+    const out = /* @__PURE__ */ new Map();
+    for (const p of players) {
+      const games = p.suspect ? SEASON_GAMES2 : p.expectedGP;
+      out.set(p.id, (p.rateValue - replacement) * games / SEASON_GAMES2);
+    }
+    return out;
+  }
+  function seasonValueFor(rateValue, replacement, expectedGP, suspect = false) {
+    const games = suspect ? SEASON_GAMES2 : expectedGP;
+    return (rateValue - replacement) * games / SEASON_GAMES2;
+  }
+
+  // src/engine/preseasonBoard.ts
+  function buildPreseasonBoard(players, options) {
+    if (!players.length) {
+      return { rows: [], replacement: 0, leagueMeanGP: 0, marketListCount: 0 };
+    }
+    const rotation = players.filter((p) => p.espnGP >= 20).flatMap((p) => p.priorGP);
+    const leagueMeanGP = rotation.length ? rotation.reduce((a, b) => a + b, 0) / rotation.length : 65;
+    const detail = /* @__PURE__ */ new Map();
+    for (const p of players) {
+      detail.set(
+        p.id,
+        durabilityDetail({
+          espnGP: p.espnGP,
+          priorGP: p.priorGP,
+          leagueMeanGP,
+          onTeam: p.onTeam
+        })
+      );
+    }
+    const replacement = replacementLevel(
+      players.map((p) => p.rateValue),
+      options.poolSize
+    );
+    const rows = players.map((p) => {
+      const d = detail.get(p.id);
+      return {
+        id: p.id,
+        rateValue: p.rateValue,
+        expectedGP: d.expectedGP,
+        seasonValue: seasonValueFor(p.rateValue, replacement, d.expectedGP, p.suspect),
+        durability: d,
+        fiveCatRank: 0,
+        marketRank: null,
+        blendRank: 0
+      };
+    });
+    const byValue = rows.slice().sort((a, b) => b.seasonValue - a.seasonValue);
+    byValue.forEach((r, i) => {
+      r.fiveCatRank = i + 1;
+    });
+    const market = options.market || {};
+    const lists = [
+      market.yahoo,
+      market.espn,
+      market.ecr
+    ];
+    const present = lists.filter((l) => l && l.size > 0);
+    const byId = /* @__PURE__ */ new Map();
+    for (const p of players) byId.set(p.id, p);
+    const hasLiveEspnAdp = players.some(
+      (p) => typeof p.espnAdp === "number" && p.espnAdp > 0
+    );
+    const marketCount = present.length + (hasLiveEspnAdp && !market.espn ? 1 : 0);
+    if (!marketCount) {
+      for (const r of rows) r.blendRank = r.fiveCatRank;
+      return { rows, replacement, leagueMeanGP, marketListCount: 0 };
+    }
+    const blended = blendBoard(
+      rows.map((r) => {
+        const p = byId.get(r.id);
+        const ranks = [];
+        if (market.yahoo && market.yahoo.size) ranks.push(market.yahoo.get(p.key));
+        if (market.espn && market.espn.size) {
+          ranks.push(market.espn.get(p.key));
+        } else if (hasLiveEspnAdp) {
+          ranks.push(
+            typeof p.espnAdp === "number" && p.espnAdp > 0 ? p.espnAdp : void 0
+          );
+        }
+        if (market.ecr && market.ecr.size) ranks.push(market.ecr.get(p.key));
+        return {
+          id: r.id,
+          larryRank: r.fiveCatRank,
+          marketRanks: ranks,
+          larryValue: r.seasonValue
+        };
+      })
+    );
+    const rowById = /* @__PURE__ */ new Map();
+    for (const r of rows) rowById.set(r.id, r);
+    for (const b of blended) {
+      const r = rowById.get(b.id);
+      if (!r) continue;
+      r.blendRank = b.blendRank;
+      r.marketRank = b.marketRank;
+    }
+    return { rows, replacement, leagueMeanGP, marketListCount: marketCount };
+  }
+  function durabilityBand(expectedGP) {
+    if (expectedGP >= 70) return "green";
+    if (expectedGP >= 55) return "yellow";
+    return "red";
   }
 
   // src/engine/mockDraft.ts

@@ -452,6 +452,36 @@ export const MOCK_AVAIL_TOP_N = 40;
 export const MOCK_CAN_WAIT_THRESHOLD = 0.7;
 export const MOCK_SCARCE_THRESHOLD = 0.5;
 
+// --- Preseason board v3: blending Larry with the market ---
+//
+// The board is a log-rank blend of Larry's v3 board with three market
+// lists (Yahoo ADP, ESPN ADP, FantasyPros ECR). Measured on real outcomes
+// for both completed seasons, with Larry's board built from the durability
+// model and value above replacement:
+//
+//   board                           24-25 rho / top24 / busts   25-26 rho / top24 / busts
+//   current (shipped v2)              0.519 / 44.4 /  8           0.409 / 88.5 / 13
+//   v3 (durability + replacement)     0.541 / 50.2 /  8           0.403 / 81.6 / 12
+//   replacement only, ESPN GP         0.543 / 47.3 /  8           0.416 / 86.3 / 10
+//   FantasyPros ECR                   0.533 / 40.9 /  7           0.430 / 76.5 / 11
+//   Yahoo ADP                         0.519 / 45.5 /  6           0.548 / 74.2 /  9
+//   ESPN ADP                          0.539 / 43.3 /  6           0.464 / 78.5 / 10
+//   v3 blended 3:1:1:1                0.533 / 44.7 /  7           0.455 / 68.1 / 11
+//
+// The blend wins the paired bootstrap against the current board 0.99 and
+// 0.96, and its per-game rho is 0.732 and 0.622 against the current
+// board's 0.732 and 0.550, so the 5-category format edge survives.
+//
+// Larry weight 3 against 1 for each market list. Sensitivity: 2 and 3 are
+// both good; 1 gives up too much of the format edge (per-game rho falls to
+// 0.697 in 24-25) and 4 or more starts losing 25-26.
+export const BLEND_LARRY_WEIGHT = 3;
+
+// A market list that does not reach this deep is not saying the player is
+// bad, only that he is outside the range the list covers.
+export const BLEND_MARKET_DEPTH = 250;
+export const BLEND_MISSING_RANK = 300;
+
 // ESPN position ID -> position string. 1=PG, 2=SG, 3=SF, 4=PF, 5=C.
 // 12=Bench, 13=IR are slot ids, not positions; not included here.
 export const ESPN_POSITION_ID_TO_NAME: Record<number, "PG" | "SG" | "SF" | "PF" | "C"> = {

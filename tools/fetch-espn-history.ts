@@ -15,6 +15,7 @@ import * as path from "path";
 
 const ROOT = path.resolve(__dirname, "..");
 const OUT = path.join(ROOT, "tests/fixtures/projections/espn-history.json");
+const OUT_DURABILITY = path.join(ROOT, "data/durability-history.json");
 
 // ESPN's seasonId is the calendar year the season ENDS in, so 2026 is the
 // 2025-26 season. 2027 is the season about to start: projections only.
@@ -183,10 +184,42 @@ async function main(): Promise<void> {
   fs.mkdirSync(path.dirname(OUT), { recursive: true });
   fs.writeFileSync(OUT, JSON.stringify(out) + "\n", "ascii");
 
+  // A compact games-played history the BROWSER can read. The full fixture
+  // is 575 KB and mostly stat lines the durability model never looks at;
+  // all it needs is each player's actual games in the three seasons before
+  // the one being ranked. The live kona fetch does not carry prior-season
+  // lines, so without this the app would have to trust ESPN's projected
+  // games, which is the whole thing the model exists to correct.
+  const target = SEASONS[SEASONS.length - 1] as number; // the upcoming season
+  const priorSeasons = [target - 1, target - 2, target - 3];
+  const durability: Record<string, number[]> = {};
+  for (const p of players) {
+    const row: number[] = [];
+    for (const s of priorSeasons) {
+      const line = p.actual[String(s)];
+      // Absent seasons are omitted, not zeroed: a year out of the league
+      // is not a year of missed games. weightedHistory reads this order.
+      if (line) row.push(Math.round(line.GP));
+    }
+    if (row.length) durability[String(p.id)] = row;
+  }
+  const durabilityOut = {
+    _note: "Actual games played, most recent first, for the three seasons " +
+      "before " + target + ". Read by the preseason board's durability model.",
+    season: target,
+    priorSeasons,
+    gp: durability,
+  };
+  fs.mkdirSync(path.dirname(OUT_DURABILITY), { recursive: true });
+  fs.writeFileSync(OUT_DURABILITY, JSON.stringify(durabilityOut) + "\n", "ascii");
+
   console.log("");
   console.log("wrote " + players.length + " players to " +
     path.relative(ROOT, OUT) + " (" +
     Math.round(fs.statSync(OUT).size / 1024) + " KB)");
+  console.log("wrote " + Object.keys(durability).length + " players to " +
+    path.relative(ROOT, OUT_DURABILITY) + " (" +
+    Math.round(fs.statSync(OUT_DURABILITY).size / 1024) + " KB)");
   for (const season of SEASONS) {
     const n = players.filter((p) => p.actual[String(season)]).length;
     const pr = players.filter((p) => p.espnProjection[String(season)]).length;

@@ -230,15 +230,28 @@ var DraftRoom = (function() {
         espnAdp: (typeof p.espnAdp === 'number' && p.espnAdp > 0) ? p.espnAdp : null,
         espnDraftRank: (typeof p.espnDraftRank === 'number' && p.espnDraftRank > 0) ?
           p.espnDraftRank : null,
+        // durantRank IS the blended board in preseason v3, so "best value"
+        // reads the blend without this file knowing about it.
         larryRank: (typeof p.durantRank === 'number' && p.durantRank > 0) ? p.durantRank : null,
+        fiveCatRank: (typeof p.fiveCatRank === 'number' && p.fiveCatRank > 0)
+          ? p.fiveCatRank : null,
+        marketRank: (typeof p.marketRank === 'number' && p.marketRank > 0)
+          ? p.marketRank : null,
         // Board value in z-sum units, so it is on the same scale as the
-        // team-fit bonus and the two can be added.
-        larryValue: (typeof p.durantScore === 'number' && isFinite(p.durantScore))
-          ? p.durantScore / scale : null,
-        // ESPN's projected games. Part A's durability model would replace
-        // this, but its board gates failed and it did not ship.
-        expectedGP: (p.stats && typeof p.stats.projectedGP === 'number' &&
-          p.stats.projectedGP > 0) ? p.stats.projectedGP : 0,
+        // team-fit bonus and the two can be added. v3 publishes a season
+        // value; otherwise fall back to the displayed score.
+        larryValue: (typeof p.seasonValue === 'number' && isFinite(p.seasonValue))
+          ? p.seasonValue
+          : ((typeof p.durantScore === 'number' && isFinite(p.durantScore))
+              ? p.durantScore / scale : null),
+        // The durability model's expected games when v3 is on, ESPN's
+        // projection otherwise.
+        expectedGP: (typeof p.expectedGP === 'number' && p.expectedGP >= 0)
+          ? p.expectedGP
+          : ((p.stats && typeof p.stats.projectedGP === 'number' &&
+              p.stats.projectedGP > 0) ? p.stats.projectedGP : 0),
+        // Carried for the durability dot's tooltip.
+        durabilityDetail: p.durabilityDetail || null,
         perGame: perGame
       });
     }
@@ -573,7 +586,14 @@ var DraftRoom = (function() {
 
       html += '<tr data-player="' + p.playerId + '">';
       html += '<td class="stat-col">' + (p.larryRank === null ? '--' : p.larryRank) + '</td>';
+      // Where Larry and the market disagree is the most useful thing on
+      // the board, so both are shown rather than only the blend.
+      html += '<td class="stat-col text-xs muted">' +
+        (p.fiveCatRank === null ? '--' : p.fiveCatRank) + '</td>';
+      html += '<td class="stat-col text-xs muted">' +
+        (p.marketRank === null ? '--' : Math.round(p.marketRank)) + '</td>';
       html += '<td class="stat-col">' + Math.round(entry.rank) + '</td>';
+      html += '<td class="stat-col">' + durabilityCellHtml(p) + '</td>';
       html += '<td class="draft-name" onclick="DraftRoom.rowTap(' + p.playerId + ')">' +
         esc(p.name) + '</td>';
       html += '<td class="stat-col text-xs">' + pos + '</td>';
@@ -586,7 +606,7 @@ var DraftRoom = (function() {
       html += '</tr>';
 
       if (_confirmId === p.playerId && onClock) {
-        html += '<tr class="draft-confirm-row"><td colspan="' + (6 + CATS.length) + '">' +
+        html += '<tr class="draft-confirm-row"><td colspan="' + (10 + CATS.length) + '">' +
           '<div class="confirm-row">' +
           '<span class="confirm-label">Draft ' + esc(p.name) + '?</span>' +
           '<button class="btn btn-sm btn-primary" onclick="DraftRoom.draftPlayer(' +
@@ -598,7 +618,7 @@ var DraftRoom = (function() {
     }
 
     if (!rows.length) {
-      html = '<tr><td colspan="' + (6 + CATS.length) + '" class="muted">' +
+      html = '<tr><td colspan="' + (10 + CATS.length) + '" class="muted">' +
         'No available players match that search.</td></tr>';
     }
     return html;
@@ -621,6 +641,24 @@ var DraftRoom = (function() {
     return (target ? 'Chance of still being on the board at pick ' + target : 'Availability') +
       ', from ' + _avail.sims + ' simulations' +
       (reduced ? ' (reduced from ' + api.MOCK_AVAIL_SIMS + ' to stay responsive)' : '') + '.';
+  }
+
+  // Expected games with a durability dot: green durable, yellow some
+  // risk, red fragile. The title carries the evidence, because a number
+  // the user cannot interrogate is a number they will not trust.
+  function durabilityCellHtml(p) {
+    var api = engine();
+    var gp = p.expectedGP || 0;
+    if (!gp) return '<span class="muted">--</span>';
+    var band = (api && api.durabilityBand) ? api.durabilityBand(gp) : 'green';
+    var detail = p.durabilityDetail || null;
+    var title = 'Expected ' + Math.round(gp) + ' games';
+    if (detail && detail.histGP !== null && detail.histGP !== undefined) {
+      title += ': history ' + Math.round(detail.histGP) + ' games';
+      if (detail.overrideApplied) title += ', capped by ESPN';
+    }
+    return '<span class="dura-dot dura-' + band + '" title="' + esc(title) + '"></span>' +
+      Math.round(gp);
   }
 
   function rowTap(playerId) {
@@ -1455,7 +1493,11 @@ var DraftRoom = (function() {
     html += '<div id="draft-avail-note" class="text-xs muted">' + availNoteHtml() + '</div>';
 
     html += '<div class="table-scroll"><table class="data-table compact"><thead><tr>';
-    html += '<th class="stat-col">Larry</th><th class="stat-col">ESPN</th>';
+    html += '<th class="stat-col">Larry</th>';
+    html += '<th class="stat-col" title="Larry 5-category value alone">5cat</th>';
+    html += '<th class="stat-col" title="Average market rank">Mkt</th>';
+    html += '<th class="stat-col">ESPN</th>';
+    html += '<th class="stat-col" title="Expected games played">Exp GP</th>';
     html += '<th style="text-align:left;min-width:120px">Player</th>';
     html += '<th class="stat-col">Pos</th><th class="stat-col">Tm</th>';
     for (var c = 0; c < CATS.length; c++) {

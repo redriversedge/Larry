@@ -2212,6 +2212,18 @@ function renderTradeAnalysis() {
 
 // Flipping this changes every rank, so the cached board has to go and
 // DURANT has to run again before anything renders.
+// Rollback switch for the whole v3 board. Preseason and in-season both
+// read S.prefs.rankingVersion; today only the preseason board differs.
+function toggleRankingVersion(usePrevious) {
+  S.prefs = S.prefs || {};
+  S.prefs.rankingVersion = usePrevious ? 'v2' : 'v3';
+  S.analysisCache = S.analysisCache || {};
+  S.analysisCache.durantComputedAt = null;
+  saveState();
+  Engines.ensureDURANT(S.allPlayers || []);
+  render();
+}
+
 function toggleLarryProjections(on) {
   S.prefs = S.prefs || {};
   S.prefs.useLarryProjections = !!on;
@@ -2266,6 +2278,27 @@ function renderSettingsPage() {
     html += '</div>';
     html += '</div>';
   }
+
+  // Rankings version. v3 is the measured default; v2 is the rollback if
+  // anything looks wrong during the draft.
+  var usingV2 = !!(S.prefs && S.prefs.rankingVersion === 'v2');
+  html += '<div class="card"><div class="card-header">Rankings</div>';
+  html += '<div class="settings-row"><label for="ranking-v2-toggle">Use previous rankings</label>';
+  html += '<input type="checkbox" id="ranking-v2-toggle" style="min-width:44px;min-height:44px" ' +
+    (usingV2 ? 'checked ' : '') + 'onchange="toggleRankingVersion(this.checked)"></div>';
+  html += '<div class="text-xs muted" style="padding:0 4px 4px">' +
+    'The preseason board blends Larry\'s 5-category value, expected games from ' +
+    'each player\'s own attendance record, and the market (Yahoo, ESPN, expert ' +
+    'consensus). Measured against real outcomes it beat the previous board in ' +
+    'both of the last two seasons. Turn this on to go back to the previous ' +
+    'rankings.</div>';
+  var pulled = (typeof Engines !== 'undefined' && Engines.marketPulledAt)
+    ? Engines.marketPulledAt() : null;
+  if (pulled) {
+    html += '<div class="text-xs muted" style="padding:0 4px 8px">Market data from ' +
+      esc(new Date(pulled).toLocaleDateString()) + '.</div>';
+  }
+  html += '</div>';
 
   // Larry projections. Off by default and labelled honestly: the backtest
   // says ESPN ranks players better, so this is an experiment the owner can

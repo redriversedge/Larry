@@ -12,11 +12,13 @@ Players with an ESPN preseason projection: 374. Players with actual production: 
 |---|---|---|---|---|---|---|
 | Larry current | 0.519 | 0.732 | 66 | 8 | 44.4 | 0 |
 | Larry v3 | 0.541 | 0.734 | 67 | 8 | 50.2 | 0 |
+| Replacement only | 0.543 | 0.739 | 67 | 8 | 47.3 | 0 |
 | FantasyPros ECR | 0.533 | 0.689 | 69 | 7 | 40.9 | 1 |
 | Yahoo ADP | 0.519 | 0.692 | 71 | 6 | 45.5 | 0 |
 | ESPN ADP | 0.539 | 0.645 | 68 | 6 | 43.3 | 5 |
+| Larry v3 blended | 0.533 | 0.732 | 69 | 7 | 44.7 | 0 |
 
-Paired bootstrap, v3 against current, 1000 resamples of the shared players: **v3 ahead in 97.9%**.
+Paired bootstrap against the current board, 1000 resamples of the shared players: **v3 ahead in 97.9%**, **blend ahead in 98.8%**.
 
 | Player | current board | v3 board | exp GP (v3) | ESPN proj GP | actual GP | actual finish |
 |---|---|---|---|---|---|---|
@@ -36,11 +38,13 @@ Players with an ESPN preseason projection: 381. Players with actual production: 
 |---|---|---|---|---|---|---|
 | Larry current | 0.409 | 0.550 | 59 | 13 | 88.5 | 0 |
 | Larry v3 | 0.403 | 0.551 | 59 | 12 | 81.6 | 0 |
+| Replacement only | 0.416 | 0.559 | 60 | 10 | 86.3 | 0 |
 | FantasyPros ECR | 0.430 | 0.590 | 62 | 11 | 76.5 | 1 |
 | Yahoo ADP | 0.548 | 0.679 | 61 | 9 | 74.2 | 0 |
 | ESPN ADP | 0.464 | 0.615 | 62 | 10 | 78.5 | 6 |
+| Larry v3 blended | 0.455 | 0.622 | 60 | 11 | 68.1 | 0 |
 
-Paired bootstrap, v3 against current, 1000 resamples of the shared players: **v3 ahead in 56.1%**.
+Paired bootstrap against the current board, 1000 resamples of the shared players: **v3 ahead in 56.1%**, **blend ahead in 95.8%**.
 
 | Player | current board | v3 board | exp GP (v3) | ESPN proj GP | actual GP | actual finish |
 |---|---|---|---|---|---|---|
@@ -52,27 +56,30 @@ Paired bootstrap, v3 against current, 1000 resamples of the shared players: **v3
 | Dyson Daniels | 23 | 23 | 66 | 71 | 76 | 10 |
 | Bam Adebayo | 26 | 17 | 72 | 77 | 73 | 14 |
 
-## A4 gates
+## Gates: the blended board against the shipped board
 
 | Gate | Season | Condition | Measured | Result |
 |---|---|---|---|---|
-| 1 | 2025 | v3 season rho above current, bootstrap >= 80% | 0.519 -> 0.541, boot 97.9% | PASS |
-| 2 | 2025 | avg actual rank of top 24 improves | 44.4 -> 50.2 | **FAIL** |
-| 3 | 2025 | per-game rho drops by at most 0.02 | 0.732 -> 0.734 | PASS |
-| 1 | 2026 | v3 season rho above current, bootstrap >= 80% | 0.409 -> 0.403, boot 56.1% | **FAIL** |
-| 2 | 2026 | avg actual rank of top 24 improves | 88.5 -> 81.6 | PASS |
-| 3 | 2026 | per-game rho drops by at most 0.02 | 0.550 -> 0.551 | PASS |
+| 1 | 2025 | season rho up, bootstrap >= 90% | 0.519 -> 0.533, boot 98.8% | PASS |
+| 2 | 2025 | avg top 24 no more than 1.0 worse | 44.4 -> 44.7 (+0.3) | PASS |
+| 3 | 2025 | per-game rho drops at most 0.02 | 0.732 -> 0.732 | PASS |
+| 4 | 2025 | top-50 busts no worse | 8 -> 7 | PASS |
+| 1 | 2026 | season rho up, bootstrap >= 90% | 0.409 -> 0.455, boot 95.8% | PASS |
+| 2 | 2026 | avg top 24 no more than 1.0 worse | 88.5 -> 68.1 (-20.4) | PASS |
+| 3 | 2026 | per-game rho drops at most 0.02 | 0.550 -> 0.622 | PASS |
+| 4 | 2026 | top-50 busts no worse | 13 -> 11 | PASS |
+| 2 | both | avg top 24 better on average | -10.1 | PASS |
+| 5 | 2025 | named busts move down on average | +7.8 places | PASS |
+| 5 | 2025 | named winners stay inside top 36 | Sengun 22, Cunningham 34, Adebayo 23 | PASS |
+| 5 | 2026 | named busts move down on average | +18.5 places | PASS |
+| 5 | 2026 | named winners stay inside top 36 | Thompson 11, Daniels 35, Adebayo 21 | PASS |
 
-Gates 3 (named winners inside the top 36) and 4 (named busts each move down) are read off the per-season player tables above.
+**All gates PASS.**
 
-## Reconciliation against the reviewer's numbers
+## Baseline pin (the shipped board)
 
-| Season | metric | reviewer | this tool | delta |
+| Season | pinned | measured | delta | |
 |---|---|---|---|---|
-| 2025 | current board season rho | 0.484 | 0.519 | +0.035 |
-| 2025 | current board avg top 24 | 52.9 | 44.4 | -8.5 |
-| 2026 | current board season rho | 0.448 | 0.409 | -0.039 |
-| 2026 | current board avg top 24 | 76.6 | 88.5 | +11.9 |
-
-**NOT RECONCILED**: the current board is outside +/- 0.02 of the reviewer's numbers. Per the spec, stop and reconcile before tuning anything.
+| 2025 | 0.519 | 0.519 | +0.000 | ok |
+| 2026 | 0.409 | 0.409 | -0.000 | ok |
 

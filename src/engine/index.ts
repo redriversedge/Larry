@@ -91,6 +91,23 @@ export {
 } from "./durability";
 export type { DurabilityDetail, DurabilityInput } from "./durability";
 export {
+  blendBoard,
+  blendScore,
+  marketAgeDays,
+  marketRankOrMissing,
+  MARKET_STALE_DAYS,
+} from "./blend";
+export type { BlendInput, BlendRow } from "./blend";
+export { replacementLevel, seasonValueFor, seasonValues } from "./replacement";
+export { buildPreseasonBoard, durabilityBand } from "./preseasonBoard";
+export type {
+  PreseasonBoardResult,
+  PreseasonBoardRow,
+  PreseasonMarket,
+  PreseasonPlayerInput,
+} from "./preseasonBoard";
+export { BLEND_LARRY_WEIGHT, BLEND_MARKET_DEPTH, BLEND_MISSING_RANK } from "./constants";
+export {
   buildHistoricalBoard,
   checkModel,
   combineEvals,
