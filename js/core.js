@@ -1132,6 +1132,90 @@ function byDurantRank(a, b) {
   return durantKey(b && b.durantScore) - durantKey(a && a.durantScore);
 }
 
+// A player's expected per-game line for forward-looking math (matchup
+// projections, Larry's Move). Early in the season the season line is
+// a handful of games or nothing at all; a player who has not played yet
+// reads as all zeros, which made the matchup projection add almost
+// nothing and told Larry's Move a starter had "no production". So blend
+// toward ESPN's projection: with g games played the season line gets
+// weight g / (g + 5). By mid-season the projection barely counts.
+var BLEND_PRIOR_GAMES = 5;
+function blendedPerGame(p) {
+  var cats = getOrderedCategories();
+  var stats = (p && p.stats) || {};
+  var season = stats.season || {};
+  var proj = stats.projectedRate || stats.projectedPerGame || null;
+  var gp = (stats.gp && stats.gp.season) || (p && p.gamesPlayed) || 0;
+  var w = proj ? gp / (gp + BLEND_PRIOR_GAMES) : 1;
+  var out = {};
+  cats.forEach(function(cat) {
+    var s = season[cat.abbr];
+    s = typeof s === 'number' && isFinite(s) ? s : 0;
+    var pr = proj && typeof proj[cat.abbr] === 'number' && isFinite(proj[cat.abbr]) ? proj[cat.abbr] : s;
+    out[cat.abbr] = w * s + (1 - w) * pr;
+  });
+  return out;
+}
+
+// Has this scheduled game already tipped off? Its stats are then (partly)
+// in ESPN's live score, so a projection must not count it again.
+// timeLocal is like "6:30 PM" on the game's local date string.
+function gameHasStarted(game, now) {
+  if (!game || !game.date) return false;
+  now = now || new Date();
+  var todayStr = localDateStr(now);
+  if (game.date < todayStr) return true;
+  if (game.date > todayStr) return false;
+  var m = /^(\d{1,2}):(\d{2})\s*(AM|PM)$/i.exec(String(game.timeLocal || '').trim());
+  if (!m) return false;
+  var h = Number(m[1]) % 12 + (m[3].toUpperCase() === 'PM' ? 12 : 0);
+  var mins = h * 60 + Number(m[2]);
+  return now.getHours() * 60 + now.getMinutes() >= mins;
+}
+
+// Projected stats for the REST of the current matchup, per category.
+// For each remaining day, the players with a game that day fill the
+// team's starting slots best-first (by Larry value), which is what a
+// manager setting a daily lineup does. Positions are ignored, so this is
+// a slight overestimate on crowded days. Games already started are left
+// out because the live score already has them. OUT, suspended and IR
+// players are left out entirely.
+function projectRestOfMatchup(players, now) {
+  now = now || new Date();
+  var cats = getOrderedCategories();
+  var win = getMatchupWindow();
+  var todayStr = localDateStr(now);
+  var fromStr = todayStr > win.startStr ? todayStr : win.startStr;
+  var slots = ((S.league && S.league.rosterSlots) || []).reduce(function(n, s) {
+    return n + (s && s.slotId < 12 ? s.count || 0 : 0);
+  }, 0) || 10;
+  var byDate = {};
+  (players || []).forEach(function(p) {
+    if (!p || p.slotId === 13) return;
+    var st = String(p.injuryStatus || '').toUpperCase();
+    if (st === 'OUT' || st === 'SUSPENSION' || st === 'INJURY_RESERVE') return;
+    (p.schedule || []).forEach(function(g) {
+      if (!g || !g.date || g.date < fromStr || g.date > win.endStr) return;
+      if (gameHasStarted(g, now)) return;
+      (byDate[g.date] = byDate[g.date] || []).push(p);
+    });
+  });
+  var totals = {};
+  cats.forEach(function(cat) { totals[cat.abbr] = 0; });
+  var games = 0;
+  Object.keys(byDate).forEach(function(d) {
+    var list = byDate[d].slice().sort(function(a, b) {
+      return durantKey(b.durantScore) - durantKey(a.durantScore);
+    }).slice(0, slots);
+    list.forEach(function(p) {
+      var pg = blendedPerGame(p);
+      cats.forEach(function(cat) { totals[cat.abbr] += pg[cat.abbr] || 0; });
+      games++;
+    });
+  });
+  return { totals: totals, games: games };
+}
+
 // Display form of a possibly-null score or rank.
 function durantText(v, digits) {
   if (v === null || v === undefined) return '--';

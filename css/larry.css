@@ -411,11 +411,13 @@ body {
 .quick-cards::-webkit-scrollbar { display: none; }
 .quick-card {
   background: var(--bg-card); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: 10px 12px; text-align: center;
-  flex: 1; min-width: 68px;
+  border-radius: var(--radius); padding: 10px 4px; text-align: center;
+  /* Five cards share the row evenly at phone width instead of each
+     claiming 68px plus padding and pushing the last one off screen. */
+  flex: 1 1 0; min-width: 0;
 }
-.quick-card .qc-value { font-size: 1.15rem; font-weight: 800; white-space: nowrap; }
-.quick-card .qc-label { font-size: 0.62rem; color: var(--text-muted); margin-top: 2px; text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap; }
+.quick-card .qc-value { font-size: 1.1rem; font-weight: 800; white-space: nowrap; }
+.quick-card .qc-label { font-size: 0.6rem; color: var(--text-muted); margin-top: 2px; text-transform: uppercase; letter-spacing: 0.3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* --- DECISION ITEMS --- */
 .decision-list { display: flex; flex-direction: column; gap: 8px; }
@@ -1248,6 +1250,17 @@ body {
 .larry-move-cta-text span { font-size: 0.8rem; opacity: 0.9; }
 .larry-move-cta-arrow { font-size: 1.8rem; line-height: 1; opacity: 0.9; flex-shrink: 0; }
 .larry-move-cta.pulse-once { border-radius: 14px; }
+
+/* Larry's Move answer header doubles as the collapse toggle. */
+.larry-move-toggle {
+  display: flex; justify-content: space-between; align-items: center; width: 100%;
+  background: none; border: none; color: inherit; font: inherit; text-align: left;
+  cursor: pointer; min-height: 44px;
+}
+.larry-move-headline-collapsed {
+  margin: 0; font-size: 0.9rem; font-weight: 600; color: var(--text-secondary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 
 /* An open lineup slot, shown the way ESPN shows it. */
 .empty-slot-row td { opacity: 0.6; }
