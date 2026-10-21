@@ -1512,6 +1512,14 @@ var ESPNSync = (function() {
         // Rest-of-season count. Referenced by ROS projections, which until
         // now read an undefined value.
         p.gamesRemainingROS = countGamesInRange(p.schedule, fromStr, seasonEndStr);
+        // The NBA publishes 80 games per team at the start of the season.
+        // The last 2 are NBA Cup games whose dates and opponents depend on
+        // the Cup group stage and are only added in December, so every
+        // team showed 2 games short (Chet: 79 left after one played, not
+        // 81). Count the not-yet-scheduled games too; once the NBA adds
+        // them the schedule has all 82 and this adds nothing.
+        p.gamesUnscheduled = Math.max(0, FULL_SEASON_GAMES - p.schedule.length);
+        p.gamesRemainingROS += p.gamesUnscheduled;
         return;
       }
       // No NBA team means no games, full stop. The 3.5-games-a-week estimate

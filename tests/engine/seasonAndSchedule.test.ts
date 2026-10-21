@@ -1224,3 +1224,23 @@ describe("matchup projection (rest of the matchup)", () => {
     expect(r.totals.PTS).toBe(60);
   });
 });
+
+describe("season games remaining", () => {
+  it("counts the 2 NBA Cup games the NBA has not dated yet", () => {
+    pinClock("2026-10-21T12:00:00");
+    const state = baseState(2027);
+    state.league.matchupPeriods = { "1": [1] };
+    const games = Array.from({ length: 80 }, (_, i) => {
+      const d = new Date(2026, 9, 20 + i * 2);
+      const iso = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+      return { date: iso, scoringPeriodId: i + 1 };
+    }).filter((g) => g.date <= "2027-04-11");
+    state.scheduleLookup = { 25: games };
+    state.allPlayers = [{ id: 1, proTeamId: 25, schedule: games }];
+    const ESPNSync = loadESPNSync(state);
+    ESPNSync.enrichGamesRemaining();
+    const played = games.filter((g) => g.date < "2026-10-21").length;
+    expect(state.allPlayers[0].gamesUnscheduled).toBe(82 - games.length);
+    expect(state.allPlayers[0].gamesRemainingROS).toBe(82 - played);
+  });
+});

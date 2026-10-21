@@ -2979,7 +2979,15 @@ function renderPopupSchedule(p) {
   if (p.rosGamesLeft) {
     html += '<div style="padding:8px 0;border-top:1px solid var(--border)">';
     html += '<div style="font-weight:700;margin-bottom:4px">Rest of Season</div>';
-    html += '<div>~' + p.rosGamesLeft + ' games remaining in the NBA season</div>';
+    // Exact from the NBA schedule, plus any NBA Cup games the league has
+    // not dated yet. These are the TEAM's games; the player will likely
+    // miss some, which is what the Stats tab's expected games accounts for.
+    var fromSchedule = typeof p.gamesRemainingROS === 'number' && p.gamesRemainingROS > 0;
+    html += '<div>' + (fromSchedule ? '' : '~') + p.rosGamesLeft + ' games left for ' + esc(p.nbaTeam || 'his team') + '</div>';
+    if (p.gamesUnscheduled > 0) {
+      html += '<div class="text-xs muted" style="margin-top:2px">Includes ' + p.gamesUnscheduled +
+        ' NBA Cup game' + (p.gamesUnscheduled === 1 ? '' : 's') + ' the NBA has not scheduled yet.</div>';
+    }
     html += '</div>';
   }
 
