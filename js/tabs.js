@@ -277,7 +277,7 @@ function renderDashboardInline() {
   // Games today count (from Schedule)
   var startersPlaying = myPlayers.filter(function(p) { return p.slotId < 12 && p.gamesToday; }).length;
   var totalStarters = myPlayers.filter(function(p) { return p.slotId < 12; }).length;
-  html += '<div class="quick-card"><div class="qc-value">' + startersPlaying + '/' + totalStarters + '</div><div class="qc-label">Playing Today</div></div>';
+  html += '<div class="quick-card"><div class="qc-value">' + startersPlaying + '/' + totalStarters + '</div><div class="qc-label">Playing</div></div>';
 
   // Waiver rank
   html += '<div class="quick-card"><div class="qc-value">#' + (S.myTeam.waiverRank || '-') + '</div><div class="qc-label">Waiver</div></div>';
@@ -740,29 +740,38 @@ function renderTeamOfWeek(cats) {
 
 
 function renderMatchupProjections(cats) {
-  var myPlayers = (S.myTeam.players || []).filter(function(p) { return p.slotId < 12; });
+  // Full player records (with stats and schedule) for both rosters. Team
+  // rosters hold stubs; S.allPlayers has the rest.
+  function enrich(list) {
+    return (list || []).map(function(stub) {
+      var full = S.allPlayers.find(function(ap) { return ap.id === stub.id; });
+      if (!full) return stub;
+      // Keep the roster's own slot; the pool copy may be stale.
+      return Object.assign({}, full, { slotId: stub.slotId, slot: stub.slot });
+    });
+  }
+  var myPlayers = enrich(S.myTeam.players);
   var oppTeam = S.teams.find(function(t) { return t.teamId === S.matchup.opponentTeamId; });
-  var oppPlayerStubs = oppTeam ? (oppTeam.players || []).filter(function(p) { return p.slotId < 12; }) : [];
-
-  // Enrich opp players from S.allPlayers for z-scores and stats
-  var oppPlayers = oppPlayerStubs.map(function(stub) {
-    return S.allPlayers.find(function(ap) { return ap.id === stub.id; }) || stub;
-  });
+  var oppPlayers = enrich(oppTeam ? oppTeam.players : []);
 
   if (!myPlayers.length) return '<div class="empty-state"><p>No roster data. Sync with ESPN first.</p></div>';
 
-  var VOLATILITY_THRESHOLD = 2.0;
+  // Current score PLUS the rest of the matchup. The old version added
+  // season per-game x games left for starters only, and on day two every
+  // player who had not played yet had a season line of zero, so the
+  // projection sat on top of the current score.
+  var mine = projectRestOfMatchup(myPlayers);
+  var theirs = projectRestOfMatchup(oppPlayers);
+  var win = getMatchupWindow();
 
-  // Compute projected totals per category: sum(season per-game * gamesRemaining) per team
-  // Also compute volatility: variance between last7 pg and season pg across roster
   var myName = S.myTeam.name || 'My Team';
   var oppName = S.matchup.opponentName || 'Opponent';
 
   var html = '<div class="card">';
-  html += '<div class="card-header">Actual + Projected Totals';
-  html += '<span class="text-xs muted" style="margin-left:8px">~ = volatile</span>';
-  html += '</div>';
-  // Team name header row
+  html += '<div class="card-header">Projected Final Score</div>';
+  html += '<p class="text-xs muted" style="margin:0 0 8px">Current score plus each team\'s remaining games through ' +
+    esc(win.endStr) + ' (' + mine.games + ' for you, ' + theirs.games + ' for ' + esc(oppName) +
+    '), assuming the best available players start each day. Games already under way are in the current score.</p>';
   html += '<div class="score-row" style="font-weight:700;font-size:0.75rem;color:var(--text-secondary);border-bottom:2px solid var(--border);padding-bottom:6px">';
   html += '<div class="my-score">' + esc(myName) + '</div>';
   html += '<div class="cat-name"></div>';
@@ -770,62 +779,30 @@ function renderMatchupProjections(cats) {
   html += '</div>';
 
   var projWins = 0, projLosses = 0;
-
   cats.forEach(function(cat) {
-    var myProjected = 0, oppProjected = 0;
-    var myVariance = 0, oppVariance = 0;
-
-    myPlayers.forEach(function(p) {
-      var gamesLeft = p.gamesRemaining || 0;
-      var seasonPg = ESPNSync.getPerGameStats(p, 'season');
-      var last7Pg = ESPNSync.getPerGameStats(p, 'last7');
-      var seasonVal = seasonPg ? (seasonPg[cat.abbr] || 0) : 0;
-      var last7Val = last7Pg ? (last7Pg[cat.abbr] || 0) : seasonVal;
-      myProjected += seasonVal * gamesLeft;
-      myVariance += Math.abs(last7Val - seasonVal);
-    });
-
-    oppPlayers.forEach(function(p) {
-      var gamesLeft = p.gamesRemaining || 0;
-      var seasonPg = ESPNSync.getPerGameStats(p, 'season');
-      var last7Pg = ESPNSync.getPerGameStats(p, 'last7');
-      var seasonVal = seasonPg ? (seasonPg[cat.abbr] || 0) : 0;
-      var last7Val = last7Pg ? (last7Pg[cat.abbr] || 0) : seasonVal;
-      oppProjected += seasonVal * gamesLeft;
-      oppVariance += Math.abs(last7Val - seasonVal);
-    });
-
-    // Combine actual scores so far with remaining projection
-    var myActual = (S.matchup.myScores && S.matchup.myScores[cat.abbr]) ? (S.matchup.myScores[cat.abbr] || 0) : 0;
-    var oppActual = (S.matchup.oppScores && S.matchup.oppScores[cat.abbr]) ? (S.matchup.oppScores[cat.abbr] || 0) : 0;
-    var myTotal = myActual + myProjected;
-    var oppTotal = oppActual + oppProjected;
-
+    var myActual = (S.matchup.myScores && S.matchup.myScores[cat.abbr]) || 0;
+    var oppActual = (S.matchup.oppScores && S.matchup.oppScores[cat.abbr]) || 0;
+    var myTotal = myActual + (mine.totals[cat.abbr] || 0);
+    var oppTotal = oppActual + (theirs.totals[cat.abbr] || 0);
     var myWins = cat.isNegative ? myTotal < oppTotal : myTotal > oppTotal;
     var oppWins = cat.isNegative ? oppTotal < myTotal : oppTotal > myTotal;
     if (myWins) projWins++;
     else if (oppWins) projLosses++;
-
-    var myVolatile = myVariance > VOLATILITY_THRESHOLD;
-    var oppVolatile = oppVariance > VOLATILITY_THRESHOLD;
-
-    var myLabel = fmt(myTotal, 1) + (myVolatile ? '<span class="volatile" style="color:var(--accent-gold);margin-left:2px">~</span>' : '');
-    var oppLabel = fmt(oppTotal, 1) + (oppVolatile ? '<span class="volatile" style="color:var(--accent-gold);margin-left:2px">~</span>' : '');
-
-    var myWinCls = (cat.isNegative ? myTotal < oppTotal : myTotal > oppTotal) ? 'winning' : ((cat.isNegative ? myTotal > oppTotal : myTotal < oppTotal) ? 'losing' : '');
-    var oppWinCls = (cat.isNegative ? oppTotal < myTotal : oppTotal > myTotal) ? 'winning' : ((cat.isNegative ? oppTotal > myTotal : oppTotal < myTotal) ? 'losing' : '');
-
+    var digits = cat.isPercent ? 3 : 0;
     html += '<div class="score-row">' +
-      '<div class="my-score ' + myWinCls + '">' + myLabel + '</div>' +
+      '<div class="my-score ' + (myWins ? 'winning' : (oppWins ? 'losing' : '')) + '">' +
+        (cat.isPercent ? pct(myTotal) : fmt(myTotal, digits)) +
+        '<div class="text-xs muted">now ' + fmt(myActual, 0) + '</div></div>' +
       '<div class="cat-name">' + cat.abbr + '</div>' +
-      '<div class="opp-score ' + oppWinCls + '">' + oppLabel + '</div>' +
+      '<div class="opp-score ' + (oppWins ? 'winning' : (myWins ? 'losing' : '')) + '">' +
+        (cat.isPercent ? pct(oppTotal) : fmt(oppTotal, digits)) +
+        '<div class="text-xs muted">now ' + fmt(oppActual, 0) + '</div></div>' +
     '</div>';
   });
 
   var projTies = Math.max(0, cats.length - projWins - projLosses);
   html += '<div style="text-align:center;padding:12px;font-size:1.1rem;font-weight:800">Projected: ' + projWins + '-' + projLosses + '-' + projTies + '</div>';
   html += '</div>';
-
   return html;
 }
 
@@ -2546,7 +2523,9 @@ function loadPlayerInfo(playerId, force) {
   }
   Promise.all([
     soft(getJson(ESPN_ATHLETE_API + id)),
-    soft(getJson(ESPN_ATHLETE_API + id + '/gamelog')),
+    // Pinned to this league's season, so the log never shows last year.
+    soft(getJson(ESPN_ATHLETE_API + id + '/gamelog?season=' +
+      ((S.league && S.league.seasonId) || ''))),
     soft(getJson(ESPN_NEWS_API + id))
   ]).then(function(res) {
     _playerInfo[id] = {
@@ -2856,18 +2835,42 @@ function renderPopupRankNote(p, cats) {
   return html;
 }
 
-// Game by game, newest first, straight from ESPN's box scores.
+// A two-week strip around today: this season's games from the last 7 days
+// with their box scores, then the next 7 days of scheduled games. Played
+// games come from ESPN's box scores, upcoming ones from the NBA schedule.
+var GAMELOG_DAYS_BACK = 7;
+var GAMELOG_DAYS_AHEAD = 7;
 function renderPopupGameLog(p, cats, info) {
   var log = info && info.gameLog;
   if (!log) return popupLoadingNote(info, 'the game log');
-  if (!log.length) {
-    return '<div class="text-xs muted" style="padding:12px 0;text-align:center">No regular-season games yet.</div>';
-  }
+  var now = new Date();
+  var back = new Date(now.getFullYear(), now.getMonth(), now.getDate() - GAMELOG_DAYS_BACK);
+  var ahead = new Date(now.getFullYear(), now.getMonth(), now.getDate() + GAMELOG_DAYS_AHEAD);
+  var backStr = localDateStr(back), aheadStr = localDateStr(ahead), todayStr = localDateStr(now);
+
+  // ESPN's gameDate is UTC; the local date is what the user thinks of.
+  var played = log.filter(function(g) {
+    var d = g.date ? localDateStr(new Date(g.date)) : '';
+    g.localDate = d;
+    return d && d >= backStr && d <= todayStr;
+  }).slice().reverse(); // oldest first
+  var playedDates = {};
+  played.forEach(function(g) { playedDates[g.localDate] = true; });
+  var upcoming = (p.schedule || []).filter(function(g) {
+    return g && g.date && g.date >= todayStr && g.date <= aheadStr && !playedDates[g.date];
+  });
+
+  var colCount = 4 + cats.length;
   var html = '<div class="table-scroll"><table class="popup-stats-table"><thead><tr>' +
     '<th style="text-align:left">Date</th><th style="text-align:left">Opp</th><th>Result</th><th>MIN</th>';
   cats.forEach(function(cat) { html += '<th style="color:' + cat.color + '">' + cat.abbr + '</th>'; });
   html += '</tr></thead><tbody>';
-  log.forEach(function(g) {
+
+  if (!played.length) {
+    html += '<tr><td colspan="' + colCount + '" class="text-xs muted" style="text-align:center">No games in the last ' +
+      GAMELOG_DAYS_BACK + ' days.</td></tr>';
+  }
+  played.forEach(function(g) {
     var res = g.result ? '<span class="' + (g.result === 'W' ? 'stat-positive' : (g.result === 'L' ? 'stat-negative' : '')) + '">' +
       esc(g.result) + '</span> ' + esc(g.score) : esc(g.score);
     html += '<tr><td style="text-align:left;white-space:nowrap">' + esc(shortDate(g.date)) + '</td>';
@@ -2879,6 +2882,20 @@ function renderPopupGameLog(p, cats, info) {
       html += '<td>' + (typeof v === 'number' ? (cat.isPercent ? pct(v) : fmt(v, 0)) : '') + '</td>';
     });
     html += '</tr>';
+  });
+
+  html += '<tr><td colspan="' + colCount + '" class="text-xs" style="text-align:left;padding-top:10px;' +
+    'color:var(--accent-blue);font-weight:700">Next ' + GAMELOG_DAYS_AHEAD + ' days</td></tr>';
+  if (!upcoming.length) {
+    html += '<tr><td colspan="' + colCount + '" class="text-xs muted" style="text-align:center">No games scheduled.</td></tr>';
+  }
+  upcoming.forEach(function(g) {
+    var parts = g.date.split('-');
+    var d = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+    var label = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+    html += '<tr class="muted"><td style="text-align:left;white-space:nowrap">' + esc(label) + '</td>';
+    html += '<td style="text-align:left;white-space:nowrap">' + esc((g.isHome ? 'vs ' : '@ ') + (g.opponent || '')) + '</td>';
+    html += '<td colspan="' + (colCount - 2) + '" class="text-xs" style="text-align:left">' + esc(g.timeLocal || '') + '</td></tr>';
   });
   html += '</tbody></table></div>';
   return html;
