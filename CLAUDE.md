@@ -89,7 +89,7 @@ REPO_MAP.md             -- Phase 0 audit: file tree + key-file summaries
 - `larry-chat.js` -- Chat. Builds the system prompt **server-side**; the client sends structured context only. Every ESPN-sourced string is sanitized into a delimited `<data>` block labelled untrusted, because team names are written by other managers in the league. Origin allowlist, per-IP rate limit, payload caps.
 - `larry-move.js` -- Larry's Move. Same trust model, plus a forced `report_move` tool and server-side validation of the result before the client renders it.
 
-Both read the model from `process.env.ANTHROPIC_MODEL` (default `claude-sonnet-5`). Never pin a model id in code: `claude-sonnet-4-20250514` was hardcoded here and silently 404'd for months after it retired.
+Chat reads the model from `process.env.ANTHROPIC_MODEL` (default `claude-sonnet-5`). Larry's Move reads `process.env.ANTHROPIC_MOVE_MODEL` (default `claude-haiku-5-5`) and deliberately does NOT inherit `ANTHROPIC_MODEL`: it must finish inside Netlify's 10s limit, and on the chat model every request timed out at 8.5 to 9.3s. On a 404 it falls back to `ANTHROPIC_MODEL`. Never pin a model id in code: `claude-sonnet-4-20250514` was hardcoded here and silently 404'd for months after it retired.
 
 ## Analysis Engines (js/engines.js)
 

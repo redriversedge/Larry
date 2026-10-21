@@ -1118,6 +1118,20 @@ function durantKey(v) {
   return (v === null || v === undefined) ? -Infinity : v;
 }
 
+// Comparator: best Larry rank first, no-evidence players last. Use this for
+// any list a user reads as "ranked". durantScore and durantRank are
+// different orders (in season the rank is rest-of-season value, preseason
+// it is the market blend), so sorting on the score shows ranks out of order.
+function byDurantRank(a, b) {
+  var aNo = !a || a.noEvidence || a.durantScore === null || a.durantScore === undefined;
+  var bNo = !b || b.noEvidence || b.durantScore === null || b.durantScore === undefined;
+  if (aNo !== bNo) return aNo ? 1 : -1;
+  var ar = (a && a.durantRank) || Infinity;
+  var br = (b && b.durantRank) || Infinity;
+  if (ar !== br) return ar - br;
+  return durantKey(b && b.durantScore) - durantKey(a && a.durantScore);
+}
+
 // Display form of a possibly-null score or rank.
 function durantText(v, digits) {
   if (v === null || v === undefined) return '--';

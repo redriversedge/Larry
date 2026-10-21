@@ -8,7 +8,17 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+// Several tests describe opening week as it looks BEFORE opening night
+// ("the whole 6-day window counts"). They read the real clock, so they
+// started failing on Oct 21 2026, the day after the season began. Pin the
+// clock for those tests instead of letting them drift with the calendar.
+function pinClock(iso: string) {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(iso));
+}
+afterEach(() => { vi.useRealTimers(); });
 
 const ROOT = path.resolve(__dirname, "../..");
 
@@ -455,6 +465,7 @@ describe("matchup windows", () => {
   });
 
   it("gives Jokic his two opening-week games, not zero", () => {
+    pinClock("2026-10-13T12:00:00");
     // The live symptom. Denver plays Oct 22 and Oct 24, both inside week 1.
     // The old one-day window (Oct 20 only) counted neither.
     const state = stateWithSchedule();
@@ -870,6 +881,27 @@ describe("observed windows self-correct a wrong week guess", () => {
     expect(ESPNSync.matchupWindowFor(1, plan).endStr).toBe("2026-10-25");
   });
 
+  it("ignores the matchup still in progress", () => {
+    // Day two of matchup 1 has scored only Oct 20 and 21. Reading that as
+    // the window ended the week on Oct 21 and reported 1 day remaining.
+    const state = stateWithHistory();
+    state.league.currentMatchupPeriod = 1;
+    const ESPNSync = loadESPNSync(state);
+    expect(ESPNSync.observedMatchupWindows()[1]).toBeUndefined();
+    const win = ESPNSync.matchupWindowFor(1, ESPNSync.weekPlan(),
+      ESPNSync.observedMatchupWindows());
+    expect(win.source).toBe("weeks");
+    expect(win.endStr).toBe("2026-10-25");
+  });
+
+  it("still reads a finished matchup once the next one starts", () => {
+    const state = stateWithHistory();
+    state.league.currentMatchupPeriod = 2;
+    const ESPNSync = loadESPNSync(state);
+    expect(ESPNSync.observedMatchupWindows()[1])
+      .toEqual({ startStr: "2026-10-20", endStr: "2026-10-22" });
+  });
+
   it("falls back to the week model for a matchup with no history", () => {
     const state = stateWithHistory();
     const ESPNSync = loadESPNSync(state);
@@ -993,6 +1025,7 @@ describe("the NBA schedule is refetched daily, not once a season", () => {
 
 describe("getMatchupWindow (what the UI prints)", () => {
   it("counts days left inside the real window, not the calendar week", () => {
+    pinClock("2026-10-13T12:00:00");
     const state = baseState(2027);
     state.matchup = { startDate: "2026-10-20", endDate: "2026-10-25" };
     const core = loadCore(state);
@@ -1039,6 +1072,7 @@ describe("getMatchupWindow (what the UI prints)", () => {
 
 describe("games remaining for players without a schedule", () => {
   it("gives an unsigned player zero games, not the weekly estimate", () => {
+    pinClock("2026-10-13T12:00:00");
     // The 3.5-games-a-week fallback was applied to anyone without a
     // schedule, so unsigned free agents (Westbrook, Chris Paul) showed 3
     // phantom games while every signed player correctly showed 0. Streaming
@@ -1078,5 +1112,56 @@ describe("games remaining for players without a schedule", () => {
     const ESPNSync = loadESPNSync(state);
     ESPNSync.enrichGamesRemaining();
     expect(state.allPlayers[0].gamesRemaining).toBeGreaterThan(0);
+  });
+});
+
+describe("lineup slots", () => {
+  it("keeps a player in the PG slot (id 0) as a starter", () => {
+    // `lineupSlotId || 12` turned slot 0 into the bench, so the Roster tab
+    // showed 7 starters and 5 bench in a league that starts 8.
+    const ESPNSync = loadESPNSync(baseState(2027));
+    const p = ESPNSync.parsePlayer({
+      lineupSlotId: 0,
+      playerPoolEntry: { player: { id: 9, fullName: "Point Guard", proTeamId: 2, eligibleSlots: [0, 5, 11, 12] } },
+    });
+    expect(p.slotId).toBe(0);
+    expect(p.slot).toBe("PG");
+  });
+
+  it("still defaults a missing slot to the bench", () => {
+    const ESPNSync = loadESPNSync(baseState(2027));
+    const p = ESPNSync.parsePlayer({
+      playerPoolEntry: { player: { id: 9, fullName: "Nobody", proTeamId: 2, eligibleSlots: [12] } },
+    });
+    expect(p.slotId).toBe(12);
+  });
+});
+
+describe("live matchup scores", () => {
+  it("prefers cumulativeScoreLive so games in progress count", () => {
+    const state = baseState(2027);
+    state.myTeam.teamId = 1;
+    state.league.currentMatchupPeriod = 1;
+    state.league.categories = [{ id: 0, abbr: "PTS" }, { id: 6, abbr: "REB" }];
+    state.teams = [{ teamId: 2, name: "Opp" }];
+    const ESPNSync = loadESPNSync(state);
+    ESPNSync.parseMatchup({
+      schedule: [{
+        matchupPeriodId: 1,
+        home: {
+          teamId: 1,
+          cumulativeScore: { scoreByStat: {} },
+          cumulativeScoreLive: { scoreByStat: { "0": { score: 61 }, "6": { score: 33 } } },
+        },
+        away: {
+          teamId: 2,
+          cumulativeScore: { scoreByStat: {} },
+          cumulativeScoreLive: { scoreByStat: { "0": { score: 19 }, "6": { score: 40 } } },
+        },
+      }],
+    });
+    expect(state.matchup.myScores).toEqual({ PTS: 61, REB: 33 });
+    expect(state.matchup.oppScores).toEqual({ PTS: 19, REB: 40 });
+    expect(state.matchup.myRecord).toEqual({ wins: 1, losses: 1, ties: 0 });
   });
 });
