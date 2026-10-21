@@ -457,8 +457,10 @@ function larryMoveFallbackHtml() {
     return '';
   }
   var list = [];
-  (Array.isArray(recs) ? recs : []).slice(0, 2).forEach(function(r) {
-    if (!r || !r.player) return;
+  var seen = {};
+  (Array.isArray(recs) ? recs : []).forEach(function(r) {
+    if (list.length >= 2 || !r || !r.player || seen[r.player.id]) return;
+    seen[r.player.id] = true;
     list.push('Add ' + (r.player.name || '') + (r.dropPlayer ? ', drop ' + (r.dropPlayer.name || '') : ''));
   });
   if (!list.length) return '';

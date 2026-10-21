@@ -1982,13 +1982,16 @@ function renderOpponentScout() {
 
   html += '<div style="padding:8px 0">';
   html += '<div style="margin-bottom:8px;font-size:0.8rem;font-weight:700;color:var(--accent-green)">Strongest categories:</div>';
-  oppCatTotals.slice(0, 3).forEach(function(ct) {
+  // Half the categories each way, so a 5-category league never lists the
+  // middle one as both a strength and a weakness.
+  var half = Math.max(1, Math.floor(oppCatTotals.length / 2));
+  oppCatTotals.slice(0, half).forEach(function(ct) {
     html += '<div class="mini-row"><span style="color:' + ct.cat.color + ';font-weight:700">' + ct.cat.abbr + '</span>';
     html += '<span class="stat-positive">' + ordinal(ct.rank) + ' of ' + nTeams + '</span></div>';
   });
 
   html += '<div style="margin:12px 0 8px;font-size:0.8rem;font-weight:700;color:var(--accent-red)">Weakest categories:</div>';
-  oppCatTotals.slice(-3).reverse().forEach(function(ct) {
+  oppCatTotals.slice(-half).reverse().forEach(function(ct) {
     html += '<div class="mini-row"><span style="color:' + ct.cat.color + ';font-weight:700">' + ct.cat.abbr + '</span>';
     html += '<span class="stat-negative">' + ordinal(ct.rank) + ' of ' + nTeams + '</span></div>';
   });
