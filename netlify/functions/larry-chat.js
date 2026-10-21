@@ -113,7 +113,8 @@ function playerLine(p) {
   ].filter(Boolean);
   let line = '- ' + parts.join(' | ');
   if (p.injury) line += ' | status ' + clean(p.injury, 20);
-  if (p.value !== undefined) line += ' | value ' + num(p.value);
+  if (p.rank !== undefined) line += ' | Larry rank #' + num(p.rank, 0);
+  else if (p.value !== undefined) line += ' | value ' + num(p.value);
   if (p.gamesLeft !== undefined) line += ' | games left ' + num(p.gamesLeft, 0);
   if (p.owned !== undefined) line += ' | owned ' + num(p.owned, 0) + '%';
   return line;
@@ -192,6 +193,7 @@ STYLE
 - Be specific and data-driven. Name actual players and cite their numbers.
 - Concise but complete. Use ** for emphasis on the key call.
 - Give a real opinion rather than hedging every direction.
+- Describe a player by his Larry rank and his category stats. Never mention z-scores, DURANT, or internal value scores; the user does not see them.
 
 INJURY RULES
 - NEVER recommend adding a player whose status is OUT, SUSPENSION or IR.

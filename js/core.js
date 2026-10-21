@@ -1216,6 +1216,13 @@ function projectRestOfMatchup(players, now) {
   return { totals: totals, games: games };
 }
 
+// What users see in place of the DURANT score: the rank, which is what the
+// score is for. The score itself stays internal, like the z-scores.
+function larryRankText(p) {
+  if (!p || p.noEvidence || !p.durantRank) return 'Larry rank --';
+  return 'Larry rank #' + p.durantRank;
+}
+
 // Display form of a possibly-null score or rank.
 function durantText(v, digits) {
   if (v === null || v === undefined) return '--';

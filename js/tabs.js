@@ -125,7 +125,7 @@ function renderAddDropTiles(recommendations) {
     // The first clause used to be "DURANT: 2 vs -4", a raw score that means
     // nothing to a reader. Prefer the category clause ("+STL, +BLK").
     var parts = (rec.detail || '').split('. ').filter(function(s) {
-      return s && !/^DURANT/i.test(s);
+      return s && !/^(DURANT|Larry rank|v2 score)/i.test(s);
     });
     var reason = parts.length ? parts[0].replace(/\[TARGET\]/g, '').replace(/\.$/, '') : 'Better fit';
     return '<div class="addrop-tile">' +
@@ -936,7 +936,7 @@ function handlePlayersSearch(value) {
 // The Players table label used to be hard-coded to "Availability Score",
 // which was never what it sorted on. Report the column actually in use.
 function playersSortLabel() {
-  if (_playersSortCol === 'durantScore') return 'DURANT Rank';
+  if (_playersSortCol === 'durantScore') return 'Larry Rank';
   if (_playersSortCol === 'name') return 'Name';
   return _playersSortCol;
 }
@@ -1040,7 +1040,7 @@ function renderPlayersList() {
   html += '<div class="table-scroll"><table class="data-table compact">';
   html += '<thead><tr>';
   html += '<th style="text-align:left;min-width:28px"><button type="button" class="th-sort" ' +
-    'onclick="sortPlayers(\'durantScore\')" aria-label="Sort by DURANT rank">#' +
+    'onclick="sortPlayers(\'durantScore\')" aria-label="Sort by Larry rank">#' +
     playersSortIndicator('durantScore') + '</button></th>';
   html += '<th class="stat-col">Today</th>';
   html += '<th style="text-align:left;min-width:120px"><button type="button" class="th-sort" ' +
@@ -2260,9 +2260,9 @@ function renderTradeAnalysis() {
 
   var html = '<div style="margin-top:12px;padding:12px;background:var(--bg-input);border-radius:8px">';
   html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">';
-  html += '<div><strong>' + esc(_tradeGivePlayer.name) + '</strong> <span class="text-xs muted">DURANT: ' + durantText(_tradeGivePlayer.durantScore, 1) + '</span></div>';
+  html += '<div><strong>' + esc(_tradeGivePlayer.name) + '</strong> <span class="text-xs muted">' + larryRankText(_tradeGivePlayer) + '</span></div>';
   html += '<span style="font-size:1.2rem">\u{27A1}\u{FE0F}</span>';
-  html += '<div><strong>' + esc(_tradeGetPlayer.name) + '</strong> <span class="text-xs muted">DURANT: ' + durantText(_tradeGetPlayer.durantScore, 1) + '</span></div>';
+  html += '<div><strong>' + esc(_tradeGetPlayer.name) + '</strong> <span class="text-xs muted">' + larryRankText(_tradeGetPlayer) + '</span></div>';
   html += '</div>';
 
   html += '<div style="text-align:center;margin:8px 0">';
@@ -2946,20 +2946,30 @@ function renderPopupSchedule(p) {
     date.setDate(date.getDate() + d);
     var dayLabel = date.toLocaleDateString('en-US', {weekday: 'short'});
     var hasGame = false;
+    var oppLabel = '';
 
     // Only ever show real games. This used to fall through to a hash of the
     // team's name to invent game days, which rendered a confident-looking
     // schedule that was entirely fictional.
     if (p.schedule && p.schedule.length) {
-      hasGame = p.schedule.some(function(g) { return g.date === localDateStr(date); });
+      var dayStr = localDateStr(date);
+      var g = p.schedule.find(function(x) { return x.date === dayStr; });
+      if (g) {
+        hasGame = true;
+        // The OPPONENT, the way a schedule reads. It used to print the
+        // player's own team on every game day.
+        oppLabel = (g.isHome ? 'vs ' : '@') + (g.opponent || '');
+      }
     } else if (d === 0 && p.gamesToday) {
       hasGame = true;
+      var gt = p.gameToday || {};
+      oppLabel = gt.opponent ? ((gt.isHome ? 'vs ' : '@') + gt.opponent) : 'Game';
     }
 
     html += '<div style="flex:1;text-align:center;padding:6px 2px;border-radius:6px;';
     html += 'background:' + (hasGame ? 'var(--accent-blue-dim, rgba(59,130,246,0.15))' : 'var(--bg-input)') + '">';
     html += '<div class="text-xs" style="color:' + (d === 0 ? 'var(--accent-blue)' : 'var(--text-secondary)') + '">' + dayLabel + '</div>';
-    html += '<div style="font-size:0.9rem;margin-top:2px;color:' + (hasGame ? 'var(--accent-blue)' : 'var(--text-secondary)') + '">' + (hasGame ? p.nbaTeam : '-') + '</div>';
+    html += '<div style="font-size:0.7rem;margin-top:2px;white-space:nowrap;color:' + (hasGame ? 'var(--accent-blue)' : 'var(--text-secondary)') + '">' + (hasGame ? esc(oppLabel) : '-') + '</div>';
     html += '</div>';
   }
 

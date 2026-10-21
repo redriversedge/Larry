@@ -1005,9 +1005,9 @@ var Engines = (function() {
         type: 'pickup',
         priority: idx === 0 ? 'high' : 'medium',
         action: drop ? ('Add ' + rp.player.name + ', Drop ' + drop.name) : ('Add ' + rp.player.name),
-        detail: 'v2 score: ' + rp.breakdown.final.toFixed(2) +
-                ' (G=' + rp.breakdown.gScore.toFixed(2) +
-                ', fit=' + rp.breakdown.fitBonus.toFixed(2) + '). ' + why,
+        // Plain words only. The internal score and its parts (final, G,
+        // fit) stay on improvement and breakdown for code that needs them.
+        detail: (why ? why.replace(/\.?\s*$/, '') + '. ' : '') + larryRankText(rp.player) + '.',
         player: rp.player,
         dropPlayer: drop,
         improvement: rp.breakdown.final
@@ -1187,7 +1187,7 @@ var Engines = (function() {
 
           // Build detail with strategy context
           var detailParts = [];
-          detailParts.push('DURANT: ' + durantText(pickup.durantScore, 1) + ' vs ' + durantText(dropCandidate.durantScore, 1));
+          detailParts.push(larryRankText(pickup) + ' vs ' + larryRankText(dropCandidate));
           if (catImpact.length) {
             detailParts.push(catImpact.join(', '));
           }
@@ -1243,7 +1243,7 @@ var Engines = (function() {
     }
     faWithGame.slice(0, 3).forEach(function(fa) {
       if (benchNoGame.length && recs.length < 8) {
-        var streamDetail = fa.nbaTeam + ' game. DURANT: ' + durantText(fa.durantScore, 1);
+        var streamDetail = fa.nbaTeam + ' game. ' + larryRankText(fa);
         if (hasStrategy && targetCats.length) {
           var helps = [];
           targetCats.forEach(function(tc) {
