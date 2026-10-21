@@ -379,9 +379,9 @@ const REPORT_MOVE_TOOL = {
       matchupRead: {
         type: 'object',
         properties: {
-          winning: { type: 'array', items: { type: 'string' } },
-          losing: { type: 'array', items: { type: 'string' } },
-          close: { type: 'array', items: { type: 'string' } },
+          winning: { type: 'array', items: { type: 'string' }, description: 'Category abbreviations only, e.g. ["REB", "PTS"]. Put scores in summary.' },
+          losing: { type: 'array', items: { type: 'string' }, description: 'Category abbreviations only.' },
+          close: { type: 'array', items: { type: 'string' }, description: 'Category abbreviations only.' },
           summary: { type: 'string', description: 'One or two sentences on where the matchup stands.' },
         },
         required: ['summary'],
@@ -396,6 +396,20 @@ const REPORT_MOVE_TOOL = {
 
 const ACTION_TYPES = ['lineup', 'add_drop', 'ir', 'hold', 'stream'];
 const CONFIDENCE = ['high', 'medium', 'low'];
+
+// The matchup lists are category names. The model sometimes writes
+// "REB 33-14 (~97%)", which the 12-character cap then cut to "REB (33-14, ,".
+// Keep just the leading category token.
+function catArray(v) {
+  if (!Array.isArray(v)) return [];
+  const out = [];
+  for (const x of v.slice(0, 10)) {
+    const m = /^\s*([A-Za-z0-9%]{2,4})\b/.exec(String(x || ''));
+    const c = m ? m[1].toUpperCase() : '';
+    if (c && out.indexOf(c) < 0) out.push(c);
+  }
+  return out;
+}
 
 function strArray(v, maxItems, maxLen) {
   if (!Array.isArray(v)) return [];
@@ -452,9 +466,9 @@ function validateMove(input, ctx) {
     noMove: noMove || actions.length === 0,
     actions: actions,
     matchupRead: {
-      winning: strArray(mr.winning, 10, 12),
-      losing: strArray(mr.losing, 10, 12),
-      close: strArray(mr.close, 10, 12),
+      winning: catArray(mr.winning),
+      losing: catArray(mr.losing),
+      close: catArray(mr.close),
       summary: summary,
     },
     risks: strArray(input.risks, 5, 240),
