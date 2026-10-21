@@ -1254,12 +1254,12 @@ body {
 /* Larry's Move answer header doubles as the collapse toggle. */
 .larry-move-toggle {
   display: flex; justify-content: space-between; align-items: center; width: 100%;
-  background: none; border: none; color: inherit; font: inherit; text-align: left;
+  background: none; border: none; color: inherit; font: inherit; font-weight: 700; text-align: left;
   cursor: pointer; min-height: 44px;
 }
 .larry-move-headline-collapsed {
   margin: 0; font-size: 0.9rem; font-weight: 600; color: var(--text-secondary);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
 /* An open lineup slot, shown the way ESPN shows it. */
