@@ -147,7 +147,9 @@ function buildChatContext() {
       pos: p.positions || [],
       team: p.nbaTeam,
       injury: p.injuryStatus,
-      value: p.durantScore || 0,
+      // The rank, not the internal score: the model quotes what it is
+      // given, and "value 12.3" means nothing to the reader.
+      rank: (!p.noEvidence && p.durantRank) ? p.durantRank : undefined,
       gamesLeft: p.gamesRemaining || 0,
       owned: p.percentOwned || 0
     };

@@ -75,13 +75,15 @@ function loadEngines(state: any) {
   const durantText = (v: unknown, d = 1) =>
     (v === null || v === undefined ? "--" : Number(v).toFixed(d));
   const isPreseason = () => state.__preseason === true;
+  const larryRankText = (p: any) =>
+    (!p || p.noEvidence || !p.durantRank ? "Larry rank --" : "Larry rank #" + p.durantRank);
   const fn = new Function(
     "window", "S", "getOrderedCategories", "fmt", "console", "document", "ESPNSync",
-    "durantKey", "durantText", "isPreseason",
+    "durantKey", "durantText", "isPreseason", "larryRankText",
     src + "\n; window.Engines = Engines; return window.Engines;",
   );
   return fn(sandbox, state, getOrderedCategories, fmt, console,
-    { querySelectorAll: () => [] }, ESPNSync, durantKey, durantText, isPreseason);
+    { querySelectorAll: () => [] }, ESPNSync, durantKey, durantText, isPreseason, larryRankText);
 }
 
 function baseState(): any {
