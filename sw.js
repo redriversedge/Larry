@@ -1,5 +1,5 @@
 // Larry v3.0 Service Worker
-var CACHE_VERSION = 'larry-v3.29.3';
+var CACHE_VERSION = 'larry-v3.30.0';
 var CACHE_FILES = [
   '/',
   '/index.html',
@@ -70,6 +70,9 @@ self.addEventListener('fetch', function(e) {
   if (e.request.method !== 'GET') return;
   if (e.request.url.includes('/api/') || e.request.url.includes('/.netlify/')) return;
   if (e.request.url.includes('anthropic.com')) return;
+  // Player news, game logs and bios come live from ESPN's public APIs.
+  // Never serve them from cache: yesterday's news is the wrong news.
+  if (e.request.url.includes('api.espn.com')) return;
 
   // Network-first for the shell. Cache-first meant a deploy was not picked
   // up until the service worker happened to update, which on an installed

@@ -142,8 +142,12 @@ var ESPNSync = (function() {
 
   // --- MAIN FETCH: LEAGUE DATA ---
   async function fetchLeague() {
+    // mMatchupScore carries cumulativeScoreLive, the category totals
+    // including games in progress. Without it the scoreboard read only
+    // cumulativeScore, which ESPN fills in after the day is final, so it sat
+    // at 0-0 through the whole of opening night.
     return await fetchESPN([
-      'mTeam', 'mRoster', 'mMatchup', 'mSettings',
+      'mTeam', 'mRoster', 'mMatchup', 'mMatchupScore', 'mSettings',
       'mSchedule', 'mScoreboard', 'mStatus', 'mNav'
     ]);
   }
@@ -558,8 +562,11 @@ var ESPNSync = (function() {
       nbaTeam: ESPN_TEAM_MAP[raw.proTeamId] || '???',
       status: 'ACTIVE',
       injuryStatus: raw.injuryStatus || 'ACTIVE',
+      // Slot 0 is PG, so `|| 12` filed every PG starter on the bench: the
+      // Roster tab showed 7 starters and 5 bench in a league with 8 and 4,
+      // and every games-remaining and projection count dropped him.
       slot: ESPN_SLOT_MAP[entry.lineupSlotId] || 'BE',
-      slotId: entry.lineupSlotId || 12,
+      slotId: typeof entry.lineupSlotId === 'number' ? entry.lineupSlotId : 12,
       onTeamId: 0,
       percentOwned: raw.ownership ? raw.ownership.percentOwned || 0 : 0,
       // Draft Room inputs. For the CURRENT season averageDraftPosition is
@@ -680,7 +687,8 @@ var ESPNSync = (function() {
 
   function parsePlayerDirect(raw) {
     if (!raw || !raw.player) return null;
-    var entry = { playerPoolEntry: { player: raw.player }, lineupSlotId: raw.lineupSlotId || 12 };
+    var entry = { playerPoolEntry: { player: raw.player },
+      lineupSlotId: typeof raw.lineupSlotId === 'number' ? raw.lineupSlotId : 12 };
     var result = parsePlayer(entry);
     if (!result && raw.player.id) {
       result = {
@@ -696,6 +704,16 @@ var ESPNSync = (function() {
       };
     }
     return result;
+  }
+
+  // The live category totals when ESPN sends them (games in progress
+  // included), otherwise the finalized ones. Live is a superset, so it is
+  // always the one to show.
+  function liveScore(side) {
+    if (!side) return null;
+    var live = side.cumulativeScoreLive;
+    if (live && live.scoreByStat && Object.keys(live.scoreByStat).length) return live;
+    return side.cumulativeScore || null;
   }
 
   // --- PARSE MATCHUP ---
@@ -726,9 +744,11 @@ var ESPNSync = (function() {
       S.matchup.oppScores = {};
       var myWins = 0, myLosses = 0, myTies = 0;
 
-      if (mySide && mySide.cumulativeScore && mySide.cumulativeScore.scoreByStat) {
-        var myStats = mySide.cumulativeScore.scoreByStat;
-        var oppStats = oppSide && oppSide.cumulativeScore ? oppSide.cumulativeScore.scoreByStat : {};
+      var myCum = liveScore(mySide);
+      if (myCum && myCum.scoreByStat) {
+        var myStats = myCum.scoreByStat;
+        var oppCum = liveScore(oppSide);
+        var oppStats = (oppCum && oppCum.scoreByStat) || {};
 
         S.league.categories.forEach(function(cat) {
           var myVal = myStats[String(cat.id)] ? myStats[String(cat.id)].score : 0;
@@ -1285,10 +1305,16 @@ var ESPNSync = (function() {
     var out = {};
     var sched = (S.league && S.league.schedule) || [];
     var dateFor = scoringPeriodDates();
+    // Only FINISHED matchups. The one in progress has scored only the days
+    // played so far, so reading it as a window cut matchup 1 off at Oct 21
+    // on its second day: "1 day remaining" and a games count for two days
+    // in a six-day week.
+    var current = (S.league && Number(S.league.currentMatchupPeriod)) || 0;
     for (var i = 0; i < sched.length; i++) {
       var m = sched[i] || {};
       var id = Number(m.matchupPeriodId);
       if (!isFinite(id) || id <= 0) continue;
+      if (current > 0 && id >= current) continue;
       var periods = [];
       ['home', 'away'].forEach(function(side) {
         var s = m[side];
