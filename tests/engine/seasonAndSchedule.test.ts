@@ -99,7 +99,8 @@ function loadCore(state: any) {
   const names = Object.keys(globals);
   const fn = new Function(...names, src +
     "\n; S = arguments[arguments.length - 1];" +
-    "\n; return { getMatchupWindow: getMatchupWindow, getMatchupDates: getMatchupDates };");
+    "\n; return { getMatchupWindow: getMatchupWindow, getMatchupDates: getMatchupDates," +
+    " blendedPerGame: blendedPerGame, gameHasStarted: gameHasStarted, projectRestOfMatchup: projectRestOfMatchup };");
   return fn(...names.map((n) => globals[n]), state);
 }
 
@@ -1163,5 +1164,63 @@ describe("live matchup scores", () => {
     expect(state.matchup.myScores).toEqual({ PTS: 61, REB: 33 });
     expect(state.matchup.oppScores).toEqual({ PTS: 19, REB: 40 });
     expect(state.matchup.myRecord).toEqual({ wins: 1, losses: 1, ties: 0 });
+  });
+});
+
+describe("matchup projection (rest of the matchup)", () => {
+  function state() {
+    const st = baseState(2027);
+    st.matchup = { startDate: "2026-10-20", endDate: "2026-10-25" };
+    st.league.rosterSlots = [{ slotId: 0, count: 1 }, { slotId: 12, count: 4 }];
+    st.league.categories = [{ id: 0, abbr: "PTS" }];
+    return st;
+  }
+  const cat = (s: any, k: string) => s[k];
+
+  it("leans on the projection before a player has played", () => {
+    const core = loadCore(state());
+    const pg = core.blendedPerGame({ stats: {
+      season: { PTS: 0 }, gp: { season: 0 }, projectedRate: { PTS: 20 },
+    } });
+    expect(cat(pg, "PTS")).toBe(20);
+  });
+
+  it("moves toward the season line as games accumulate", () => {
+    const core = loadCore(state());
+    const pg = core.blendedPerGame({ stats: {
+      season: { PTS: 30 }, gp: { season: 5 }, projectedRate: { PTS: 20 },
+    } });
+    expect(cat(pg, "PTS")).toBe(25); // 5 / (5 + 5) of the way
+  });
+
+  it("knows a game has tipped off from its local start time", () => {
+    const core = loadCore(state());
+    const evening = new Date(2026, 9, 21, 19, 0);
+    expect(core.gameHasStarted({ date: "2026-10-21", timeLocal: "6:30 PM" }, evening)).toBe(true);
+    expect(core.gameHasStarted({ date: "2026-10-21", timeLocal: "9:00 PM" }, evening)).toBe(false);
+    expect(core.gameHasStarted({ date: "2026-10-20", timeLocal: "9:00 PM" }, evening)).toBe(true);
+    expect(core.gameHasStarted({ date: "2026-10-22", timeLocal: "6:00 PM" }, evening)).toBe(false);
+  });
+
+  it("adds only unstarted games inside the window, best players first per day", () => {
+    pinClock("2026-10-21T12:00:00");
+    const core = loadCore(state());
+    const mk = (id: number, score: number, pts: number, dates: string[], extra: any = {}) => ({
+      id, durantScore: score, slotId: 12, injuryStatus: "ACTIVE",
+      stats: { season: {}, gp: { season: 0 }, projectedRate: { PTS: pts } },
+      schedule: dates.map((d) => ({ date: d, timeLocal: "7:00 PM" })), ...extra,
+    });
+    const players = [
+      mk(1, 50, 30, ["2026-10-21", "2026-10-23"]),
+      // Same day as player 1 with only one starting slot: sits.
+      mk(2, 10, 10, ["2026-10-21"]),
+      // Outside the window: not counted.
+      mk(3, 40, 25, ["2026-10-26"]),
+      // OUT: not counted.
+      mk(4, 60, 40, ["2026-10-22"], { injuryStatus: "OUT" }),
+    ];
+    const r = core.projectRestOfMatchup(players, new Date(2026, 9, 21, 12, 0));
+    expect(r.games).toBe(2);
+    expect(r.totals.PTS).toBe(60);
   });
 });

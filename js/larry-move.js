@@ -77,25 +77,12 @@ function larryMovePlayer(p, includeOwnership) {
   return out;
 }
 
-// Early in the season a player who has not played yet has an all-zero
-// season line, and Larry read that as "no production" and told the owner
-// to drop Peyton Watson on day two. Blend toward ESPN's projection until
-// there are enough games: with g games played the season line gets weight
-// g / (g + 5).
-var LARRY_MOVE_PRIOR_GAMES = 5;
+// Season line blended toward ESPN's projection early on (blendedPerGame
+// in core.js). An unplayed player's all-zero line once read as "no
+// production" and Larry told the owner to drop Peyton Watson on day two.
 function larryMovePerGame(p) {
-  var cats = getOrderedCategories();
-  var season = (p.stats && p.stats.season) || {};
-  var proj = (p.stats && (p.stats.projectedRate || p.stats.projectedPerGame)) || null;
-  var gp = (p.stats && p.stats.gp && p.stats.gp.season) || p.gamesPlayed || 0;
-  var w = proj ? gp / (gp + LARRY_MOVE_PRIOR_GAMES) : 1;
-  var pg = {};
-  cats.forEach(function(cat) {
-    var s = season[cat.abbr];
-    s = typeof s === 'number' && isFinite(s) ? s : 0;
-    var pr = proj && typeof proj[cat.abbr] === 'number' && isFinite(proj[cat.abbr]) ? proj[cat.abbr] : s;
-    pg[cat.abbr] = Math.round((w * s + (1 - w) * pr) * 10) / 10;
-  });
+  var pg = blendedPerGame(p);
+  Object.keys(pg).forEach(function(k) { pg[k] = Math.round(pg[k] * 10) / 10; });
   return pg;
 }
 
@@ -287,6 +274,8 @@ function requestLarryMove(force) {
       payloadHash: hash,
       result: data.move
     };
+    // A fresh answer always opens, even if the last one was collapsed.
+    if (S.prefs && S.prefs.collapsedSections) S.prefs.collapsedSections.larryMoveCard = false;
     autosave();
   }).catch(function(e) {
     _larryMoveError = e.message || 'Something went wrong.';
@@ -371,9 +360,21 @@ function larryMoveCardHtml() {
   var m = cache.result;
   var stale = larryMoveIsStale();
 
+  // The whole answer collapses to its header and headline once read, so it
+  // does not push the roster down the page for the rest of the day.
+  var collapsed = isSectionCollapsed('larryMoveCard');
   var html = '<div class="card">';
-  html += '<div class="card-header">Larry\'s Move' +
-    (stale ? ' <span class="text-xs muted">(data changed)</span>' : '') + '</div>';
+  html += '<button type="button" class="card-header larry-move-toggle" ' +
+    'aria-expanded="' + (collapsed ? 'false' : 'true') + '" ' +
+    'onclick="toggleLarryMoveCard()">' +
+    '<span>Larry\'s Move' +
+    (stale ? ' <span class="text-xs muted">(data changed)</span>' : '') + '</span>' +
+    '<span class="larry-move-chevron" aria-hidden="true">' + (collapsed ? '\u25B8' : '\u25BE') + '</span></button>';
+  if (collapsed) {
+    html += '<div style="padding:4px 12px 12px;cursor:pointer" onclick="toggleLarryMoveCard()">' +
+      '<p class="larry-move-headline-collapsed">' + esc(m.headline) + '</p></div></div>';
+    return html;
+  }
   html += '<div style="padding:12px">';
 
   html += '<p style="font-size:1rem;font-weight:600;margin:0 0 10px">' + esc(m.headline) + '</p>';
@@ -448,6 +449,15 @@ function larryMoveCardHtml() {
 
   html += '</div></div>';
   return html;
+}
+
+// Collapse or expand the answer card without rebuilding the whole tab
+// (toggleSection re-renders everything and loses scroll position).
+function toggleLarryMoveCard() {
+  S.prefs.collapsedSections = S.prefs.collapsedSections || {};
+  S.prefs.collapsedSections.larryMoveCard = !S.prefs.collapsedSections.larryMoveCard;
+  autosave();
+  renderLarryMoveCard();
 }
 
 function toggleLarryMoveDetail(btn, id) {
