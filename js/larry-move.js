@@ -147,7 +147,7 @@ function buildLarryMovePayload() {
   var freeAgents = (S.allPlayers || []).filter(function(p) {
     return p.onTeamId === 0 && Engines.isValidAddCandidate(p);
   });
-  freeAgents.sort(function(a, b) { return durantKey(b.durantScore) - durantKey(a.durantScore); });
+  freeAgents.sort(byDurantRank);
 
   var engineRecs = [];
   try {
@@ -350,12 +350,13 @@ function larryMoveCardHtml() {
     return '<div class="card"><div class="card-header">Larry\'s Move</div>' +
       '<div style="padding:12px" role="alert">' +
       '<p class="text-sm">' + esc(_larryMoveError) + '</p>' +
-      '<button class="btn btn-sm btn-primary" style="min-height:44px" ' +
-      'onclick="requestLarryMove(true)">Retry</button></div></div>';
+      larryMoveFallbackHtml() +
+      '<button class="btn btn-primary" style="min-height:44px;margin-top:8px" ' +
+      'onclick="requestLarryMove(true)">Try again</button></div></div>';
   }
 
   var cache = larryMoveCache();
-  if (!cache || !cache.result) return '';
+  if (!cache || !cache.result) return renderLarryMoveButton();
   var m = cache.result;
   var stale = larryMoveIsStale();
 
@@ -446,11 +447,35 @@ function toggleLarryMoveDetail(btn, id) {
   btn.setAttribute('aria-expanded', open ? 'false' : 'true');
 }
 
-// The button that lives in the Roster header.
+// When the AI call fails, the engine's own top suggestions are still worth
+// showing: they are computed locally and never depend on the network.
+function larryMoveFallbackHtml() {
+  var recs;
+  try {
+    recs = Engines.generateRecommendations(S.myTeam.players || [], S.allPlayers || []);
+  } catch (e) {
+    return '';
+  }
+  var list = [];
+  (Array.isArray(recs) ? recs : []).slice(0, 2).forEach(function(r) {
+    if (!r || !r.player) return;
+    list.push('Add ' + (r.player.name || '') + (r.dropPlayer ? ', drop ' + (r.dropPlayer.name || '') : ''));
+  });
+  if (!list.length) return '';
+  return '<div class="text-xs muted" style="margin-top:6px">Meanwhile, Larry\'s numbers suggest:</div>' +
+    '<ul class="text-sm" style="margin:4px 0 0 18px">' +
+    list.map(function(s) { return '<li>' + esc(s) + '</li>'; }).join('') + '</ul>';
+}
+
+// The call to action at the top of the Roster tab. A full-width button
+// with a label, because the old 20px logo was not recognisable as one.
 function renderLarryMoveButton() {
   var stale = larryMoveIsStale();
-  return '<button id="larry-move-btn" class="header-btn' + (stale ? ' pulse-once' : '') + '" ' +
-    'style="min-height:44px;min-width:44px" aria-label="Ask Larry for today\'s move" ' +
-    'title="Ask Larry for today\'s move" onclick="requestLarryMove(false)">' +
-    getLarryAvatar(20) + '</button>';
+  return '<button id="larry-move-btn" type="button" class="larry-move-cta' +
+    (stale ? ' pulse-once' : '') + '" onclick="requestLarryMove(false)" ' +
+    'aria-label="Get Larry\'s Move: what to do today to win this matchup">' +
+    '<span class="larry-move-cta-icon">' + getLarryAvatar(36) + '</span>' +
+    '<span class="larry-move-cta-text"><strong>Get Larry\'s Move</strong>' +
+    '<span>What to do today to win this matchup</span></span>' +
+    '<span class="larry-move-cta-arrow">\u203A</span></button>';
 }
