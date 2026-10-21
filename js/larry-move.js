@@ -77,13 +77,24 @@ function larryMovePlayer(p, includeOwnership) {
   return out;
 }
 
+// Early in the season a player who has not played yet has an all-zero
+// season line, and Larry read that as "no production" and told the owner
+// to drop Peyton Watson on day two. Blend toward ESPN's projection until
+// there are enough games: with g games played the season line gets weight
+// g / (g + 5).
+var LARRY_MOVE_PRIOR_GAMES = 5;
 function larryMovePerGame(p) {
   var cats = getOrderedCategories();
   var season = (p.stats && p.stats.season) || {};
+  var proj = (p.stats && (p.stats.projectedRate || p.stats.projectedPerGame)) || null;
+  var gp = (p.stats && p.stats.gp && p.stats.gp.season) || p.gamesPlayed || 0;
+  var w = proj ? gp / (gp + LARRY_MOVE_PRIOR_GAMES) : 1;
   var pg = {};
   cats.forEach(function(cat) {
-    var v = season[cat.abbr];
-    pg[cat.abbr] = typeof v === 'number' && isFinite(v) ? Math.round(v * 10) / 10 : 0;
+    var s = season[cat.abbr];
+    s = typeof s === 'number' && isFinite(s) ? s : 0;
+    var pr = proj && typeof proj[cat.abbr] === 'number' && isFinite(proj[cat.abbr]) ? proj[cat.abbr] : s;
+    pg[cat.abbr] = Math.round((w * s + (1 - w) * pr) * 10) / 10;
   });
   return pg;
 }
