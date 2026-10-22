@@ -14,6 +14,7 @@ import type { Category, CategoryVector, PlayerProjection } from "../shared/types
 import { CATEGORIES } from "../shared/types";
 import {
   DEFAULT_ROSTER_SIZE,
+  DEFAULT_TEAM_COUNT,
   FULL_SEASON_GAMES,
   G_SCORE_KAPPA,
   MIN_GP_POOL,
@@ -23,6 +24,7 @@ import {
   PROXY_WEEK_VARIANCE,
   Q_POOL_ITERATIONS,
   Q_POOL_MULTIPLIER,
+  REPLACEMENT_BAND_WIDTH,
   SHRINK_K,
   STDEV_FLOOR,
   Z_CAP,
@@ -199,13 +201,18 @@ export interface BaseValueRow {
   id: string;
   gamesPlayed: number;
   perGame: CategoryVector; // raw rate, before shrink
-  shrunk: CategoryVector; // after shrink toward the pool mean
+  shrunk: CategoryVector; // after shrink toward the prior
   z: CategoryVector; // after shrink and clamp
   baseValue: number; // sum of z over the league's categories
   // False when we know nothing about this player: no games played AND no
-  // usable projection. Such a player shrinks all the way to the pool mean
-  // and scores exactly 0, which reads as "average starter" and is the
-  // opposite of the truth.
+  // usable projection. Such a player shrinks all the way to the fallback
+  // prior, so his baseValue describes the fallback and not him. Callers
+  // must order on this flag first rather than on the number.
+  //
+  // Before rankings v3.1 the fallback was the pool mean, so he scored
+  // exactly 0, which reads as "average starter" and is the opposite of the
+  // truth. It is now the replacement line, which is much closer to right,
+  // but still a statement about the waiver wire rather than about him.
   //
   // Preseason this was most of the board: 596 of 1000 players had no ESPN
   // projection, so they filled ranks 65 to 660 and pushed every real
@@ -221,11 +228,27 @@ export interface BaseValueRow {
 export interface BaseValueOptions {
   categories?: readonly Category[];
   rosterSize?: number;
+  // teamCount * rosterSize: the number of rostered players in the league,
+  // and therefore where the waiver wire starts. Drives the replacement-level
+  // line that unprojected players shrink toward.
+  poolSize?: number;
+  // What an unprojected player shrinks toward. "replacement" is the shipped
+  // behaviour (rankings v3.1). "poolMean" is the pre-v3.1 board and exists
+  // ONLY so tools/backtest-inseason-ranking.ts can measure the change
+  // against what it replaced. Do not use it from the app.
+  unprojectedPrior?: "replacement" | "poolMean";
+}
+
+// Q-pool stats plus the replacement-level line, which is not a property of
+// the pool but is computed in the same pass and needed by the tests, the
+// tools and the UI.
+export interface BaseValuePoolStats extends PoolStats {
+  replacementLine: CategoryVector;
 }
 
 export interface BaseValueResult {
   rows: BaseValueRow[];
-  stats: PoolStats;
+  stats: BaseValuePoolStats;
   poolSize: number;
 }
 
@@ -295,6 +318,59 @@ function priorPerGame(
   return null;
 }
 
+// The replacement-level line: per category, the mean PRIOR of the players
+// ranked just past the last rostered spot, over a band of
+// REPLACEMENT_BAND_WIDTH of them.
+//
+// This is the prior for a player ESPN has not projected, and it is the fix
+// for the in-season half of the no-evidence problem. The pool mean is an
+// AVERAGE STARTER's line, so shrinking an unprojected player toward it made
+// one garbage-time appearance worth a top-100 rank: at SHRINK_K = 8 a single
+// game carries weight 1/9 and the prior carries 8/9, so whatever the player
+// actually did, he came out close to an average starter. On the live board
+// three days into the 2026-27 season that put 51 unprojected players inside
+// the top 150 and pushed Darius Garland to 153.
+//
+// Priors are used rather than the band's observed rates so the line is
+// stable from opening night, when nobody has an observed rate worth having.
+// Players with no prior are not candidates: they are the rows being
+// measured, and letting them define the line would be circular.
+function computeReplacementLine(
+  priors: Array<CategoryVector | null>,
+  stats: PoolStats,
+  cats: readonly Category[],
+  poolSize: number,
+): CategoryVector {
+  const line = emptyVector();
+  const withPrior = priors.filter((p): p is CategoryVector => p !== null);
+  if (withPrior.length === 0) {
+    // Nothing on the board is projected, so there is no waiver wire to
+    // measure against and the pool mean is the only prior left.
+    for (const c of cats) line[c] = stats.mean[c];
+    return line;
+  }
+  const ranked = withPrior
+    .map((prior) => {
+      let score = 0;
+      for (const c of cats) {
+        score += clamp((prior[c] - stats.mean[c]) / stats.stdev[c], Z_CAP);
+      }
+      return { prior, score };
+    })
+    .sort((a, b) => b.score - a.score);
+  // Ranks poolSize + 1 through poolSize + REPLACEMENT_BAND_WIDTH, which are
+  // indices poolSize through poolSize + 19. A board shallower than that
+  // falls back to its own bottom band rather than to nothing.
+  const start = Math.min(poolSize, Math.max(0, ranked.length - REPLACEMENT_BAND_WIDTH));
+  const band = ranked.slice(start, start + REPLACEMENT_BAND_WIDTH);
+  for (const c of cats) {
+    let sum = 0;
+    for (const r of band) sum += r.prior[c];
+    line[c] = sum / band.length;
+  }
+  return line;
+}
+
 // Adapt a per-game vector to the PlayerProjection shape buildQPool consumes.
 // Only id and perGame are read on that path.
 function asProjection(id: string, perGame: CategoryVector): PlayerProjection {
@@ -315,6 +391,10 @@ export function computeBaseValues(
 ): BaseValueResult {
   const cats = opts.categories && opts.categories.length > 0 ? opts.categories : CATEGORIES;
   const rosterSize = opts.rosterSize && opts.rosterSize > 0 ? opts.rosterSize : DEFAULT_ROSTER_SIZE;
+  const poolSize = opts.poolSize && opts.poolSize > 0
+    ? opts.poolSize
+    : DEFAULT_TEAM_COUNT * rosterSize;
+  const unprojectedPrior = opts.unprojectedPrior ?? "replacement";
 
   const prepared = players.map((input) => ({
     input,
@@ -336,7 +416,12 @@ export function computeBaseValues(
   if (prepared.length === 0) {
     return {
       rows: [],
-      stats: { mean: emptyVector(), stdev: emptyVector(), poolSize: 0 },
+      stats: {
+        mean: emptyVector(),
+        stdev: emptyVector(),
+        poolSize: 0,
+        replacementLine: emptyVector(),
+      },
       poolSize: 0,
     };
   }
@@ -363,6 +448,19 @@ export function computeBaseValues(
     { categories: cats, cap: Z_CAP },
   );
 
+  // Step 3b. The waiver-wire line, from the same pool stats. Computed after
+  // the pool and never fed back into it: pool membership is still the top
+  // rosterSize * Q_POOL_MULTIPLIER by observed rate (or by prior preseason),
+  // exactly as before.
+  const replacementLine = computeReplacementLine(
+    prepared.map((r) => r.prior),
+    stats,
+    cats,
+    poolSize,
+  );
+  // The pre-v3.1 fallback, kept only for the backtest comparison.
+  const fallback = unprojectedPrior === "poolMean" ? stats.mean : replacementLine;
+
   const rows: BaseValueRow[] = prepared.map(({ input, perGame, prior }) => {
     const gp = input.gamesPlayed;
     // Step 4. Blend observed production with the prior in proportion to
@@ -374,9 +472,12 @@ export function computeBaseValues(
     const z = emptyVector();
     let baseValue = 0;
     for (const c of cats) {
-      // No projection for this player means we genuinely know nothing, so
-      // the pool mean is still the right prior and they still score 0.
-      const priorC = prior ? prior[c] : stats.mean[c];
+      // No projection for this player means nobody expects him to produce,
+      // so the honest prior is the waiver wire, not an average starter.
+      // Real games still move him at the usual rate, so a genuine breakout
+      // climbs within a week or two while one garbage-time stint does
+      // nothing.
+      const priorC = prior ? prior[c] : fallback[c];
       shrunk[c] = w * perGame[c] + (1 - w) * priorC;
       // Step 5.
       z[c] = clamp((shrunk[c] - stats.mean[c]) / stats.stdev[c], Z_CAP);
@@ -394,7 +495,7 @@ export function computeBaseValues(
     };
   });
 
-  return { rows, stats, poolSize: qPool.length };
+  return { rows, stats: { ...stats, replacementLine }, poolSize: qPool.length };
 }
 
 // Preseason-only discount for a player ESPN expects to miss a long stretch.
