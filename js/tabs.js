@@ -41,8 +41,11 @@ var _draftRoundFilter = 'all';
 
 // ========== UTILITY: FORMAT POSITIONS ==========
 
+// Real positions only, the way ESPN lists them ("SG, SF"). Slots 5 and up
+// are combination slots (G, F, G/F, PF/C, UTIL), not positions; slot 7 is
+// SG/SF and used to be labelled UTIL here.
 function formatPositions(eligibleSlots) {
-  var slotMap = { 0: 'PG', 1: 'SG', 2: 'SF', 3: 'PF', 4: 'C', 5: 'G', 6: 'F', 7: 'UTIL' };
+  var slotMap = { 0: 'PG', 1: 'SG', 2: 'SF', 3: 'PF', 4: 'C' };
   var seen = {};
   var result = [];
   (eligibleSlots || []).forEach(function(id) {
@@ -52,7 +55,41 @@ function formatPositions(eligibleSlots) {
       result.push(pos);
     }
   });
-  return result.join('/') || '--';
+  return result.join(', ') || '--';
+}
+
+// The lineup in ESPN's order: every starting slot the league has (PG, SG,
+// SF, PF, C, then the combination slots, then UTIL), then bench, then IR.
+// Empty slots are rows too, so the user sees an open spot the way ESPN
+// shows it. Driven by S.league.rosterSlots, which comes from the league's
+// own lineupSlotCounts, so a league with different slots gets its own.
+function lineupRows(players) {
+  var slots = ((S.league && S.league.rosterSlots) || []).filter(function(s) {
+    return s && s.count > 0;
+  }).slice().sort(function(a, b) { return a.slotId - b.slotId; });
+  var used = {};
+  var out = { starters: [], bench: [], ir: [] };
+  function take(slotId) {
+    for (var i = 0; i < players.length; i++) {
+      var p = players[i];
+      if (!used[p.id] && p.slotId === slotId) { used[p.id] = true; return p; }
+    }
+    return null;
+  }
+  slots.forEach(function(s) {
+    var bucket = s.slotId === 12 ? out.bench : (s.slotId === 13 ? out.ir : out.starters);
+    for (var n = 0; n < s.count; n++) {
+      bucket.push({ slotId: s.slotId, slot: ESPN_SLOT_MAP[s.slotId] || s.name, player: take(s.slotId) });
+    }
+  });
+  // Anyone left over (a slot the settings did not list, or more players in
+  // a slot than it holds) still has to appear somewhere.
+  players.forEach(function(p) {
+    if (used[p.id]) return;
+    var bucket = p.slotId === 13 ? out.ir : (p.slotId === 12 ? out.bench : out.starters);
+    bucket.push({ slotId: p.slotId, slot: p.slot || 'BE', player: p });
+  });
+  return out;
 }
 
 
@@ -85,7 +122,12 @@ function renderAddDropTiles(recommendations) {
     // cannot break out of the src attribute.
     var headshotUrl = 'https://a.espncdn.com/i/headshots/nba/players/full/' +
       (parseInt(p.id, 10) || 0) + '.png';
-    var reason = rec.detail ? rec.detail.split('.')[0] : 'Better fit';
+    // The first clause used to be "DURANT: 2 vs -4", a raw score that means
+    // nothing to a reader. Prefer the category clause ("+STL, +BLK").
+    var parts = (rec.detail || '').split('. ').filter(function(s) {
+      return s && !/^(DURANT|Larry rank|v2 score)/i.test(s);
+    });
+    var reason = parts.length ? parts[0].replace(/\[TARGET\]/g, '').replace(/\.$/, '') : 'Better fit';
     return '<div class="addrop-tile">' +
       '<img class="player-headshot" src="' + headshotUrl + '" onerror="this.style.background=\'var(--bg-surface)\';this.src=\'\'" alt="' + esc(p.name || '') + '">' +
       '<div class="tile-name">' + esc(p.name || '') + '</div>' +
@@ -120,15 +162,14 @@ function renderRoster(container) {
   // Injury alert banner (dismissible, shown at top)
   html += renderInjuryBanner(S.myTeam.players || []);
 
+  // Larry's Move, first thing on the tab. It used to be a 20px logo with a
+  // grey caption under the dashboard, which nobody read as a button. The
+  // card container always renders; nothing here triggers an API call until
+  // the user taps.
+  html += '<div id="larry-move-card">' + larryMoveCardHtml() + '</div>';
+
   // Dashboard section (moved here from League in v3)
   html += renderDashboardInline();
-
-  // Larry's Move. The container always renders; the card inside is empty
-  // until the user asks for it, so nothing here triggers an API call.
-  html += '<div style="display:flex;align-items:center;gap:8px;margin:8px 0">' +
-    renderLarryMoveButton() +
-    '<span class="text-xs muted">Ask Larry what to do today</span></div>';
-  html += '<div id="larry-move-card">' + larryMoveCardHtml() + '</div>';
 
   // Date navigation (v3 new)
   html += renderDateNav();
@@ -168,28 +209,16 @@ function renderRoster(container) {
 
   // Starters
   var myPlayers = S.myTeam.players || [];
-  var starters = myPlayers.filter(function(p) { return p.slotId < 12; });
-  var bench = myPlayers.filter(function(p) { return p.slotId === 12; });
-  var ir = myPlayers.filter(function(p) { return p.slotId === 13; });
-
-  if (starters.length) {
+  var lineup = lineupRows(myPlayers);
+  [['Starters', lineup.starters], ['Bench', lineup.bench], ['IR', lineup.ir]].forEach(function(sec) {
+    var rows = sec[1];
+    if (!rows.length) return;
+    var filled = rows.filter(function(r) { return r.player; }).length;
     html += '<div class="roster-section">';
-    html += '<div class="section-title">Starters (' + starters.length + ')</div>';
-    html += renderRosterTable(starters, cats);
+    html += '<div class="section-title">' + sec[0] + ' (' + filled + '/' + rows.length + ')</div>';
+    html += renderRosterTable(rows, cats);
     html += '</div>';
-  }
-  if (bench.length) {
-    html += '<div class="roster-section">';
-    html += '<div class="section-title">Bench (' + bench.length + ')</div>';
-    html += renderRosterTable(bench, cats);
-    html += '</div>';
-  }
-  if (ir.length) {
-    html += '<div class="roster-section">';
-    html += '<div class="section-title">IR (' + ir.length + ')</div>';
-    html += renderRosterTable(ir, cats);
-    html += '</div>';
-  }
+  });
 
   // Strategy one-liner + Decision Hub (v3: horizontal add/drop tile row)
   if (S.allPlayers.length) {
@@ -248,7 +277,7 @@ function renderDashboardInline() {
   // Games today count (from Schedule)
   var startersPlaying = myPlayers.filter(function(p) { return p.slotId < 12 && p.gamesToday; }).length;
   var totalStarters = myPlayers.filter(function(p) { return p.slotId < 12; }).length;
-  html += '<div class="quick-card"><div class="qc-value">' + startersPlaying + '/' + totalStarters + '</div><div class="qc-label">Playing Today</div></div>';
+  html += '<div class="quick-card"><div class="qc-value">' + startersPlaying + '/' + totalStarters + '</div><div class="qc-label">Playing</div></div>';
 
   // Waiver rank
   html += '<div class="quick-card"><div class="qc-value">#' + (S.myTeam.waiverRank || '-') + '</div><div class="qc-label">Waiver</div></div>';
@@ -310,7 +339,9 @@ function renderDateNav() {
   return html;
 }
 
-function renderRosterTable(players, cats) {
+// rows: from lineupRows(), each {slot, slotId, player}. player is null for
+// an open slot, which renders as "Empty" the way ESPN shows it.
+function renderRosterTable(rows, cats) {
   var html = '<div class="table-scroll"><table class="data-table compact">';
   html += '<thead><tr>';
   html += '<th style="text-align:left;min-width:40px">Slot</th>';
@@ -322,10 +353,20 @@ function renderRosterTable(players, cats) {
   });
   html += '</tr></thead><tbody>';
 
-  players.forEach(function(p) {
+  rows.forEach(function(row) {
+    var p = row.player;
+    if (!p) {
+      html += '<tr class="empty-slot-row">';
+      html += '<td><span class="slot-badge">' + esc(row.slot) + '</span></td>';
+      html += '<td class="muted" style="font-style:italic">Empty</td>';
+      html += '<td class="game-cell"></td>';
+      cats.forEach(function() { html += '<td class="stat-col"></td>'; });
+      html += '</tr>';
+      return;
+    }
     var hasGameCls = p.gamesToday ? 'has-game' : '';
     html += '<tr class="' + hasGameCls + '">';
-    html += '<td><span class="slot-badge">' + (p.slot || 'BE') + '</span></td>';
+    html += '<td><span class="slot-badge">' + esc(row.slot || p.slot || 'BE') + '</span></td>';
     html += '<td style="cursor:pointer" onclick="openPlayerPopup(' + p.id + ')">';
     html += renderPlayerCell(p);
     html += '</td>';
@@ -699,29 +740,38 @@ function renderTeamOfWeek(cats) {
 
 
 function renderMatchupProjections(cats) {
-  var myPlayers = (S.myTeam.players || []).filter(function(p) { return p.slotId < 12; });
+  // Full player records (with stats and schedule) for both rosters. Team
+  // rosters hold stubs; S.allPlayers has the rest.
+  function enrich(list) {
+    return (list || []).map(function(stub) {
+      var full = S.allPlayers.find(function(ap) { return ap.id === stub.id; });
+      if (!full) return stub;
+      // Keep the roster's own slot; the pool copy may be stale.
+      return Object.assign({}, full, { slotId: stub.slotId, slot: stub.slot });
+    });
+  }
+  var myPlayers = enrich(S.myTeam.players);
   var oppTeam = S.teams.find(function(t) { return t.teamId === S.matchup.opponentTeamId; });
-  var oppPlayerStubs = oppTeam ? (oppTeam.players || []).filter(function(p) { return p.slotId < 12; }) : [];
-
-  // Enrich opp players from S.allPlayers for z-scores and stats
-  var oppPlayers = oppPlayerStubs.map(function(stub) {
-    return S.allPlayers.find(function(ap) { return ap.id === stub.id; }) || stub;
-  });
+  var oppPlayers = enrich(oppTeam ? oppTeam.players : []);
 
   if (!myPlayers.length) return '<div class="empty-state"><p>No roster data. Sync with ESPN first.</p></div>';
 
-  var VOLATILITY_THRESHOLD = 2.0;
+  // Current score PLUS the rest of the matchup. The old version added
+  // season per-game x games left for starters only, and on day two every
+  // player who had not played yet had a season line of zero, so the
+  // projection sat on top of the current score.
+  var mine = projectRestOfMatchup(myPlayers);
+  var theirs = projectRestOfMatchup(oppPlayers);
+  var win = getMatchupWindow();
 
-  // Compute projected totals per category: sum(season per-game * gamesRemaining) per team
-  // Also compute volatility: variance between last7 pg and season pg across roster
   var myName = S.myTeam.name || 'My Team';
   var oppName = S.matchup.opponentName || 'Opponent';
 
   var html = '<div class="card">';
-  html += '<div class="card-header">Actual + Projected Totals';
-  html += '<span class="text-xs muted" style="margin-left:8px">~ = volatile</span>';
-  html += '</div>';
-  // Team name header row
+  html += '<div class="card-header">Projected Final Score</div>';
+  html += '<p class="text-xs muted" style="margin:0 0 8px">Current score plus each team\'s remaining games through ' +
+    esc(win.endStr) + ' (' + mine.games + ' for you, ' + theirs.games + ' for ' + esc(oppName) +
+    '), assuming the best available players start each day. Games already under way are in the current score.</p>';
   html += '<div class="score-row" style="font-weight:700;font-size:0.75rem;color:var(--text-secondary);border-bottom:2px solid var(--border);padding-bottom:6px">';
   html += '<div class="my-score">' + esc(myName) + '</div>';
   html += '<div class="cat-name"></div>';
@@ -729,62 +779,30 @@ function renderMatchupProjections(cats) {
   html += '</div>';
 
   var projWins = 0, projLosses = 0;
-
   cats.forEach(function(cat) {
-    var myProjected = 0, oppProjected = 0;
-    var myVariance = 0, oppVariance = 0;
-
-    myPlayers.forEach(function(p) {
-      var gamesLeft = p.gamesRemaining || 0;
-      var seasonPg = ESPNSync.getPerGameStats(p, 'season');
-      var last7Pg = ESPNSync.getPerGameStats(p, 'last7');
-      var seasonVal = seasonPg ? (seasonPg[cat.abbr] || 0) : 0;
-      var last7Val = last7Pg ? (last7Pg[cat.abbr] || 0) : seasonVal;
-      myProjected += seasonVal * gamesLeft;
-      myVariance += Math.abs(last7Val - seasonVal);
-    });
-
-    oppPlayers.forEach(function(p) {
-      var gamesLeft = p.gamesRemaining || 0;
-      var seasonPg = ESPNSync.getPerGameStats(p, 'season');
-      var last7Pg = ESPNSync.getPerGameStats(p, 'last7');
-      var seasonVal = seasonPg ? (seasonPg[cat.abbr] || 0) : 0;
-      var last7Val = last7Pg ? (last7Pg[cat.abbr] || 0) : seasonVal;
-      oppProjected += seasonVal * gamesLeft;
-      oppVariance += Math.abs(last7Val - seasonVal);
-    });
-
-    // Combine actual scores so far with remaining projection
-    var myActual = (S.matchup.myScores && S.matchup.myScores[cat.abbr]) ? (S.matchup.myScores[cat.abbr] || 0) : 0;
-    var oppActual = (S.matchup.oppScores && S.matchup.oppScores[cat.abbr]) ? (S.matchup.oppScores[cat.abbr] || 0) : 0;
-    var myTotal = myActual + myProjected;
-    var oppTotal = oppActual + oppProjected;
-
+    var myActual = (S.matchup.myScores && S.matchup.myScores[cat.abbr]) || 0;
+    var oppActual = (S.matchup.oppScores && S.matchup.oppScores[cat.abbr]) || 0;
+    var myTotal = myActual + (mine.totals[cat.abbr] || 0);
+    var oppTotal = oppActual + (theirs.totals[cat.abbr] || 0);
     var myWins = cat.isNegative ? myTotal < oppTotal : myTotal > oppTotal;
     var oppWins = cat.isNegative ? oppTotal < myTotal : oppTotal > myTotal;
     if (myWins) projWins++;
     else if (oppWins) projLosses++;
-
-    var myVolatile = myVariance > VOLATILITY_THRESHOLD;
-    var oppVolatile = oppVariance > VOLATILITY_THRESHOLD;
-
-    var myLabel = fmt(myTotal, 1) + (myVolatile ? '<span class="volatile" style="color:var(--accent-gold);margin-left:2px">~</span>' : '');
-    var oppLabel = fmt(oppTotal, 1) + (oppVolatile ? '<span class="volatile" style="color:var(--accent-gold);margin-left:2px">~</span>' : '');
-
-    var myWinCls = (cat.isNegative ? myTotal < oppTotal : myTotal > oppTotal) ? 'winning' : ((cat.isNegative ? myTotal > oppTotal : myTotal < oppTotal) ? 'losing' : '');
-    var oppWinCls = (cat.isNegative ? oppTotal < myTotal : oppTotal > myTotal) ? 'winning' : ((cat.isNegative ? oppTotal > myTotal : oppTotal < myTotal) ? 'losing' : '');
-
+    var digits = cat.isPercent ? 3 : 0;
     html += '<div class="score-row">' +
-      '<div class="my-score ' + myWinCls + '">' + myLabel + '</div>' +
+      '<div class="my-score ' + (myWins ? 'winning' : (oppWins ? 'losing' : '')) + '">' +
+        (cat.isPercent ? pct(myTotal) : fmt(myTotal, digits)) +
+        '<div class="text-xs muted">now ' + fmt(myActual, 0) + '</div></div>' +
       '<div class="cat-name">' + cat.abbr + '</div>' +
-      '<div class="opp-score ' + oppWinCls + '">' + oppLabel + '</div>' +
+      '<div class="opp-score ' + (oppWins ? 'winning' : (myWins ? 'losing' : '')) + '">' +
+        (cat.isPercent ? pct(oppTotal) : fmt(oppTotal, digits)) +
+        '<div class="text-xs muted">now ' + fmt(oppActual, 0) + '</div></div>' +
     '</div>';
   });
 
   var projTies = Math.max(0, cats.length - projWins - projLosses);
   html += '<div style="text-align:center;padding:12px;font-size:1.1rem;font-weight:800">Projected: ' + projWins + '-' + projLosses + '-' + projTies + '</div>';
   html += '</div>';
-
   return html;
 }
 
@@ -918,7 +936,7 @@ function handlePlayersSearch(value) {
 // The Players table label used to be hard-coded to "Availability Score",
 // which was never what it sorted on. Report the column actually in use.
 function playersSortLabel() {
-  if (_playersSortCol === 'durantScore') return 'DURANT Rank';
+  if (_playersSortCol === 'durantScore') return 'Larry Rank';
   if (_playersSortCol === 'name') return 'Name';
   return _playersSortCol;
 }
@@ -973,10 +991,17 @@ function renderPlayersList() {
     if (_playersSortCol === 'durantScore') {
       // No-evidence players sort last in BOTH directions: reversing the
       // table should not promote players we know nothing about to the top.
-      var aNo = a.durantScore === null || a.durantScore === undefined;
-      var bNo = b.durantScore === null || b.durantScore === undefined;
+      var aNo = a.noEvidence || a.durantScore === null || a.durantScore === undefined;
+      var bNo = b.noEvidence || b.durantScore === null || b.durantScore === undefined;
       if (aNo !== bNo) return aNo ? 1 : -1;
       if (aNo && bNo) return (b.percentOwned || 0) - (a.percentOwned || 0);
+      // Sort on the RANK, which is the number printed in the # column.
+      // Sorting on durantScore printed ranks like 147, 52, 72, 84: in season
+      // the rank comes from rest-of-season value (and preseason from the
+      // market blend), so score order and rank order are different orders.
+      var ar = a.durantRank || Infinity;
+      var br = b.durantRank || Infinity;
+      if (ar !== br) return (ar - br) * dir;
       return (b.durantScore - a.durantScore) * dir;
     }
     if (_playersSortCol === 'name') {
@@ -1015,7 +1040,7 @@ function renderPlayersList() {
   html += '<div class="table-scroll"><table class="data-table compact">';
   html += '<thead><tr>';
   html += '<th style="text-align:left;min-width:28px"><button type="button" class="th-sort" ' +
-    'onclick="sortPlayers(\'durantScore\')" aria-label="Sort by DURANT rank">#' +
+    'onclick="sortPlayers(\'durantScore\')" aria-label="Sort by Larry rank">#' +
     playersSortIndicator('durantScore') + '</button></th>';
   html += '<th class="stat-col">Today</th>';
   html += '<th style="text-align:left;min-width:120px"><button type="button" class="th-sort" ' +
@@ -1134,8 +1159,8 @@ function renderTrendingSection(allPlayers) {
     if (p.trend === 'hot') risers.push(p);
     else if (p.trend === 'cold') fallers.push(p);
   });
-  risers = risers.sort(function(a, b) { return durantKey(b.durantScore) - durantKey(a.durantScore); }).slice(0, 5);
-  fallers = fallers.sort(function(a, b) { return durantKey(b.durantScore) - durantKey(a.durantScore); }).slice(0, 5);
+  risers = risers.sort(byDurantRank).slice(0, 5);
+  fallers = fallers.sort(byDurantRank).slice(0, 5);
 
   if (!risers.length && !fallers.length) return '<p class="empty-state">Not enough data for trends yet.</p>';
 
@@ -1330,7 +1355,7 @@ function renderWatchlistPage() {
   }
 
   Engines.ensureDURANT(S.allPlayers || []);
-  players.sort(function(a, b) { return durantKey(b.durantScore) - durantKey(a.durantScore); });
+  players.sort(byDurantRank);
 
   var cats = getOrderedCategories();
   var html = '<div class="card"><div class="table-scroll">' +
@@ -1649,7 +1674,7 @@ function renderROSProjections() {
   cats.forEach(function(cat) { html += '<th style="color:' + cat.color + '">' + cat.abbr + '</th>'; });
   html += '</tr></thead><tbody>';
 
-  myPlayers.sort(function(a,b) { return durantKey(b.durantScore) - durantKey(a.durantScore); });
+  myPlayers.sort(byDurantRank);
   myPlayers.forEach(function(p) {
     html += '<tr><td style="text-align:left;cursor:pointer" onclick="openPlayerPopup(' + p.id + ')">' + esc(p.name) + '</td>';
     html += '<td>' + (p.rosGamesLeft || '-') + '</td>';
@@ -1718,6 +1743,35 @@ function renderSchedulePage() {
 
 // ========== PROJECTED STANDINGS ==========
 
+// Per-team category strength from the starters' per-game value, as LEAGUE
+// RANKS. Writes td.catZScores and td.totalZ when missing, then td.catRank
+// (abbr -> 1..n) and td.powerRank. The z sums stay internal.
+function addLeagueRanks(teamData) {
+  var cats = getOrderedCategories();
+  teamData.forEach(function(td) {
+    if (td.catZScores) return;
+    td.catZScores = {};
+    td.totalZ = 0;
+    cats.forEach(function(cat) {
+      var sum = 0;
+      (td.team.players || []).forEach(function(p) {
+        if (p.slotId < 12) sum += (p.zScores ? p.zScores[cat.abbr] || 0 : 0);
+      });
+      td.catZScores[cat.abbr] = sum;
+      td.totalZ += sum;
+    });
+  });
+  teamData.forEach(function(td) { td.catRank = {}; });
+  cats.forEach(function(cat) {
+    teamData.slice().sort(function(a, b) {
+      return (b.catZScores[cat.abbr] || 0) - (a.catZScores[cat.abbr] || 0);
+    }).forEach(function(td, i) { td.catRank[cat.abbr] = i + 1; });
+  });
+  teamData.slice().sort(function(a, b) { return b.totalZ - a.totalZ; })
+    .forEach(function(td, i) { td.powerRank = i + 1; });
+  return teamData;
+}
+
 function renderProjectedStandings() {
   var html = '';
   if (!S.teams.length) return '<div class="empty-state"><p>No team data.</p></div>';
@@ -1765,6 +1819,10 @@ function renderProjectedStandings() {
     };
   });
 
+  // League ranks (1 = best) instead of raw z sums. The z values drive the
+  // projection, but "+4.3" means nothing to a reader; "2nd in BLK" does.
+  addLeagueRanks(teamData);
+
   // Sort by projected wins
   teamData.sort(function(a, b) {
     if (b.projWins !== a.projWins) return b.projWins - a.projWins;
@@ -1772,9 +1830,9 @@ function renderProjectedStandings() {
   });
 
   html += '<div class="card"><div class="card-header">Projected Final Standings</div>';
-  html += '<p class="muted text-sm">Projections based on current record, category z-scores, and remaining matchups.</p>';
+  html += '<p class="muted text-sm">Projections based on current record, each roster\'s category strength, and remaining matchups. Power is the overall roster strength rank.</p>';
   html += '<div class="table-scroll"><table class="data-table compact">';
-  html += '<thead><tr><th>#</th><th style="text-align:left">Team</th><th>Current</th><th>Proj W</th><th>Proj L</th><th>Z-Total</th>';
+  html += '<thead><tr><th>#</th><th style="text-align:left">Team</th><th>Current</th><th>Proj W</th><th>Proj L</th><th>Power</th>';
   html += '<th>Trend</th></tr></thead><tbody>';
 
   var playoffLine = S.league.playoffTeams || Math.ceil(S.teams.length / 2);
@@ -1788,7 +1846,7 @@ function renderProjectedStandings() {
     html += '<td>' + r.wins + '-' + r.losses + '-' + r.ties + '</td>';
     html += '<td class="stat-positive"><strong>' + td.projWins + '</strong></td>';
     html += '<td class="stat-negative">' + td.projLosses + '</td>';
-    html += '<td>' + fmt(td.totalZ, 1) + '</td>';
+    html += '<td>' + ordinal(td.powerRank) + '</td>';
     html += '<td>' + (td.totalZ > 2 ? '\u{1F4C8}' : (td.totalZ < -2 ? '\u{1F4C9}' : '\u{2796}')) + '</td>';
     html += '</tr>';
     if ((i + 1) === playoffLine) {
@@ -1809,9 +1867,11 @@ function renderProjectedStandings() {
   teamData.forEach(function(td) {
     html += '<tr class="' + (td.isMe ? 'my-team-row' : '') + '">';
     html += '<td style="text-align:left"><strong>' + esc(td.team.abbrev || td.team.name) + '</strong></td>';
+    var n = teamData.length;
     cats.forEach(function(cat) {
-      var z = td.catZScores[cat.abbr] || 0;
-      html += '<td class="' + (z > 1 ? 'stat-positive' : (z < -1 ? 'stat-negative' : '')) + '">' + fmt(z, 1) + '</td>';
+      var rk = td.catRank[cat.abbr];
+      var cls = rk <= 3 ? 'stat-positive' : (rk > n - 3 ? 'stat-negative' : '');
+      html += '<td class="' + cls + '">' + ordinal(rk) + '</td>';
     });
     html += '</tr>';
   });
@@ -1863,7 +1923,7 @@ function renderOpponentScout() {
 
   // Opponent roster
   var oppPlayers = (oppTeam.players || []).slice();
-  oppPlayers.sort(function(a,b) { return durantKey(b.durantScore) - durantKey(a.durantScore); });
+  oppPlayers.sort(byDurantRank);
 
   html += '<div class="card"><div class="card-header">Opponent Roster</div>';
   html += '<div class="table-scroll"><table class="data-table compact">';
@@ -1888,27 +1948,29 @@ function renderOpponentScout() {
 
   // Their strengths and weaknesses
   html += '<div class="card"><div class="card-header">Strengths & Weaknesses</div>';
-  var oppCatTotals = [];
-  cats.forEach(function(cat) {
-    var sum = 0;
-    oppPlayers.forEach(function(p) {
-      if (p.slotId < 12) sum += (p.zScores ? p.zScores[cat.abbr] || 0 : 0);
-    });
-    oppCatTotals.push({ cat: cat, z: sum });
+  // League rank in each category, rather than a raw z sum nobody can read.
+  var ranked = addLeagueRanks(S.teams.map(function(t) { return { team: t }; }));
+  var oppTd = ranked.find(function(td) { return td.team.teamId === oppTeam.teamId; }) || { catRank: {} };
+  var nTeams = ranked.length;
+  var oppCatTotals = cats.map(function(cat) {
+    return { cat: cat, rank: oppTd.catRank[cat.abbr] || nTeams };
   });
-  oppCatTotals.sort(function(a, b) { return b.z - a.z; });
+  oppCatTotals.sort(function(a, b) { return a.rank - b.rank; });
 
   html += '<div style="padding:8px 0">';
   html += '<div style="margin-bottom:8px;font-size:0.8rem;font-weight:700;color:var(--accent-green)">Strongest categories:</div>';
-  oppCatTotals.slice(0, 3).forEach(function(ct) {
+  // Half the categories each way, so a 5-category league never lists the
+  // middle one as both a strength and a weakness.
+  var half = Math.max(1, Math.floor(oppCatTotals.length / 2));
+  oppCatTotals.slice(0, half).forEach(function(ct) {
     html += '<div class="mini-row"><span style="color:' + ct.cat.color + ';font-weight:700">' + ct.cat.abbr + '</span>';
-    html += '<span class="stat-positive">z: ' + fmt(ct.z, 1) + '</span></div>';
+    html += '<span class="stat-positive">' + ordinal(ct.rank) + ' of ' + nTeams + '</span></div>';
   });
 
   html += '<div style="margin:12px 0 8px;font-size:0.8rem;font-weight:700;color:var(--accent-red)">Weakest categories:</div>';
-  oppCatTotals.slice(-3).reverse().forEach(function(ct) {
+  oppCatTotals.slice(-half).reverse().forEach(function(ct) {
     html += '<div class="mini-row"><span style="color:' + ct.cat.color + ';font-weight:700">' + ct.cat.abbr + '</span>';
-    html += '<span class="stat-negative">z: ' + fmt(ct.z, 1) + '</span></div>';
+    html += '<span class="stat-negative">' + ordinal(ct.rank) + ' of ' + nTeams + '</span></div>';
   });
   html += '</div></div>';
 
@@ -2198,9 +2260,9 @@ function renderTradeAnalysis() {
 
   var html = '<div style="margin-top:12px;padding:12px;background:var(--bg-input);border-radius:8px">';
   html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">';
-  html += '<div><strong>' + esc(_tradeGivePlayer.name) + '</strong> <span class="text-xs muted">DURANT: ' + durantText(_tradeGivePlayer.durantScore, 1) + '</span></div>';
+  html += '<div><strong>' + esc(_tradeGivePlayer.name) + '</strong> <span class="text-xs muted">' + larryRankText(_tradeGivePlayer) + '</span></div>';
   html += '<span style="font-size:1.2rem">\u{27A1}\u{FE0F}</span>';
-  html += '<div><strong>' + esc(_tradeGetPlayer.name) + '</strong> <span class="text-xs muted">DURANT: ' + durantText(_tradeGetPlayer.durantScore, 1) + '</span></div>';
+  html += '<div><strong>' + esc(_tradeGetPlayer.name) + '</strong> <span class="text-xs muted">' + larryRankText(_tradeGetPlayer) + '</span></div>';
   html += '</div>';
 
   html += '<div style="text-align:center;margin:8px 0">';
@@ -2405,6 +2467,7 @@ function openPlayerPopup(playerId) {
   var overlay = document.getElementById('player-popup-overlay');
   if (overlay) overlay.classList.add('open');
   renderPlayerPopup();
+  loadPlayerInfo(playerId);
   // A modal that traps you until you find the X is a keyboard dead end.
   if (!_popupEscBound) {
     document.addEventListener('keydown', function(e) {
@@ -2424,6 +2487,133 @@ function closePlayerPopup() {
 function switchPopupTab(tab) {
   _popupTab = tab;
   renderPlayerPopup();
+}
+
+// --- Live player info from ESPN's public APIs ---
+//
+// Bio, game-by-game log and news (RotoWire blurbs plus ESPN stories). These
+// endpoints need no cookies and allow cross-origin reads, so the browser
+// calls them directly rather than through the league proxy. Kept in memory
+// only, for 10 minutes: news goes stale fast and none of it belongs in
+// saved state.
+var _playerInfo = {};
+var PLAYER_INFO_TTL_MS = 10 * 60 * 1000;
+var ESPN_ATHLETE_API = 'https://site.web.api.espn.com/apis/common/v3/sports/basketball/nba/athletes/';
+var ESPN_NEWS_API = 'https://site.api.espn.com/apis/fantasy/v2/games/fba/news/players?limit=12&playerId=';
+
+function loadPlayerInfo(playerId, force) {
+  var id = parseInt(playerId, 10);
+  if (!id) return;
+  var cached = _playerInfo[id];
+  if (!force && cached && (cached.state === 'loading' ||
+      (cached.state === 'ok' && Date.now() - cached.at < PLAYER_INFO_TTL_MS))) {
+    return;
+  }
+  _playerInfo[id] = { state: 'loading', at: Date.now() };
+  function getJson(url) {
+    return fetch(url).then(function(r) {
+      if (!r.ok) throw new Error('ESPN returned ' + r.status);
+      return r.json();
+    });
+  }
+  // Each part fails on its own: no news should not hide the game log.
+  function soft(promise) {
+    return promise.then(function(v) { return { ok: true, value: v }; },
+      function(e) { return { ok: false, error: e }; });
+  }
+  Promise.all([
+    soft(getJson(ESPN_ATHLETE_API + id)),
+    // Pinned to this league's season, so the log never shows last year.
+    soft(getJson(ESPN_ATHLETE_API + id + '/gamelog?season=' +
+      ((S.league && S.league.seasonId) || ''))),
+    soft(getJson(ESPN_NEWS_API + id))
+  ]).then(function(res) {
+    _playerInfo[id] = {
+      state: 'ok',
+      at: Date.now(),
+      bio: res[0].ok ? parseAthleteBio(res[0].value) : null,
+      gameLog: res[1].ok ? parseGameLog(res[1].value) : null,
+      news: res[2].ok ? parseNewsFeed(res[2].value) : null,
+      failed: !res[0].ok && !res[1].ok && !res[2].ok
+    };
+    if (_popupPlayerId === id || _popupPlayerId === playerId) renderPlayerPopup();
+  });
+}
+
+function parseAthleteBio(data) {
+  var a = (data && data.athlete) || data || {};
+  return {
+    age: a.age || null,
+    height: a.displayHeight || '',
+    weight: a.displayWeight || '',
+    experience: a.displayExperience || '',
+    jersey: a.displayJersey || '',
+    draft: a.displayDraft || '',
+    college: (a.college && a.college.name) || ''
+  };
+}
+
+// ESPN stat names for each league category. 3PM comes as "made-attempted".
+var GAMELOG_STAT_NAMES = {
+  PTS: 'points', REB: 'totalRebounds', AST: 'assists', STL: 'steals',
+  BLK: 'blocks', TO: 'turnovers', '3PM': 'threePointFieldGoalsMade-threePointFieldGoalsAttempted',
+  'FG%': 'fieldGoalPct', 'FT%': 'freeThrowPct', MIN: 'minutes'
+};
+
+// Regular-season games only, newest first. Each game is
+// {date, opp, atVs, result, score, stats: {MIN, PTS, ...}}.
+function parseGameLog(data) {
+  if (!data || !data.names) return [];
+  var names = data.names;
+  var events = data.events || {};
+  var games = [];
+  (data.seasonTypes || []).forEach(function(st) {
+    if (!/regular season/i.test(st.displayName || '')) return;
+    (st.categories || []).forEach(function(cat) {
+      if (cat.type && cat.type !== 'event') return;
+      (cat.events || []).forEach(function(ev) {
+        var meta = events[ev.eventId] || {};
+        var stats = {};
+        Object.keys(GAMELOG_STAT_NAMES).forEach(function(abbr) {
+          var idx = names.indexOf(GAMELOG_STAT_NAMES[abbr]);
+          if (idx < 0 || !ev.stats) return;
+          var raw = String(ev.stats[idx]);
+          // "3-8" style: the made count is the stat.
+          var num = parseFloat(raw.indexOf('-') > 0 ? raw.split('-')[0] : raw);
+          if (isFinite(num)) stats[abbr] = abbr.indexOf('%') > 0 ? num / 100 : num;
+        });
+        games.push({
+          date: meta.gameDate || '',
+          opp: (meta.opponent && meta.opponent.abbreviation) || '',
+          atVs: meta.atVs || '',
+          result: meta.gameResult || '',
+          score: meta.score || '',
+          stats: stats
+        });
+      });
+    });
+  });
+  games.sort(function(a, b) { return a.date < b.date ? 1 : (a.date > b.date ? -1 : 0); });
+  return games;
+}
+
+function parseNewsFeed(data) {
+  return ((data && data.feed) || []).map(function(item) {
+    return {
+      headline: item.headline || '',
+      story: item.story || item.description || '',
+      published: item.published || item.lastModified || '',
+      source: item.type === 'Rotowire' ? 'RotoWire' : 'ESPN'
+    };
+  }).filter(function(n) { return n.headline; });
+}
+
+// "Oct 21" in the user's own timezone.
+function shortDate(iso) {
+  if (!iso) return '';
+  var d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
 // Every render path is wrapped so a bad player record shows a diagnostic
@@ -2473,20 +2663,40 @@ function buildPlayerPopup() {
   var ownPct = typeof p.ownership === 'number' && isFinite(p.ownership)
     ? ' | Own: ' + fmt(p.ownership, 0) + '%' : '';
   html += '<div class="popup-meta">' + formatPositions(p.eligibleSlots) + ' | ' + esc(p.nbaTeam) + ownPct + '</div>';
+  var info = _playerInfo[parseInt(p.id, 10)] || {};
+  var bio = info.bio;
+  if (bio) {
+    var bioParts = [];
+    if (bio.jersey) bioParts.push(bio.jersey);
+    if (bio.age) bioParts.push('Age ' + bio.age);
+    if (bio.height) bioParts.push(bio.height + (bio.weight ? ', ' + bio.weight : ''));
+    if (bio.experience) bioParts.push(bio.experience);
+    if (bioParts.length) html += '<div class="popup-meta">' + esc(bioParts.join(' | ')) + '</div>';
+  }
+  if (!p.noEvidence && p.durantRank) {
+    html += '<div class="popup-meta"><strong style="color:var(--accent-blue)">Larry rank #' +
+      p.durantRank + '</strong></div>';
+  }
   if (p.status !== 'ACTIVE' && p.status !== 'HEALTHY') {
-    html += '<div class="popup-injury">' + esc(p.status) + '</div>';
+    html += '<div class="popup-injury">' + esc(String(p.status).replace(/_/g, ' ')) + '</div>';
   }
   html += '</div></div>';
 
-  // Quick stats
+  // Quick stats: this season's averages, or ESPN's projection until he has
+  // played, labelled as such so a projection is never mistaken for output.
   var popupSeasonPg = ESPNSync.getPerGameStats(p, 'season');
+  var seasonGp = (p.stats.gp && p.stats.gp.season) || p.gamesPlayed || 0;
+  var quick = seasonGp > 0 ? popupSeasonPg : (p.stats.projectedRate || null);
   html += '<div class="popup-quick-stats">';
   cats.slice(0, 6).forEach(function(cat) {
-    var val = popupSeasonPg ? (popupSeasonPg[cat.abbr] !== undefined ? popupSeasonPg[cat.abbr] : null) : null;
+    var val = quick ? (quick[cat.abbr] !== undefined ? quick[cat.abbr] : null) : null;
     html += '<div class="quick-stat"><span class="qs-label" style="color:' + cat.color + '">' + cat.abbr + '</span>';
     html += '<span class="qs-val">' + (val !== null ? (cat.isPercent ? pct(val) : fmt(val, 1)) : '') + '</span></div>';
   });
   html += '</div>';
+  html += '<div class="text-xs muted" style="text-align:center;margin-top:-4px">' +
+    (seasonGp > 0 ? 'Season averages, ' + seasonGp + ' game' + (seasonGp === 1 ? '' : 's') : 'Projected per game (no games yet)') +
+    '</div>';
 
   if (streak.trend !== 'stable') {
     html += '<div style="text-align:center;padding:4px 12px;font-size:0.75rem;color:' + (streak.trend === 'hot' ? 'var(--accent-green)' : 'var(--accent-red)') + '">';
@@ -2495,17 +2705,18 @@ function buildPlayerPopup() {
 
   // Tabs
   html += '<div class="popup-tabs">';
-  ['stats','gameLog','news','schedule','analysis'].forEach(function(tab) {
-    var label = {stats:'Stats',gameLog:'Log',news:'News',schedule:'Sched',analysis:'Analysis'}[tab];
+  // The Analysis tab was a z-score bar chart; the one useful thing on it
+  // (why the player ranks where he does) now sits at the foot of Stats.
+  ['stats','gameLog','news','schedule'].forEach(function(tab) {
+    var label = {stats:'Stats',gameLog:'Game Log',news:'News',schedule:'Schedule'}[tab];
     html += '<button class="popup-tab' + (_popupTab === tab ? ' active' : '') + '" onclick="switchPopupTab(\'' + tab + '\')">' + label + '</button>';
   });
   html += '</div><div class="popup-body">';
 
-  if (_popupTab === 'stats') html += renderPopupStats(p, cats);
-  else if (_popupTab === 'gameLog') html += renderPopupGameLog(p, cats);
-  else if (_popupTab === 'news') html += renderPopupNews(p);
+  if (_popupTab === 'stats') html += renderPopupStats(p, cats, info);
+  else if (_popupTab === 'gameLog') html += renderPopupGameLog(p, cats, info);
+  else if (_popupTab === 'news') html += renderPopupNews(p, info);
   else if (_popupTab === 'schedule') html += renderPopupSchedule(p);
-  else if (_popupTab === 'analysis') html += renderPopupAnalysis(p, cats);
 
   html += '</div>';
 
@@ -2520,172 +2731,195 @@ function buildPlayerPopup() {
   return html;
 }
 
-function renderPopupStats(p, cats) {
-  var html = '<table class="popup-stats-table"><thead><tr><th>Period</th>';
+function popupLoadingNote(info, what) {
+  if (!info || info.state === 'loading' || !info.state) {
+    return '<div class="text-xs muted" style="padding:12px 0;text-align:center">Loading ' + what + ' from ESPN...</div>';
+  }
+  return '<div class="text-xs muted" style="padding:12px 0;text-align:center">' +
+    'Could not load ' + what + ' from ESPN. ' +
+    '<button class="btn btn-sm btn-secondary" style="min-height:44px" ' +
+    'onclick="loadPlayerInfo(' + (parseInt(_popupPlayerId, 10) || 0) + ', true)">Try again</button></div>';
+}
+
+function renderPopupStats(p, cats, info) {
+  var html = '<table class="popup-stats-table"><thead><tr><th>Split</th><th>GP</th>';
   cats.forEach(function(cat) { html += '<th style="color:' + cat.color + '">' + cat.abbr + '</th>'; });
   html += '</tr></thead><tbody>';
+  var gpBag = p.stats.gp || {};
   ['season','last30','last15','last7'].forEach(function(period) {
-    var labels = {season:'Season',last30:'L30',last15:'L15',last7:'L7'};
-    if (!p.stats[period]) return;
+    var labels = {season:'Season',last30:'Last 30',last15:'Last 15',last7:'Last 7'};
+    var gp = gpBag[period] || 0;
+    // A split with no games is a row of blanks; leave it out.
+    if (!p.stats[period] || !gp) return;
     var pgStats = ESPNSync.getPerGameStats(p, period);
-    html += '<tr><td><strong>' + labels[period] + '</strong></td>';
+    html += '<tr><td><strong>' + labels[period] + '</strong></td><td>' + gp + '</td>';
     cats.forEach(function(cat) {
       var val = pgStats ? (pgStats[cat.abbr] !== undefined ? pgStats[cat.abbr] : null) : null;
       html += '<td>' + (val !== null ? (cat.isPercent ? pct(val) : fmt(val, 1)) : '') + '</td>';
     });
     html += '</tr>';
   });
-  // Z-score row
-  html += '<tr style="border-top:2px solid var(--border)"><td><strong style="color:var(--accent-blue)">Z</strong></td>';
-  cats.forEach(function(cat) {
-    var z = p.zScores ? p.zScores[cat.abbr] : 0;
-    html += '<td class="' + (z > 0.5 ? 'stat-positive' : (z < -0.5 ? 'stat-negative' : '')) + '">' + (z >= 0 ? '+' : '') + fmt(z, 2) + '</td>';
-  });
-  html += '</tr></tbody></table>';
+  // ESPN's projection, per game when healthy, so there is a baseline to
+  // compare the early-season numbers against.
+  var proj = p.stats.projectedRate;
+  if (proj) {
+    var pgp = p.stats.projectedGP ? Math.round(p.stats.projectedGP) : '';
+    html += '<tr style="border-top:2px solid var(--border)"><td><strong>Projected</strong></td><td>' + pgp + '</td>';
+    cats.forEach(function(cat) {
+      var v = proj[cat.abbr];
+      html += '<td class="muted">' + (typeof v === 'number' ? (cat.isPercent ? pct(v) : fmt(v, 1)) : '') + '</td>';
+    });
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
 
-  // DURANT & extras
-  html += '<div style="display:flex;gap:12px;padding:8px 0;font-size:0.78rem;color:var(--text-secondary);border-top:1px solid var(--border);margin-top:8px">';
-  html += '<span>GP: ' + (p.gamesPlayed || 0) + '</span><span>MPG: ' + fmt(p.minutesPerGame, 1) + '</span>';
-  html += '<span>DURANT: ' + durantText(p.durantScore, 1) + '</span><span>Z-Total: ' + fmt(p.zScores ? p.zScores.total : 0, 2) + '</span>';
-  html += '</div>';
+  // The rest of the box score, from ESPN's own season averages.
+  var log = info && info.gameLog;
+  if (log && log.length) {
+    var n = log.length;
+    var sum = function(k) { return log.reduce(function(s, g) { return s + (g.stats[k] || 0); }, 0); };
+    html += '<div style="display:flex;flex-wrap:wrap;gap:12px;padding:8px 0;font-size:0.78rem;color:var(--text-secondary);border-top:1px solid var(--border);margin-top:8px">';
+    html += '<span>MIN ' + fmt(sum('MIN') / n, 1) + '</span>';
+    html += '<span>3PM ' + fmt(sum('3PM') / n, 1) + '</span>';
+    html += '<span>TO ' + fmt(sum('TO') / n, 1) + '</span>';
+    html += '</div>';
+  } else if (p.minutesPerGame) {
+    html += '<div style="padding:8px 0;font-size:0.78rem;color:var(--text-secondary);border-top:1px solid var(--border);margin-top:8px">MIN ' + fmt(p.minutesPerGame, 1) + '</div>';
+  }
+
+  html += renderPopupRankNote(p, cats);
   return html;
 }
 
-function renderPopupGameLog(p, cats) {
-  var html = '<table class="popup-stats-table"><thead><tr><th>Period</th>';
+// Why the player ranks where he does, in words. This replaces the old
+// Analysis tab, which showed the same thing as z-score bars.
+function renderPopupRankNote(p, cats) {
+  var notes = [];
+  if (p.noEvidence) {
+    notes.push('No games played and no ESPN projection yet, so Larry has nothing to rank him on.');
+  } else if (p.durantRank) {
+    var basis = isPreseason() ? 'preseason board' :
+      (S.prefs && S.prefs.valueView === 'perGame' ? 'per-game value' : 'rest-of-season value');
+    notes.push('Larry rank #' + p.durantRank + ' on ' + basis + ' for this league\'s categories.');
+  }
+  if (typeof p.expectedRemainingGames === 'number' && !isPreseason()) {
+    notes.push('Expected to play about ' + Math.round(p.expectedRemainingGames) + ' more games this season.');
+  } else if (typeof p.expectedGP === 'number' && isPreseason()) {
+    notes.push('Expected to play about ' + Math.round(p.expectedGP) + ' games.');
+  }
+  // Best and worst categories, by name only.
+  if (p.zScores && !p.noEvidence) {
+    var ordered = cats.slice().sort(function(a, b) {
+      return (p.zScores[b.abbr] || 0) - (p.zScores[a.abbr] || 0);
+    });
+    var best = ordered.filter(function(c) { return (p.zScores[c.abbr] || 0) > 0.5; }).slice(0, 2);
+    var worst = ordered.slice().reverse().filter(function(c) { return (p.zScores[c.abbr] || 0) < -0.5; }).slice(0, 2);
+    if (best.length) notes.push('Helps most in ' + best.map(function(c) { return c.abbr; }).join(' and ') + '.');
+    if (worst.length) notes.push('Gives little in ' + worst.map(function(c) { return c.abbr; }).join(' and ') + '.');
+  }
+  if (p.projectionSuspect) {
+    notes.push('ESPN\'s projection for him rests on too few games to fully trust.');
+  }
+  var lproj = Engines.larryProjFor ? Engines.larryProjFor(p) : null;
+  var html = '';
+  if (notes.length) {
+    html += '<div style="padding:10px 0 2px;border-top:1px solid var(--border);margin-top:8px">';
+    html += '<div style="font-weight:700;margin-bottom:4px">Larry\'s read</div>';
+    html += '<div class="text-sm">' + esc(notes.join(' ')) + '</div></div>';
+  }
+  if (lproj && lproj.perGame) {
+    html += '<div class="text-xs muted" style="margin-top:6px">Larry projection: ' + cats.map(function(cat) {
+      return esc(cat.abbr) + ' ' + fmt(lproj.perGame[cat.abbr] || 0, 1);
+    }).join(', ') + ' over ' + Math.round(lproj.gp || 0) + ' games.</div>';
+  }
+  return html;
+}
+
+// A two-week strip around today: this season's games from the last 7 days
+// with their box scores, then the next 7 days of scheduled games. Played
+// games come from ESPN's box scores, upcoming ones from the NBA schedule.
+var GAMELOG_DAYS_BACK = 7;
+var GAMELOG_DAYS_AHEAD = 7;
+function renderPopupGameLog(p, cats, info) {
+  var log = info && info.gameLog;
+  if (!log) return popupLoadingNote(info, 'the game log');
+  var now = new Date();
+  var back = new Date(now.getFullYear(), now.getMonth(), now.getDate() - GAMELOG_DAYS_BACK);
+  var ahead = new Date(now.getFullYear(), now.getMonth(), now.getDate() + GAMELOG_DAYS_AHEAD);
+  var backStr = localDateStr(back), aheadStr = localDateStr(ahead), todayStr = localDateStr(now);
+
+  // ESPN's gameDate is UTC; the local date is what the user thinks of.
+  var played = log.filter(function(g) {
+    var d = g.date ? localDateStr(new Date(g.date)) : '';
+    g.localDate = d;
+    return d && d >= backStr && d <= todayStr;
+  }).slice().reverse(); // oldest first
+  var playedDates = {};
+  played.forEach(function(g) { playedDates[g.localDate] = true; });
+  var upcoming = (p.schedule || []).filter(function(g) {
+    return g && g.date && g.date >= todayStr && g.date <= aheadStr && !playedDates[g.date];
+  });
+
+  var colCount = 4 + cats.length;
+  var html = '<div class="table-scroll"><table class="popup-stats-table"><thead><tr>' +
+    '<th style="text-align:left">Date</th><th style="text-align:left">Opp</th><th>Result</th><th>MIN</th>';
   cats.forEach(function(cat) { html += '<th style="color:' + cat.color + '">' + cat.abbr + '</th>'; });
   html += '</tr></thead><tbody>';
-  var periods = ['last7','last15','last30','season'];
-  var labels = {last7:'Last 7',last15:'Last 15',last30:'Last 30',season:'Season'};
-  var seasonPg = ESPNSync.getPerGameStats(p, 'season');
-  periods.forEach(function(period) {
-    if (!p.stats[period]) return;
-    var pgStats = ESPNSync.getPerGameStats(p, period);
-    html += '<tr><td>' + labels[period] + '</td>';
+
+  if (!played.length) {
+    html += '<tr><td colspan="' + colCount + '" class="text-xs muted" style="text-align:center">No games in the last ' +
+      GAMELOG_DAYS_BACK + ' days.</td></tr>';
+  }
+  played.forEach(function(g) {
+    var res = g.result ? '<span class="' + (g.result === 'W' ? 'stat-positive' : (g.result === 'L' ? 'stat-negative' : '')) + '">' +
+      esc(g.result) + '</span> ' + esc(g.score) : esc(g.score);
+    html += '<tr><td style="text-align:left;white-space:nowrap">' + esc(shortDate(g.date)) + '</td>';
+    html += '<td style="text-align:left;white-space:nowrap">' + esc((g.atVs === '@' ? '@ ' : 'vs ') + g.opp) + '</td>';
+    html += '<td style="white-space:nowrap" class="text-xs">' + res + '</td>';
+    html += '<td>' + (typeof g.stats.MIN === 'number' ? g.stats.MIN : '') + '</td>';
     cats.forEach(function(cat) {
-      var val = pgStats ? (pgStats[cat.abbr] !== undefined ? pgStats[cat.abbr] : null) : null;
-      var seasonVal = seasonPg ? (seasonPg[cat.abbr] !== undefined ? seasonPg[cat.abbr] : null) : null;
-      var cls = '';
-      if (period !== 'season' && val !== null && seasonVal !== null) {
-        var diff = val - seasonVal;
-        if (!cat.isNegative) cls = diff > 0.1 ? 'stat-positive' : (diff < -0.1 ? 'stat-negative' : '');
-        else cls = diff < -0.1 ? 'stat-positive' : (diff > 0.1 ? 'stat-negative' : '');
-      }
-      html += '<td class="' + cls + '">' + (val !== null ? (cat.isPercent ? pct(val) : fmt(val, 1)) : '') + '</td>';
+      var v = g.stats[cat.abbr];
+      html += '<td>' + (typeof v === 'number' ? (cat.isPercent ? pct(v) : fmt(v, 0)) : '') + '</td>';
     });
     html += '</tr>';
   });
-  html += '</tbody></table>';
-  return html;
-}
 
-function renderPopupAnalysis(p, cats) {
-  var html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">';
-  html += '<div style="background:var(--bg-input);border-radius:8px;padding:10px;text-align:center">';
-  html += '<div style="font-size:1.1rem;font-weight:700">' + durantText(p.durantScore, 1) + '</div><div class="text-xs muted">DURANT</div></div>';
-  html += '<div style="background:var(--bg-input);border-radius:8px;padding:10px;text-align:center">';
-  html += '<div style="font-size:1.1rem;font-weight:700">' + fmt(p.zScores ? p.zScores.total : 0, 2) + '</div><div class="text-xs muted">Z-Total</div></div>';
-  html += '</div>';
-
-  // Larry's own projection, when the flag is on. Shows the source so an
-  // override is visible as an override rather than looking like the model.
-  var lproj = Engines.larryProjFor ? Engines.larryProjFor(p) : null;
-  if (lproj && lproj.perGame) {
-    html += '<div style="padding:8px 0;border-bottom:1px solid var(--border)">';
-    html += '<div style="font-weight:700;margin-bottom:4px">Larry projection</div>';
-    html += '<div class="text-xs">' + cats.map(function(cat) {
-      return esc(cat.abbr) + ' ' + fmt(lproj.perGame[cat.abbr] || 0, 1);
-    }).join('  ') + '</div>';
-    html += '<div class="text-xs muted" style="margin-top:4px">' +
-      Math.round(lproj.gp || 0) + ' games, ' + fmt(lproj.mpg || 0, 1) +
-      ' mpg, source ' + esc(String(lproj.source || 'model')) + '</div>';
-    html += '</div>';
+  html += '<tr><td colspan="' + colCount + '" class="text-xs" style="text-align:left;padding-top:10px;' +
+    'color:var(--accent-blue);font-weight:700">Next ' + GAMELOG_DAYS_AHEAD + ' days</td></tr>';
+  if (!upcoming.length) {
+    html += '<tr><td colspan="' + colCount + '" class="text-xs muted" style="text-align:center">No games scheduled.</td></tr>';
   }
-
-  // Why this player's preseason value is what it is. Without this the
-  // discount is invisible and a lower-than-expected rank looks like a bug.
-  if (isPreseason()) {
-    var projGP = (p.stats && p.stats.projectedGP) || 0;
-    var notes = [];
-    if (projGP > 0) notes.push('ESPN projects ' + Math.round(projGP) + ' games');
-    if (p.projectionSuspect) {
-      notes.push('Projection limited: ESPN has too few games here to trust ' +
-        'the rate, so no availability discount was applied');
-    } else if (projGP > 0 && projGP < 60 && !p.noEvidence) {
-      notes.push('Long-term discount applied (projected ' + Math.round(projGP) + ' games)');
-    }
-    if (p.noEvidence) {
-      notes.push('No games played and no ESPN projection, so there is nothing ' +
-        'to rank this player on');
-    }
-    if (notes.length) {
-      html += '<div class="text-xs muted" style="margin-bottom:10px">' +
-        esc(notes.join('. ')) + '.</div>';
-    }
-  }
-
-  // Z-score bars
-  html += '<div class="z-bars">';
-  cats.forEach(function(cat) {
-    var z = p.zScores ? p.zScores[cat.abbr] || 0 : 0;
-    var isPos = z >= 0;
-    var width = Math.min(50, Math.abs(z) * 15);
-    html += '<div class="z-bar-row">';
-    html += '<span class="z-bar-label" style="color:' + cat.color + '">' + cat.abbr + '</span>';
-    html += '<div class="z-bar-track"><div class="z-bar-center"></div>';
-    html += '<div class="z-bar-fill ' + (isPos ? 'positive' : 'negative') + '" style="width:' + width + '%"></div></div>';
-    html += '<span class="z-bar-value ' + (isPos ? 'positive' : 'negative') + '">' + (isPos ? '+' : '') + fmt(z, 2) + '</span>';
-    html += '</div>';
+  upcoming.forEach(function(g) {
+    var parts = g.date.split('-');
+    var d = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+    var label = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+    html += '<tr class="muted"><td style="text-align:left;white-space:nowrap">' + esc(label) + '</td>';
+    html += '<td style="text-align:left;white-space:nowrap">' + esc((g.isHome ? 'vs ' : '@ ') + (g.opponent || '')) + '</td>';
+    html += '<td colspan="' + (colCount - 2) + '" class="text-xs" style="text-align:left">' + esc(g.timeLocal || '') + '</td></tr>';
   });
-  html += '</div>';
+  html += '</tbody></table></div>';
   return html;
 }
 
-function renderPopupNews(p) {
+function renderPopupNews(p, info) {
   var html = '';
   var status = p.injuryStatus || 'ACTIVE';
-
-  // Injury status
-  html += '<div style="padding:8px 0;border-bottom:1px solid var(--border)">';
-  html += '<div style="font-weight:700;margin-bottom:4px">Status</div>';
-  html += '<div>' + statusBadge(status) + ' ' + status.replace(/_/g, ' ') + '</div>';
-  html += '</div>';
-
-  // Performance trend
-  var streak = Engines.detectStreaks(p);
-  html += '<div style="padding:8px 0;border-bottom:1px solid var(--border)">';
-  html += '<div style="font-weight:700;margin-bottom:4px">Performance Trend</div>';
-  var trendIcon = streak.trend === 'hot' ? '\u{1F525}' : (streak.trend === 'cold' ? '\u{1F9CA}' : '\u{2796}');
-  html += '<div>' + trendIcon + ' ' + streak.label + '</div>';
-  html += '</div>';
-
-  // Ownership trend. Skipped entirely when ESPN has not published a number,
-  // which before the draft is everyone. Showing "-% owned across ESPN
-  // leagues" looks like a failure rather than missing upstream data.
-  if (typeof p.ownership === 'number' && isFinite(p.ownership)) {
+  if (status !== 'ACTIVE' && status !== 'HEALTHY' && status !== 'NORMAL') {
     html += '<div style="padding:8px 0;border-bottom:1px solid var(--border)">';
-    html += '<div style="font-weight:700;margin-bottom:4px">Ownership</div>';
-    html += '<div>' + fmt(p.ownership, 1) + '% owned across ESPN leagues</div>';
-    if (p.ownership < 50) {
-      html += '<div class="text-xs muted" style="margin-top:4px">Low ownership - potential sleeper or streaming option</div>';
-    } else if (p.ownership > 95) {
-      html += '<div class="text-xs muted" style="margin-top:4px">Must-roster player in all formats</div>';
-    }
+    html += statusBadge(status) + ' <strong>' + esc(status.replace(/_/g, ' ')) + '</strong></div>';
+  }
+  var news = info && info.news;
+  if (!news) return html + popupLoadingNote(info, 'news');
+  if (!news.length) {
+    return html + '<div class="text-xs muted" style="padding:12px 0;text-align:center">No recent news.</div>';
+  }
+  news.forEach(function(n) {
+    html += '<div style="padding:10px 0;border-bottom:1px solid var(--border)">';
+    html += '<div class="text-xs muted" style="margin-bottom:2px">' + esc(shortDate(n.published)) + ' \u00B7 ' + esc(n.source) + '</div>';
+    html += '<div style="font-weight:700;margin-bottom:4px">' + esc(n.headline) + '</div>';
+    if (n.story && n.story !== n.headline) html += '<div class="text-sm">' + esc(n.story) + '</div>';
     html += '</div>';
-  }
-
-  // Fantasy relevance
-  html += '<div style="padding:8px 0">';
-  html += '<div style="font-weight:700;margin-bottom:4px">Fantasy Impact</div>';
-  html += '<div>DURANT Rank: #' + (p.durantRank || '?') + ' | Z-Total: ' + fmt(p.zScores ? p.zScores.total : 0, 2) + '</div>';
-  html += '<div class="text-xs muted" style="margin-top:4px">' + (p.gamesPlayed || 0) + ' games played | ' + fmt(p.minutesPerGame, 1) + ' MPG</div>';
-
-  // Frustration index
-  if (p.frustrationValue > 3) {
-    html += '<div style="margin-top:6px;color:var(--accent-red)">\u{26A0}\u{FE0F} High frustration value (' + fmt(p.frustrationValue, 1) + '/10) - inconsistent performance</div>';
-  }
-  html += '</div>';
-
+  });
   return html;
 }
 
@@ -2712,20 +2946,30 @@ function renderPopupSchedule(p) {
     date.setDate(date.getDate() + d);
     var dayLabel = date.toLocaleDateString('en-US', {weekday: 'short'});
     var hasGame = false;
+    var oppLabel = '';
 
     // Only ever show real games. This used to fall through to a hash of the
     // team's name to invent game days, which rendered a confident-looking
     // schedule that was entirely fictional.
     if (p.schedule && p.schedule.length) {
-      hasGame = p.schedule.some(function(g) { return g.date === localDateStr(date); });
+      var dayStr = localDateStr(date);
+      var g = p.schedule.find(function(x) { return x.date === dayStr; });
+      if (g) {
+        hasGame = true;
+        // The OPPONENT, the way a schedule reads. It used to print the
+        // player's own team on every game day.
+        oppLabel = (g.isHome ? 'vs ' : '@') + (g.opponent || '');
+      }
     } else if (d === 0 && p.gamesToday) {
       hasGame = true;
+      var gt = p.gameToday || {};
+      oppLabel = gt.opponent ? ((gt.isHome ? 'vs ' : '@') + gt.opponent) : 'Game';
     }
 
     html += '<div style="flex:1;text-align:center;padding:6px 2px;border-radius:6px;';
     html += 'background:' + (hasGame ? 'var(--accent-blue-dim, rgba(59,130,246,0.15))' : 'var(--bg-input)') + '">';
     html += '<div class="text-xs" style="color:' + (d === 0 ? 'var(--accent-blue)' : 'var(--text-secondary)') + '">' + dayLabel + '</div>';
-    html += '<div style="font-size:0.9rem;margin-top:2px;color:' + (hasGame ? 'var(--accent-blue)' : 'var(--text-secondary)') + '">' + (hasGame ? p.nbaTeam : '-') + '</div>';
+    html += '<div style="font-size:0.7rem;margin-top:2px;white-space:nowrap;color:' + (hasGame ? 'var(--accent-blue)' : 'var(--text-secondary)') + '">' + (hasGame ? esc(oppLabel) : '-') + '</div>';
     html += '</div>';
   }
 
@@ -2735,7 +2979,15 @@ function renderPopupSchedule(p) {
   if (p.rosGamesLeft) {
     html += '<div style="padding:8px 0;border-top:1px solid var(--border)">';
     html += '<div style="font-weight:700;margin-bottom:4px">Rest of Season</div>';
-    html += '<div>~' + p.rosGamesLeft + ' games remaining in the NBA season</div>';
+    // Exact from the NBA schedule, plus any NBA Cup games the league has
+    // not dated yet. These are the TEAM's games; the player will likely
+    // miss some, which is what the Stats tab's expected games accounts for.
+    var fromSchedule = typeof p.gamesRemainingROS === 'number' && p.gamesRemainingROS > 0;
+    html += '<div>' + (fromSchedule ? '' : '~') + p.rosGamesLeft + ' games left for ' + esc(p.nbaTeam || 'his team') + '</div>';
+    if (p.gamesUnscheduled > 0) {
+      html += '<div class="text-xs muted" style="margin-top:2px">Includes ' + p.gamesUnscheduled +
+        ' NBA Cup game' + (p.gamesUnscheduled === 1 ? '' : 's') + ' the NBA has not scheduled yet.</div>';
+    }
     html += '</div>';
   }
 

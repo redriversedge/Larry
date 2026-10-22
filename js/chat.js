@@ -147,7 +147,9 @@ function buildChatContext() {
       pos: p.positions || [],
       team: p.nbaTeam,
       injury: p.injuryStatus,
-      value: p.durantScore || 0,
+      // The rank, not the internal score: the model quotes what it is
+      // given, and "value 12.3" means nothing to the reader.
+      rank: (!p.noEvidence && p.durantRank) ? p.durantRank : undefined,
       gamesLeft: p.gamesRemaining || 0,
       owned: p.percentOwned || 0
     };
@@ -155,14 +157,14 @@ function buildChatContext() {
 
   // .slice() so building chat context does not reorder the real roster.
   var myPlayers = (S.myTeam.players || []).slice();
-  myPlayers.sort(function(a, b) { return durantKey(b.durantScore) - durantKey(a.durantScore); });
+  myPlayers.sort(byDurantRank);
 
   // Reuse the engine's own filter so chat and the Roster tiles agree about
   // who is addable, rather than chat keeping a separate list of statuses.
   var freeAgents = (S.allPlayers || []).filter(function(p) {
     return p.onTeamId === 0 && Engines.isValidAddCandidate(p);
   });
-  freeAgents.sort(function(a, b) { return durantKey(b.durantScore) - durantKey(a.durantScore); });
+  freeAgents.sort(byDurantRank);
 
   var matchupCats = cats.map(function(cat) {
     return {

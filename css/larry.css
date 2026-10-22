@@ -411,11 +411,13 @@ body {
 .quick-cards::-webkit-scrollbar { display: none; }
 .quick-card {
   background: var(--bg-card); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: 10px 12px; text-align: center;
-  flex: 1; min-width: 68px;
+  border-radius: var(--radius); padding: 10px 4px; text-align: center;
+  /* Five cards share the row evenly at phone width instead of each
+     claiming 68px plus padding and pushing the last one off screen. */
+  flex: 1 1 0; min-width: 0;
 }
-.quick-card .qc-value { font-size: 1.15rem; font-weight: 800; white-space: nowrap; }
-.quick-card .qc-label { font-size: 0.62rem; color: var(--text-muted); margin-top: 2px; text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap; }
+.quick-card .qc-value { font-size: 1.1rem; font-weight: 800; white-space: nowrap; }
+.quick-card .qc-label { font-size: 0.6rem; color: var(--text-muted); margin-top: 2px; text-transform: uppercase; letter-spacing: 0.3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* --- DECISION ITEMS --- */
 .decision-list { display: flex; flex-direction: column; gap: 8px; }
@@ -1230,9 +1232,44 @@ body {
 }
 .pulse-once { animation: larry-pulse-once 1.6s ease-out 2; border-radius: 50%; }
 
+/* Larry's Move call to action: the first thing on the Roster tab, and
+   unmistakably a button. */
+.larry-move-cta {
+  display: flex; align-items: center; gap: 12px; width: 100%;
+  margin: 8px 0 12px; padding: 14px 16px; min-height: 64px;
+  border: 1px solid rgba(59,130,246,0.6); border-radius: 14px;
+  background: linear-gradient(135deg, var(--accent-blue) 0%, #6366f1 100%);
+  color: #fff; font: inherit; text-align: left; cursor: pointer;
+  box-shadow: 0 6px 18px rgba(59,130,246,0.35);
+  transition: transform 0.1s ease, box-shadow 0.15s ease;
+}
+.larry-move-cta:active { transform: scale(0.98); }
+.larry-move-cta:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+.larry-move-cta-icon { flex-shrink: 0; display: flex; background: rgba(255,255,255,0.15); border-radius: 50%; padding: 4px; }
+.larry-move-cta-text { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.larry-move-cta-text strong { font-size: 1.05rem; font-weight: 800; letter-spacing: 0.01em; }
+.larry-move-cta-text span { font-size: 0.8rem; opacity: 0.9; }
+.larry-move-cta-arrow { font-size: 1.8rem; line-height: 1; opacity: 0.9; flex-shrink: 0; }
+.larry-move-cta.pulse-once { border-radius: 14px; }
+
+/* Larry's Move answer header doubles as the collapse toggle. */
+.larry-move-toggle {
+  display: flex; justify-content: space-between; align-items: center; width: 100%;
+  background: none; border: none; color: inherit; font: inherit; font-weight: 700; text-align: left;
+  cursor: pointer; min-height: 44px;
+}
+.larry-move-headline-collapsed {
+  margin: 0; font-size: 0.9rem; font-weight: 600; color: var(--text-secondary);
+  text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* An open lineup slot, shown the way ESPN shows it. */
+.empty-slot-row td { opacity: 0.6; }
+
 @media (prefers-reduced-motion: reduce) {
   .pulse-once { animation: none; }
   .larry-move-chevron { transition: none; }
+  .larry-move-cta { transition: none; }
 }
 
 /* --- DRAFT ROOM (docs/DRAFT_ROOM_SPEC.md s5) --- */

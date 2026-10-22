@@ -577,18 +577,19 @@ var LarryEngine = (() => {
     const positives = contributions.filter((x) => x.contribution > 0.1).slice(0, 2);
     for (const p of positives) {
       why.push(
-        `Strong in ${p.cat} (z=${p.z.toFixed(2)}); your roster is ${p.need.toFixed(2)} stdev below league average there.`
+        // Plain words: the z values stay internal (users never see z-scores).
+        `Strong in ${p.cat}, where your roster is below the league average.`
       );
     }
     if (positives.length === 0) {
       const strongest = CATEGORIES.map((c) => ({ cat: c, z: z[c] })).sort((a, b) => b.z - a.z).slice(0, 2);
       for (const s of strongest) {
-        if (s.z > 0.5) why.push(`Above pool average in ${s.cat} (z=${s.z.toFixed(2)}).`);
+        if (s.z > 0.5) why.push(`Above average in ${s.cat}.`);
       }
     }
     const drags = contributions.filter((x) => x.z < -0.5).slice(0, 1);
     for (const d of drags) {
-      why.push(`Below pool average in ${d.cat} (z=${d.z.toFixed(2)}).`);
+      why.push(`Below average in ${d.cat}.`);
     }
     if (posPenalty > 0) {
       why.push("Position group already deep on your roster.");

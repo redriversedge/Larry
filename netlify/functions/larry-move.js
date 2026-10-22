@@ -11,10 +11,13 @@
 // the schema here before the client ever sees it.
 const https = require('https');
 
-// ANTHROPIC_MOVE_MODEL lets this one call use a different (e.g. faster)
-// model than chat without touching code.
-const MODEL = process.env.ANTHROPIC_MOVE_MODEL ||
-  process.env.ANTHROPIC_MODEL || 'claude-sonnet-5';
+// This call has to finish inside Netlify's 10s function limit, so it runs
+// on the fast model by default and does NOT inherit ANTHROPIC_MODEL. It
+// used to, and on the chat model every request in October 2026 timed out
+// at 8.5-9.3s (Netlify request logs), which is what "Larry's Move isn't
+// working" was. ANTHROPIC_MOVE_MODEL still overrides it without a code
+// change; never pin a retired id here.
+const MODEL = process.env.ANTHROPIC_MOVE_MODEL || 'claude-haiku-5-5';
 
 // Netlify's synchronous function limit is 10s and is not raisable on the
 // free tier, so the whole job has to finish inside it. Generation time is
@@ -376,9 +379,9 @@ const REPORT_MOVE_TOOL = {
       matchupRead: {
         type: 'object',
         properties: {
-          winning: { type: 'array', items: { type: 'string' } },
-          losing: { type: 'array', items: { type: 'string' } },
-          close: { type: 'array', items: { type: 'string' } },
+          winning: { type: 'array', items: { type: 'string' }, description: 'Category abbreviations only, e.g. ["REB", "PTS"]. Put scores in summary.' },
+          losing: { type: 'array', items: { type: 'string' }, description: 'Category abbreviations only.' },
+          close: { type: 'array', items: { type: 'string' }, description: 'Category abbreviations only.' },
           summary: { type: 'string', description: 'One or two sentences on where the matchup stands.' },
         },
         required: ['summary'],
@@ -393,6 +396,20 @@ const REPORT_MOVE_TOOL = {
 
 const ACTION_TYPES = ['lineup', 'add_drop', 'ir', 'hold', 'stream'];
 const CONFIDENCE = ['high', 'medium', 'low'];
+
+// The matchup lists are category names. The model sometimes writes
+// "REB 33-14 (~97%)", which the 12-character cap then cut to "REB (33-14, ,".
+// Keep just the leading category token.
+function catArray(v) {
+  if (!Array.isArray(v)) return [];
+  const out = [];
+  for (const x of v.slice(0, 10)) {
+    const m = /^\s*([A-Za-z0-9%]{2,4})\b/.exec(String(x || ''));
+    const c = m ? m[1].toUpperCase() : '';
+    if (c && out.indexOf(c) < 0) out.push(c);
+  }
+  return out;
+}
 
 function strArray(v, maxItems, maxLen) {
   if (!Array.isArray(v)) return [];
@@ -449,9 +466,9 @@ function validateMove(input, ctx) {
     noMove: noMove || actions.length === 0,
     actions: actions,
     matchupRead: {
-      winning: strArray(mr.winning, 10, 12),
-      losing: strArray(mr.losing, 10, 12),
-      close: strArray(mr.close, 10, 12),
+      winning: catArray(mr.winning),
+      losing: catArray(mr.losing),
+      close: catArray(mr.close),
       summary: summary,
     },
     risks: strArray(input.risks, 5, 240),
@@ -528,7 +545,19 @@ exports.handler = async function (event) {
       }],
     });
 
-    const data = await callClaude(apiKey, payload);
+    let data;
+    try {
+      data = await callClaude(apiKey, payload);
+    } catch (err) {
+      // A 404 means the model id is wrong or retired. Fall back to the chat
+      // model rather than failing outright; it may be slower, but it is a
+      // configured, known-good id.
+      const fallback = process.env.ANTHROPIC_MODEL;
+      if (err.statusCode !== 404 || !fallback || fallback === MODEL) throw err;
+      console.error("Larry's Move model not found, falling back:", MODEL, '->', fallback);
+      data = await callClaude(apiKey, payload.replace(
+        JSON.stringify(MODEL), JSON.stringify(fallback)));
+    }
     const parsed = JSON.parse(data);
 
     let toolInput = null;
