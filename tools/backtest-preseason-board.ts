@@ -275,6 +275,15 @@ function candidatesFor(history: History, season: number): Candidate[] {
     if (!proj) continue;
     const rate = projectedRate(proj);
     if (!rate) continue;
+    // A projection of zero production in all five categories is not a
+    // projection. The app gives such a player a null score and keeps him
+    // off the board entirely (the no-evidence rule, and the guard in
+    // applyPreseasonV3), so he must not reach the replacement-level
+    // calculation here either. Two rows in the 2026 history are like this.
+    // Before rankings v3.1 they scored exactly 0 and the divergence was
+    // invisible; once an unprojected row scores at the replacement line
+    // instead, leaving them in moves the whole board's replacement level.
+    if (CATEGORIES.every((c) => rate[c] === 0)) continue;
     // Actual games in the three seasons before this one, most recent first.
     // A season the player was not in the league is absent, not zero.
     const priorGP: number[] = [];

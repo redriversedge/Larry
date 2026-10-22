@@ -697,6 +697,7 @@ body {
 .sync-log-item { font-size: 0.72rem; padding: 3px 0; color: var(--text-secondary); }
 .sync-log-item.error { color: var(--accent-red); }
 .sync-log-item.success { color: var(--accent-green); }
+.sync-log-item.warning { color: var(--accent-gold); }
 .card-danger { border-color: rgba(239,68,68,0.3); }
 
 /* --- AUTO-REFRESH INDICATOR --- */

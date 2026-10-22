@@ -42,6 +42,7 @@ export {
 export type {
   BaseValueInput,
   BaseValueOptions,
+  BaseValuePoolStats,
   BaseValueResult,
   BaseValueRow,
   PoolStats,

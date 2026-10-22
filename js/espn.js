@@ -484,6 +484,65 @@ var ESPNSync = (function() {
     return toPerGameStats(projTotals, projGP);
   }
 
+  // --- Projection divisor guard (rankings v3.1, spec section C) --------
+  //
+  // ESPN's statSourceId 1, statSplitTypeId 0 set for the CURRENT season is a
+  // FULL-SEASON total: games already played plus games still to come. Three
+  // days into 2026-27, Mikal Bridges, Buddy Hield and Harrison Barnes were
+  // all projected for 82 games after their teams had already played one, and
+  // a rest-of-season number cannot exceed 81. ESPN revises the set during
+  // the season (Chet Holmgren went from 68 games and 17.0 PTS on Oct 20 to
+  // 65 and 16.5 on Oct 22) but the meaning does not change, so dividing by
+  // games is correct all season.
+  //
+  // If ESPN ever switched that set to rest-of-season totals, every projected
+  // rate in the app would silently shrink toward zero as the season went on
+  // and nothing would fail. The median projected game count is the cheapest
+  // thing that would notice: full-season projections keep it in the 60s all
+  // year, rest-of-season totals would collapse it. One player's projection
+  // is often nonsense (ESPN shipped Haliburton at 1 game), so this reads the
+  // median rather than guessing per player.
+  var PROJECTION_GP_MEDIAN_FLOOR = 40;
+
+  // Roughly where the All-Star break falls, as a scoring period. Only used
+  // when the schedule is not loaded and allStarBreakStr() cannot find it.
+  var ALL_STAR_PERIOD_ESTIMATE = 115;
+
+  function medianProjectedGP(players) {
+    var gps = [];
+    for (var i = 0; i < players.length; i++) {
+      var stats = players[i] && players[i].stats;
+      if (!stats || !stats.projectedSeason) continue;
+      var gp = projectedGamesPlayed(stats.projectedSeason);
+      if (gp > 0) gps.push(gp);
+    }
+    if (!gps.length) return null;
+    gps.sort(function(a, b) { return a - b; });
+    var mid = Math.floor(gps.length / 2);
+    return gps.length % 2 ? gps[mid] : (gps[mid - 1] + gps[mid]) / 2;
+  }
+
+  // The check only runs before the All-Star break. After it, a full-season
+  // projection and a rest-of-season one are genuinely hard to tell apart on
+  // game count alone, and a warning nobody can act on is noise.
+  function beforeAllStarBreak() {
+    var breakStr = allStarBreakStr();
+    if (breakStr) return localDateStr(new Date()) < breakStr;
+    var period = (S.league && S.league.currentScoringPeriodId) || 0;
+    return !(period > ALL_STAR_PERIOD_ESTIMATE);
+  }
+
+  // Returns the median projected GP when it warned, else null.
+  function checkProjectionDivisor(players) {
+    if (!players || !players.length) return null;
+    if (!beforeAllStarBreak()) return null;
+    var med = medianProjectedGP(players);
+    if (med === null || med >= PROJECTION_GP_MEDIAN_FLOOR) return null;
+    addSyncLog('warning', 'ESPN projections look like rest-of-season totals; ' +
+      'check the projection divisor. Median projected GP is ' + med.toFixed(0) + '.');
+    return med;
+  }
+
   // Backfill projectedRate / projectedGP onto an already-stored player from
   // its projectedSeason totals. Run by the 3.10.0 migration so an existing
   // larry_state gets a working preseason board without a resync. Safe to run
@@ -1040,6 +1099,8 @@ var ESPNSync = (function() {
         addSyncLog('success', 'Synced ' + S.teams.length + ' teams, ' +
           S.allPlayers.length + ' players' +
           (seasonInfo.rolled ? ' (' + S.league.seasonId + ' season)' : ''));
+        // After the success line so the warning, if any, reads first.
+        checkProjectionDivisor(S.allPlayers);
         S.analysisCache.lastComputed = null;
         autosave();
         updateSyncIndicator('connected');
@@ -2002,6 +2063,11 @@ var ESPNSync = (function() {
     matchupWindowFor: matchupWindowFor,
     matchupForDateStr: matchupForDateStr,
     activeMatchupWindow: activeMatchupWindow,
+    // Projection divisor guard: catches ESPN changing what its projection
+    // set MEANS, which would otherwise shrink every rate silently.
+    medianProjectedGP: medianProjectedGP,
+    checkProjectionDivisor: checkProjectionDivisor,
+    projectedGamesPlayed: projectedGamesPlayed,
     // All-Star handling and the observed-window self-correction.
     allStarBreakStr: allStarBreakStr,
     normalWeekOf: normalWeekOf,

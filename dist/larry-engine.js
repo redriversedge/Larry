@@ -136,6 +136,8 @@ var LarryEngine = (() => {
   var Q_POOL_MULTIPLIER = 12;
   var Q_POOL_ITERATIONS = 2;
   var DEFAULT_ROSTER_SIZE = 13;
+  var DEFAULT_TEAM_COUNT = 12;
+  var REPLACEMENT_BAND_WIDTH = 20;
   var SHRINK_K = 8;
   var Z_CAP = 3;
   var MIN_GP_POOL = 10;
@@ -364,6 +366,29 @@ var LarryEngine = (() => {
     }
     return null;
   }
+  function computeReplacementLine(priors, stats, cats, poolSize) {
+    const line = emptyVector();
+    const withPrior = priors.filter((p) => p !== null);
+    if (withPrior.length === 0) {
+      for (const c of cats) line[c] = stats.mean[c];
+      return line;
+    }
+    const ranked = withPrior.map((prior) => {
+      let score = 0;
+      for (const c of cats) {
+        score += clamp((prior[c] - stats.mean[c]) / stats.stdev[c], Z_CAP);
+      }
+      return { prior, score };
+    }).sort((a, b) => b.score - a.score);
+    const start = Math.min(poolSize, Math.max(0, ranked.length - REPLACEMENT_BAND_WIDTH));
+    const band = ranked.slice(start, start + REPLACEMENT_BAND_WIDTH);
+    for (const c of cats) {
+      let sum = 0;
+      for (const r of band) sum += r.prior[c];
+      line[c] = sum / band.length;
+    }
+    return line;
+  }
   function asProjection(id, perGame) {
     return {
       id,
@@ -378,6 +403,8 @@ var LarryEngine = (() => {
   function computeBaseValues(players, opts = {}) {
     const cats = opts.categories && opts.categories.length > 0 ? opts.categories : CATEGORIES;
     const rosterSize = opts.rosterSize && opts.rosterSize > 0 ? opts.rosterSize : DEFAULT_ROSTER_SIZE;
+    const poolSize = opts.poolSize && opts.poolSize > 0 ? opts.poolSize : DEFAULT_TEAM_COUNT * rosterSize;
+    const unprojectedPrior = opts.unprojectedPrior ?? "replacement";
     const prepared = players.map((input) => ({
       input,
       perGame: toPerGame(input, cats),
@@ -397,7 +424,12 @@ var LarryEngine = (() => {
     if (prepared.length === 0) {
       return {
         rows: [],
-        stats: { mean: emptyVector(), stdev: emptyVector(), poolSize: 0 },
+        stats: {
+          mean: emptyVector(),
+          stdev: emptyVector(),
+          poolSize: 0,
+          replacementLine: emptyVector()
+        },
         poolSize: 0
       };
     }
@@ -409,6 +441,13 @@ var LarryEngine = (() => {
       rosterSize,
       { categories: cats, cap: Z_CAP }
     );
+    const replacementLine = computeReplacementLine(
+      prepared.map((r) => r.prior),
+      stats,
+      cats,
+      poolSize
+    );
+    const fallback = unprojectedPrior === "poolMean" ? stats.mean : replacementLine;
     const rows = prepared.map(({ input, perGame, prior }) => {
       const gp = input.gamesPlayed;
       const w = gp < FULL_SEASON_GAMES ? gp / (gp + SHRINK_K) : 1;
@@ -416,7 +455,7 @@ var LarryEngine = (() => {
       const z = emptyVector();
       let baseValue = 0;
       for (const c of cats) {
-        const priorC = prior ? prior[c] : stats.mean[c];
+        const priorC = prior ? prior[c] : fallback[c];
         shrunk[c] = w * perGame[c] + (1 - w) * priorC;
         z[c] = clamp((shrunk[c] - stats.mean[c]) / stats.stdev[c], Z_CAP);
         baseValue += z[c];
@@ -431,7 +470,7 @@ var LarryEngine = (() => {
         hasEvidence: gp > 0 || prior !== null
       };
     });
-    return { rows, stats, poolSize: qPool.length };
+    return { rows, stats: { ...stats, replacementLine }, poolSize: qPool.length };
   }
   function applyPreseasonDiscount(baseValue, projectedGP, suspect) {
     if (suspect) return baseValue;
