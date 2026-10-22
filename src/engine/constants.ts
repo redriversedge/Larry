@@ -14,6 +14,18 @@ export const Q_POOL_ITERATIONS = 2;
 // real number.
 export const DEFAULT_ROSTER_SIZE = 13;
 
+// Team count assumption, for the same reason. teamCount * rosterSize is the
+// number of rostered players in the league, so the first player past it is
+// the waiver wire. A 10-team league has a much shallower wire.
+export const DEFAULT_TEAM_COUNT = 12;
+
+// Width of the replacement-level band, in players. The line is the mean
+// prior of the players ranked just past the last rostered spot, averaged
+// over this many of them rather than read off a single player, because one
+// row's projection is noisy and the line it anchors moves every unprojected
+// player on the board.
+export const REPLACEMENT_BAND_WIDTH = 20;
+
 // --- Ranking v2 base value (docs/RANKING_V2_SPEC.md, HANDOFF.md phase 2) ---
 
 // Shrink constant for small samples. pg' = w * pg + (1 - w) * poolMean where
@@ -460,17 +472,22 @@ export const MOCK_SCARCE_THRESHOLD = 0.5;
 // model and value above replacement:
 //
 //   board                           24-25 rho / top24 / busts   25-26 rho / top24 / busts
-//   current (shipped v2)              0.519 / 44.4 /  8           0.409 / 88.5 / 13
-//   v3 (durability + replacement)     0.541 / 50.2 /  8           0.403 / 81.6 / 12
-//   replacement only, ESPN GP         0.543 / 47.3 /  8           0.416 / 86.3 / 10
+//   current (shipped v2)              0.519 / 44.4 /  8           0.410 / 88.5 / 13
+//   v3 (durability + replacement)     0.541 / 50.2 /  8           0.432 / 81.6 / 10
+//   replacement only, ESPN GP         0.543 / 47.3 /  8           0.437 / 86.3 / 10
 //   FantasyPros ECR                   0.533 / 40.9 /  7           0.430 / 76.5 / 11
 //   Yahoo ADP                         0.519 / 45.5 /  6           0.548 / 74.2 /  9
 //   ESPN ADP                          0.539 / 43.3 /  6           0.464 / 78.5 / 10
-//   v3 blended 3:1:1:1                0.533 / 44.7 /  7           0.455 / 68.1 / 11
+//   v3 blended 3:1:1:1                0.533 / 44.7 /  7           0.446 / 68.1 / 10
 //
 // The blend wins the paired bootstrap against the current board 0.99 and
-// 0.96, and its per-game rho is 0.732 and 0.622 against the current
-// board's 0.732 and 0.550, so the 5-category format edge survives.
+// 0.90, and its per-game rho is 0.732 and 0.602 against the current
+// board's 0.732 and 0.555, so the 5-category format edge survives.
+//
+// The 25-26 column moved in rankings v3.1 without the board changing: two
+// rows in the history fixture have a projection of zero production in all
+// five categories, the app has always kept such players off the board, and
+// the backtest was scoring them. See CLAUDE.md.
 //
 // Larry weight 3 against 1 for each market list. Sensitivity: 2 and 3 are
 // both good; 1 gives up too much of the format edge (per-game rho falls to

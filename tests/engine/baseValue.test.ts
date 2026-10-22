@@ -177,16 +177,20 @@ describe("ranking v2 base value", () => {
     expect(rankOf(result, "projectedStar")).toBeLessThan(rankOf(result, "projectedScrub"));
   });
 
-  it("still scores zero when there is no projection to go on", () => {
-    // No games AND no projection is genuine ignorance. Those players fall
-    // back to the pool mean and score 0, which puts them below everyone we
-    // do have an opinion about.
+  it("scores zero when there is no projection ANYWHERE to go on", () => {
+    // No games AND no projection is genuine ignorance, and hasEvidence is
+    // what the app orders on. The number is the pool mean here only because
+    // nobody in this pool is projected either, so there is no waiver wire to
+    // measure against and the replacement line has nothing to come from.
+    // With a projected pool the fallback is the replacement line instead,
+    // which the rankings v3.1 block below covers.
     const players = [
       ...rotationPool(),
       { id: "unknown", gamesPlayed: 0 },
     ];
     const result = computeBaseValues(players, { rosterSize: 13 });
     expect(byId(result, "unknown").baseValue).toBeCloseTo(0, 10);
+    expect(byId(result, "unknown").hasEvidence).toBe(false);
   });
 
   it("produces a full distinct ranking when NOBODY has played yet", () => {
@@ -344,5 +348,165 @@ describe("ranking v2 base value", () => {
     expect(result.poolSize).toBeGreaterThan(0);
     const values = result.rows.map((r) => r.baseValue);
     expect(Math.max(...values)).toBeGreaterThan(Math.min(...values));
+  });
+});
+
+// --- Rankings v3.1 change A: the replacement-level prior ----------------
+//
+// docs/RANKINGS_V3_1_INSEASON_SPEC.md section 2. An unprojected player used
+// to shrink toward the POOL MEAN, which is an average STARTER's line, so one
+// game made him roughly an average starter whatever he actually did. Three
+// days into 2026-27 that put 51 unprojected players inside the live top 150
+// and pushed Darius Garland to 153.
+describe("rankings v3.1: the replacement-level prior", () => {
+  // A projected league: 300 players, each with a projection, spread so the
+  // board has a real top, middle and waiver wire. Ranked by projection the
+  // best is proj0 and the worst proj299, so the 20 players in the
+  // replacement band are known by construction.
+  function projectedLeague(count = 300) {
+    const out = [];
+    for (let i = 0; i < count; i++) {
+      const t = 1 - i / count;
+      out.push(
+        makeBaseValueInput({
+          id: `proj${i}`,
+          gamesPlayed: 60,
+          asPerGame: true,
+          perGame: {
+            REB: 1 + t * 10,
+            AST: 0.5 + t * 8,
+            STL: 0.2 + t * 1.6,
+            BLK: 0.1 + t * 1.8,
+            PTS: 3 + t * 27,
+          },
+        }),
+      );
+    }
+    // Everyone is projected at exactly their observed rate, so the prior
+    // ranking and the board agree and the band is unambiguous.
+    return out.map((p) => ({ ...p, projectedPerGame: { ...p.perGame } }));
+  }
+
+  const POOL_SIZE = 12 * 13; // 156 rostered players, so the wire starts at 157
+
+  it("exposes a replacement line equal to the mean prior of ranks 157 to 176", () => {
+    const league = projectedLeague();
+    const result = computeBaseValues(league, {
+      rosterSize: 13,
+      poolSize: POOL_SIZE,
+    });
+    // Indices 156 through 175 of the prior ranking, which for this synthetic
+    // league is simply proj156 through proj175.
+    const band = league.slice(POOL_SIZE, POOL_SIZE + 20);
+    for (const c of CATEGORIES) {
+      const expected =
+        band.reduce((s, p) => s + (p.projectedPerGame as CategoryVector)[c], 0) / band.length;
+      expect(result.stats.replacementLine[c]).toBeCloseTo(expected, 10);
+    }
+    // And it is genuinely below the pool mean, which is the whole point:
+    // the Q pool is starter quality, the wire is not.
+    for (const c of CATEGORIES) {
+      expect(result.stats.replacementLine[c]).toBeLessThan(result.stats.mean[c]);
+    }
+  });
+
+  it("puts an unprojected player with one average-starter game below replacement", () => {
+    const league = projectedLeague();
+    // The pool mean, which is what he used to be shrunk to. One game of
+    // exactly this line is the Kobe Sanders case: 19 minutes of nothing in
+    // particular, and under the old rule he came out an average starter.
+    const probe = computeBaseValues(league, { rosterSize: 13, poolSize: POOL_SIZE });
+    const starterLine = { ...probe.stats.mean };
+
+    const result = computeBaseValues(
+      [...league, { id: "oneGame", gamesPlayed: 1, perGame: starterLine }],
+      { rosterSize: 13, poolSize: POOL_SIZE },
+    );
+    const oneGame = byId(result, "oneGame");
+    expect(oneGame.hasEvidence).toBe(true);
+
+    // At gp 1 the prior carries 8/9 of the score, so he lands at the waiver
+    // wire: every one of the league's 156 rostered players outranks him.
+    const rostered = league.slice(0, POOL_SIZE).map((p) => byId(result, p.id).baseValue);
+    expect(Math.min(...rostered)).toBeGreaterThan(oneGame.baseValue);
+    expect(rankOf(result, "oneGame")).toBeGreaterThan(POOL_SIZE);
+
+    // The same fixture under the old rule, which is the bug: a player who
+    // did nothing in particular for 19 minutes came out an average starter
+    // and sat in the top half of the board, and no number of games changed
+    // that because the pool mean was already his own line.
+    const old = computeBaseValues(
+      [...league, { id: "oneGame", gamesPlayed: 1, perGame: starterLine }],
+      { rosterSize: 13, poolSize: POOL_SIZE, unprojectedPrior: "poolMean" },
+    );
+    expect(byId(old, "oneGame").baseValue).toBeCloseTo(0, 2);
+    // Inside the rostered 156 on one game of nothing. The fix moves him off
+    // the roster entirely, which on the live board was hundreds of places.
+    expect(rankOf(old, "oneGame")).toBeLessThan(POOL_SIZE);
+    expect(rankOf(result, "oneGame") - rankOf(old, "oneGame")).toBeGreaterThan(50);
+  });
+
+  it("lets the same player climb above replacement on 15 games of it", () => {
+    const league = projectedLeague();
+    const probe = computeBaseValues(league, { rosterSize: 13, poolSize: POOL_SIZE });
+    const starterLine = { ...probe.stats.mean };
+
+    const result = computeBaseValues(
+      [...league, { id: "fifteen", gamesPlayed: 15, perGame: starterLine }],
+      { rosterSize: 13, poolSize: POOL_SIZE },
+    );
+    const replacementValue = byId(result, `proj${POOL_SIZE}`).baseValue;
+    expect(byId(result, "fifteen").baseValue).toBeGreaterThan(replacementValue);
+    // A genuine breakout climbs in a week or two. It does not arrive on
+    // night one and it does not take all season either.
+    expect(byId(result, "fifteen").baseValue).toBeLessThan(0);
+  });
+
+  it("scales the line to the league, not to a hardcoded 156", () => {
+    // A 10-team league has a shallower waiver wire, so replacement is
+    // HIGHER and an unprojected player is punished harder.
+    const league = projectedLeague();
+    const deep = computeBaseValues(league, { rosterSize: 13, poolSize: 12 * 13 });
+    const shallow = computeBaseValues(league, { rosterSize: 13, poolSize: 10 * 13 });
+    for (const c of CATEGORIES) {
+      expect(shallow.stats.replacementLine[c]).toBeGreaterThan(
+        deep.stats.replacementLine[c],
+      );
+    }
+  });
+
+  it("does not let the new line feed back into pool membership", () => {
+    // Pool selection must still be the top rosterSize * 12 by observed rate.
+    // If the replacement line reached the pool, adding one unprojected
+    // player would move the pool stats and every score with them.
+    const league = projectedLeague();
+    const before = computeBaseValues(league, { rosterSize: 13, poolSize: POOL_SIZE });
+    const after = computeBaseValues(
+      [...league, { id: "noise", gamesPlayed: 1, perGame: { REB: 0, AST: 0, STL: 0, BLK: 0, PTS: 0 } }],
+      { rosterSize: 13, poolSize: POOL_SIZE },
+    );
+    for (const c of CATEGORIES) {
+      expect(after.stats.mean[c]).toBeCloseTo(before.stats.mean[c], 10);
+      expect(after.stats.stdev[c]).toBeCloseTo(before.stats.stdev[c], 10);
+    }
+    expect(byId(after, "proj0").baseValue).toBeCloseTo(byId(before, "proj0").baseValue, 10);
+  });
+
+  it("leaves projected players untouched", () => {
+    // Change A only moves players ESPN has no opinion about. Anthony
+    // Edwards scored 45 on opening night and moved to #7; Wembanyama
+    // scored 12 and stayed #3. Neither is affected by this at all.
+    const league = projectedLeague();
+    const poolMean = computeBaseValues(league, {
+      rosterSize: 13, poolSize: POOL_SIZE, unprojectedPrior: "poolMean",
+    });
+    const replacement = computeBaseValues(league, {
+      rosterSize: 13, poolSize: POOL_SIZE, unprojectedPrior: "replacement",
+    });
+    for (const p of league) {
+      expect(byId(replacement, p.id).baseValue).toBeCloseTo(
+        byId(poolMean, p.id).baseValue, 10,
+      );
+    }
   });
 });

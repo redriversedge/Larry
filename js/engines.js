@@ -657,7 +657,11 @@ var Engines = (function() {
     });
     var result = Eng.computeBaseValues(inputs, {
       categories: cats,
-      rosterSize: v2RosterSize()
+      rosterSize: v2RosterSize(),
+      // Where the waiver wire starts, which is what an unprojected player
+      // is shrunk toward. Never hardcoded: a 10-team league has a much
+      // shallower wire and a correspondingly higher replacement level.
+      poolSize: v2TeamCount() * v2RosterSize()
     });
 
     var rowById = {};
