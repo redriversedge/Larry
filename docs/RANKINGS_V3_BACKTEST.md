@@ -32,24 +32,24 @@ Paired bootstrap against the current board, 1000 resamples of the shared players
 
 ## Season 2026 (2025-26)
 
-Players with an ESPN preseason projection: 381. Players with actual production: 555.
+Players with an ESPN preseason projection: 379. Players with actual production: 555.
 
 | Board | season rho | per-game rho | top-100 hits | top-50 busts | avg actual rank of top 24 | unmatched |
 |---|---|---|---|---|---|---|
-| Larry current | 0.409 | 0.550 | 59 | 13 | 88.5 | 0 |
-| Larry v3 | 0.403 | 0.551 | 59 | 12 | 81.6 | 0 |
-| Replacement only | 0.416 | 0.559 | 60 | 10 | 86.3 | 0 |
+| Larry current | 0.410 | 0.555 | 60 | 13 | 88.5 | 0 |
+| Larry v3 | 0.432 | 0.573 | 60 | 10 | 81.6 | 0 |
+| Replacement only | 0.437 | 0.584 | 61 | 10 | 86.3 | 0 |
 | FantasyPros ECR | 0.430 | 0.590 | 62 | 11 | 76.5 | 1 |
 | Yahoo ADP | 0.548 | 0.679 | 61 | 9 | 74.2 | 0 |
 | ESPN ADP | 0.464 | 0.615 | 62 | 10 | 78.5 | 6 |
-| Larry v3 blended | 0.455 | 0.622 | 60 | 11 | 68.1 | 0 |
+| Larry v3 blended | 0.446 | 0.602 | 60 | 10 | 68.1 | 0 |
 
-Paired bootstrap against the current board, 1000 resamples of the shared players: **v3 ahead in 56.1%**, **blend ahead in 95.8%**.
+Paired bootstrap against the current board, 1000 resamples of the shared players: **v3 ahead in 77.4%**, **blend ahead in 90.3%**.
 
 | Player | current board | v3 board | exp GP (v3) | ESPN proj GP | actual GP | actual finish |
 |---|---|---|---|---|---|---|
 | Joel Embiid | 13 | 32 | 47 | 56 | 38 | 164 |
-| Ja Morant | 21 | 37 | 50 | 67 | 20 | 333 |
+| Ja Morant | 21 | 39 | 50 | 67 | 20 | 333 |
 | Zion Williamson | 12 | 27 | 51 | 64 | 62 | 83 |
 | Jaren Jackson Jr. | 28 | 24 | 65 | 62 | 48 | 112 |
 | Amen Thompson | 7 | 7 | 66 | 74 | 79 | 7 |
@@ -64,14 +64,14 @@ Paired bootstrap against the current board, 1000 resamples of the shared players
 | 2 | 2025 | avg top 24 no more than 1.0 worse | 44.4 -> 44.7 (+0.3) | PASS |
 | 3 | 2025 | per-game rho drops at most 0.02 | 0.732 -> 0.732 | PASS |
 | 4 | 2025 | top-50 busts no worse | 8 -> 7 | PASS |
-| 1 | 2026 | season rho up, bootstrap >= 90% | 0.409 -> 0.455, boot 95.8% | PASS |
+| 1 | 2026 | season rho up, bootstrap >= 90% | 0.410 -> 0.446, boot 90.3% | PASS |
 | 2 | 2026 | avg top 24 no more than 1.0 worse | 88.5 -> 68.1 (-20.4) | PASS |
-| 3 | 2026 | per-game rho drops at most 0.02 | 0.550 -> 0.622 | PASS |
-| 4 | 2026 | top-50 busts no worse | 13 -> 11 | PASS |
+| 3 | 2026 | per-game rho drops at most 0.02 | 0.555 -> 0.602 | PASS |
+| 4 | 2026 | top-50 busts no worse | 13 -> 10 | PASS |
 | 2 | both | avg top 24 better on average | -10.1 | PASS |
 | 5 | 2025 | named busts move down on average | +7.8 places | PASS |
 | 5 | 2025 | named winners stay inside top 36 | Sengun 22, Cunningham 34, Adebayo 23 | PASS |
-| 5 | 2026 | named busts move down on average | +18.5 places | PASS |
+| 5 | 2026 | named busts move down on average | +19.0 places | PASS |
 | 5 | 2026 | named winners stay inside top 36 | Thompson 11, Daniels 35, Adebayo 21 | PASS |
 
 **All gates PASS.**
@@ -81,5 +81,5 @@ Paired bootstrap against the current board, 1000 resamples of the shared players
 | Season | pinned | measured | delta | |
 |---|---|---|---|---|
 | 2025 | 0.519 | 0.519 | +0.000 | ok |
-| 2026 | 0.409 | 0.409 | -0.000 | ok |
+| 2026 | 0.409 | 0.410 | +0.001 | ok |
 
