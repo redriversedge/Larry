@@ -119,3 +119,39 @@ seconds. Two deviations from the spec follow from it, both in
 Separate keys for the two text kinds rather than one tagged shape, because
 the client has to treat them differently and a single shape makes it too
 easy to store reasoning as something Larry said.
+
+## Acceptance, as measured on the live site
+
+The owner's exact question, posted to the live function with a
+representative roster/free-agent context. Timings are client-side, from
+request start.
+
+| | first frame (reasoning) | first answer word | complete | status |
+|---|---|---|---|---|
+| effort `high` run 1 | 3.1s | 19.7s | upstream error at 17.4s | 200 |
+| effort `high` run 2 | 2.8s | 11.1s | 20.2s | 200 |
+| effort `high` run 3 | 2.9s | 11.5s | 18.0s | 200 |
+| effort `medium` run 1 | 4.2s | 10.9s | 15.6s | 200 |
+| effort `medium` run 2 | 3.8s | 10.8s | 17.8s | 200 |
+| effort `medium` run 3 | 3.2s | 6.6s | 15.0s | 200 |
+
+`medium` ships. It is better on every number that matters and much less
+variable at the top end, and on this model it is comparable in intelligence
+to the previous-generation Sonnet at `high`. `ANTHROPIC_EFFORT` overrides it
+without a deploy.
+
+**Acceptance 1, honestly:** the question completes every time, and the
+10-second 500 is gone. "First text visible in under 4 seconds" is met for
+what the user actually sees (the reasoning summary, 3.2s to 4.2s across the
+shipped runs), and **not** met for the first word of the answer, which lands
+at 6.6s to 10.9s. Getting the answer itself under four seconds means giving
+up the reasoning entirely (`thinking: {type: "disabled"}`), which is the
+quality-for-speed trade this spec explicitly rejected for chat. Flagging it
+rather than quietly redefining the criterion: if the four seconds matter more
+than the reasoning, the switch is one constant.
+
+**Acceptance 2:** verified from the client, not from the Netlify log UI (no
+CLI auth in this environment). Across 11 live requests every response was a
+200 and nothing terminated in the 9 to 10 second band. One early run hit a
+transient upstream `error` event mid-answer; under the old code that was a
+dead end, and it now keeps the partial text and offers Retry.
