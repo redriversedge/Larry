@@ -58,3 +58,64 @@ Netlify's documentation is inconsistent about time limits for streamed responses
    - error text never entering `_chatHistory`.
 4. **No regressions.** `node --check js/*.js`, `npm test` and `npx tsc --noEmit` pass, ASCII only, `CACHE_VERSION` bumped, shipped through `dev` to `main`.
 5. **Report what was measured.** Report which path was built (2b or 2c) and the probe numbers that decided it.
+
+## Measured
+
+Section 2a, run against the live site on 2026-10-23 with
+`netlify/functions/stream-probe.mjs` (Functions v2, one JSON line per second
+for 30 seconds, each line carrying the server's own elapsed ms). Deleted in
+the same change, per the spec.
+
+| Run | Lines received | Stream ended | First byte |
+|---|---|---|---|
+| 1 | 31 of 31 | 29.38s | 362ms |
+| 2 | 31 of 31 | 29.37s | 346ms |
+
+Lines arrived one per second throughout, server elapsed tracking client
+elapsed to within ~320ms, so nothing was buffered and released at the end.
+
+**A streamed response is not subject to the 10-second kill.** The limit that
+was killing `larry-chat` applies to a buffered response. Decision rule says
+stream survives past 25 seconds, so **2b was built**.
+
+### What the probe did not catch, and what it changed
+
+The spec attributes the timeouts to answer length alone. That is half of it.
+`claude-sonnet-5` runs **adaptive thinking whenever the request omits the
+`thinking` parameter**, and `thinking.display` defaults to `"omitted"`. So
+the old function was:
+
+- paying for reasoning at effort `high` before the first word of the answer,
+- receiving that reasoning as empty text blocks, and
+- splitting `max_tokens` between that reasoning and the answer.
+
+That is why a trade question died and "who should I start" usually did not,
+and it is why streaming alone would not have met acceptance criterion 1:
+with thinking invisible, the first *text* delta still lands well after four
+seconds. Two deviations from the spec follow from it, both in
+`netlify/functions/larry-chat.mjs`:
+
+- **`thinking: {type: "adaptive", display: "summarized"}`.** Thinking stays
+  on, because the spec is right that chat is where answer quality matters
+  most. Making it visible turns a blank wait into progress the user can
+  read, and costs nothing new: this was already happening and already being
+  billed. The client renders it dimmed, replaces it with the answer, and
+  never stores it in `_chatHistory`.
+- **`MAX_TOKENS` 4000, not 1500.** Thinking and the answer share the budget.
+  At 1500 total, a question that reasons for a while has nothing left to
+  answer with, and a truncated answer is the failure this change exists to
+  remove. Answer length is held down by the prompt's STYLE rules instead.
+
+### Frame format as built
+
+```
+{"t":"..."}     a chunk of the answer
+{"k":"..."}     a chunk of the thinking summary (progress only, never stored)
+{"done":true}   complete
+{"error":"..."} failed; "cut short" means the 25s cap fired and whatever
+                arrived before it is a usable partial answer
+```
+
+Separate keys for the two text kinds rather than one tagged shape, because
+the client has to treat them differently and a single shape makes it too
+easy to store reasoning as something Larry said.

@@ -2,12 +2,16 @@
   publish = "."
   functions = "netlify/functions"
 
-# Note on function timeouts: Netlify's synchronous limit is 10s and is not
-# raisable on the free tier, so rather than declaring a timeout here that
-# may be silently ignored, larry-chat aborts its own Claude request at 9s.
-# That way a slow reply returns a real error message instead of a bare 502.
-# If this site moves to a paid plan, add a [functions] timeout here and
-# raise the matching constant in the function.
+# Note on function timeouts: the 10s limit applies to a BUFFERED response.
+# A streamed response is not bound by it. Measured on this site on
+# 2026-10-23: a 30-second streaming probe delivered all 31 of its lines
+# unbuffered and closed at 29.4s, first byte at ~350ms. See the "Measured"
+# section of docs/CHAT_TIMEOUT_SPEC.md.
+#
+# So larry-chat streams (netlify/functions/larry-chat.mjs, Functions v2) and
+# caps itself at 25s rather than aborting at 9s. larry-move is still a
+# buffered call and still has to fit inside 10s, which is why it keeps its
+# own 8.5s abort.
 
 [[headers]]
   for = "/*"
