@@ -181,9 +181,11 @@ describe("larry-chat handler: the timeout is visible now", () => {
           // Never enqueue. Real fetch rejects the pending read when the
           // signal aborts, so the stub has to do the same or the handler
           // waits on a promise that can never settle.
-          signal.addEventListener("abort", () => {
-            ctrl.error(Object.assign(new Error("aborted"), { name: "AbortError" }));
-          });
+          // Reject with whatever the signal actually carries, the way real
+          // fetch does. Fabricating an AbortError here hid a bug: the
+          // handler used to abort with a reason STRING, which has no .name,
+          // so its own AbortError check came out false.
+          signal.addEventListener("abort", () => ctrl.error(signal.reason));
         },
       });
       return new Response(body, { status: 200 });
@@ -233,9 +235,7 @@ describe("larry-chat handler: the partial answer", () => {
         start(ctrl) {
           ctrl.enqueue(encoder.encode(sse(textDelta("Garland is the "))));
           // Then stall until the handler's cap aborts us.
-          signal.addEventListener("abort", () => {
-            ctrl.error(Object.assign(new Error("aborted"), { name: "AbortError" }));
-          });
+          signal.addEventListener("abort", () => ctrl.error(signal.reason));
         },
       });
       return new Response(body, { status: 200 });
@@ -255,6 +255,37 @@ describe("larry-chat handler: the partial answer", () => {
     expect(frames[frames.length - 1]).toEqual({ error: "cut short" });
     // No done frame: the answer is not complete and must not look like it.
     expect(frames.some((f: any) => f.done)).toBe(false);
+  });
+});
+
+describe("larry-chat handler: aborting with a reason", () => {
+  it("still calls it a cut-short when the abort carries a non-Error reason", async () => {
+    // Regression guard. `controller.abort('cap')` makes fetch reject with
+    // the string 'cap', not an AbortError, so any check on e.name fails and
+    // a usable partial answer gets reported as a generic failure instead.
+    globalThis.fetch = vi.fn(async (_url: any, init: any) => {
+      const encoder = new TextEncoder();
+      const signal: AbortSignal = init.signal;
+      const body = new ReadableStream({
+        start(ctrl) {
+          ctrl.enqueue(encoder.encode(sse(textDelta("Package Green for "))));
+          // Reject with a bare string, the worst case for name-sniffing.
+          signal.addEventListener("abort", () => ctrl.error("cap"));
+        },
+      });
+      return new Response(body, { status: 200 });
+    }) as any;
+
+    vi.useFakeTimers();
+    const res = await handler(post(ASK), {});
+    const collected = res.text();
+    await vi.advanceTimersByTimeAsync(26000);
+    const frames = (await collected).split("\n").filter(Boolean)
+      .map((l: string) => JSON.parse(l));
+    vi.useRealTimers();
+
+    expect(frames[0]).toEqual({ t: "Package Green for " });
+    expect(frames[frames.length - 1]).toEqual({ error: "cut short" });
   });
 });
 
