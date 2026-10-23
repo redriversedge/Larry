@@ -113,6 +113,10 @@ describe("larry-chat handler: the happy path", () => {
     // what turns that from a blank 10-second pause into visible progress.
     expect(seen.thinking).toEqual({ type: "adaptive", display: "summarized" });
     expect(seen.max_tokens).toBeGreaterThanOrEqual(3000);
+    // effort `high` is the API default and ran 8-16s of reasoning before
+    // the first word of the answer on the owner's question. Chat is
+    // interactive; this is the wrong end of that trade.
+    expect(seen.output_config).toEqual({ effort: "medium" });
     // The client's `system` is still ignored and the prompt still built here.
     expect(seen.system).toContain("<data>");
   });
