@@ -83,7 +83,7 @@ describe("larry-move: fixtures cover the cases the roadmap names", () => {
     const em = String.fromCharCode(0x2014);
     const en = String.fromCharCode(0x2013);
     expect(clean("Start him " + em + " he plays tonight", 100))
-      .toBe("Start him , he plays tonight");
+      .toBe("Start him, he plays tonight");
     // An en dash is a range, so it becomes a hyphen rather than a comma.
     expect(clean("3" + en + "4 games", 100)).toBe("3-4 games");
   });
