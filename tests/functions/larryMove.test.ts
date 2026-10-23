@@ -9,10 +9,10 @@ import { describe, expect, it } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const move = require("../../netlify/functions/larry-move.js");
+// @ts-expect-error -- .mjs has no type declarations
+import { _internal as moveInternal } from "../../netlify/functions/larry-move.mjs";
 const { clean, buildDataBlock, buildSystemPrompt, validateMove, pickupsSpent, REPORT_MOVE_TOOL } =
-  move._internal;
+  moveInternal as any;
 
 const FIXTURE_DIR = path.resolve(__dirname, "../fixtures/larry-move");
 
