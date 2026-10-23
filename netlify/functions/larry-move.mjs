@@ -119,7 +119,8 @@ function corsHeaders(origin) {
 // Built from char codes so this file stays pure ASCII. The two dashes do
 // different jobs in prose, so they normalise differently: an em dash
 // separates clauses, an en dash joins a range ("3-4 games").
-const EM_DASH = new RegExp(String.fromCharCode(0x2014), 'g');
+// Swallow the spaces around the dash too, or "as-is \u2014 REB" becomes "as-is , REB".
+const EM_DASH = new RegExp('\\s*' + String.fromCharCode(0x2014) + '\\s*', 'g');
 const EN_DASH = new RegExp(String.fromCharCode(0x2013), 'g');
 
 function clean(value, maxLen) {
