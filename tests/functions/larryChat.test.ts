@@ -7,9 +7,15 @@
 
 import { describe, expect, it } from "vitest";
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const chat = require("../../netlify/functions/larry-chat.js");
-const { clean, buildDataBlock, buildSystemPrompt, normalizeMessages } = chat._internal;
+// The function is a Netlify Functions v2 ES module now (it has to be, to
+// return a streamed Response), so this is an import rather than a require.
+// @ts-expect-error -- .mjs has no type declarations
+import { _internal } from "../../netlify/functions/larry-chat.mjs";
+
+const {
+  clean, buildDataBlock, buildSystemPrompt, normalizeMessages,
+  frame, frameFor, sseEvents, MAX_TOKENS, STREAM_CAP_MS,
+} = _internal;
 
 describe("larry-chat: field sanitizer", () => {
   it("strips newlines, which are what let injected text look like a new instruction", () => {
@@ -191,5 +197,138 @@ describe("larry-chat: message normalization", () => {
   it("returns an empty list when nothing is usable", () => {
     expect(normalizeMessages([])).toEqual([]);
     expect(normalizeMessages([{ role: "assistant", content: "only a reply" }] as any)).toEqual([]);
+  });
+});
+
+// --- Streaming (docs/CHAT_TIMEOUT_SPEC.md) ------------------------------
+//
+// The framing is a contract between this function and js/chat.js. If a key
+// changes on one side and not the other the symptom is a chat that looks
+// like it is working and renders nothing, which is hard to spot by hand.
+
+describe("larry-chat: stream framing", () => {
+  it("frames an answer delta as t", () => {
+    expect(frameFor({
+      type: "content_block_delta",
+      delta: { type: "text_delta", text: "Garland is the better buy" },
+    })).toBe('{"t":"Garland is the better buy"}\n');
+  });
+
+  it("frames a thinking delta as k, on a separate key from the answer", () => {
+    // Separate keys because the client must render thinking and then throw
+    // it away. One tagged shape would make it too easy to store reasoning
+    // as something Larry said.
+    expect(frameFor({
+      type: "content_block_delta",
+      delta: { type: "thinking_delta", thinking: "Checking his projected games" },
+    })).toBe('{"k":"Checking his projected games"}\n');
+  });
+
+  it("emits one line per frame, newline-terminated", () => {
+    const line = frame({ done: true });
+    expect(line).toBe('{"done":true}\n');
+    expect(line.split("\n").length).toBe(2);
+  });
+
+  it("escapes a newline inside a delta rather than breaking the framing", () => {
+    // A delta can contain newlines; NDJSON cannot. JSON.stringify handles
+    // it, and this pins that nothing downstream splits on the raw text.
+    const line = frameFor({
+      type: "content_block_delta",
+      delta: { type: "text_delta", text: "line one\nline two" },
+    });
+    expect(line.split("\n").length).toBe(2);
+    expect(JSON.parse(line).t).toBe("line one\nline two");
+  });
+
+  it("ignores the events the client has no use for", () => {
+    for (const evt of [
+      { type: "message_start", message: {} },
+      { type: "content_block_start", index: 0, content_block: { type: "text" } },
+      { type: "content_block_stop", index: 0 },
+      { type: "message_delta", delta: { stop_reason: "end_turn" } },
+      { type: "message_stop" },
+      { type: "ping" },
+      // display: "omitted" sends thinking deltas with no text. Forwarding
+      // those would paint an empty progress line on every token.
+      { type: "content_block_delta", delta: { type: "thinking_delta", thinking: "" } },
+      { type: "content_block_delta", delta: { type: "text_delta", text: "" } },
+      null,
+      "nope",
+    ] as any[]) {
+      expect(frameFor(evt)).toBeNull();
+    }
+  });
+
+  it("turns an upstream stream error into a generic error line", () => {
+    const line = frameFor({ type: "error", error: { type: "overloaded_error", message: "x" } });
+    const parsed = JSON.parse(line as string);
+    expect(parsed.error).toBe("Chat is unavailable right now.");
+    // The upstream message can echo request content; it stays in the log.
+    expect(line).not.toContain("overloaded_error");
+  });
+});
+
+describe("larry-chat: SSE parsing", () => {
+  function bodyOf(chunks: string[]): ReadableStream<Uint8Array> {
+    const encoder = new TextEncoder();
+    return new ReadableStream({
+      start(ctrl) {
+        for (const c of chunks) ctrl.enqueue(encoder.encode(c));
+        ctrl.close();
+      },
+    });
+  }
+
+  async function collect(chunks: string[]): Promise<any[]> {
+    const out: any[] = [];
+    for await (const evt of sseEvents(bodyOf(chunks))) out.push(evt);
+    return out;
+  }
+
+  it("reads data lines and ignores event lines and blanks", async () => {
+    const events = await collect([
+      "event: message_start\ndata: {\"type\":\"message_start\"}\n\n",
+      "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\n",
+    ]);
+    expect(events.map((e) => e.type)).toEqual(["message_start", "content_block_delta"]);
+  });
+
+  it("reassembles an event split across two network chunks", async () => {
+    // The real failure this prevents: a delta arriving in halves and being
+    // dropped, so the answer silently loses words.
+    const events = await collect([
+      'data: {"type":"content_block_delta","delta":{"type":"text_',
+      'delta","text":"Sharp"}}\n\n',
+    ]);
+    expect(events.length).toBe(1);
+    expect(events[0].delta.text).toBe("Sharp");
+  });
+
+  it("skips a malformed data line instead of ending the answer", async () => {
+    const events = await collect([
+      "data: {not json}\n\n",
+      'data: {"type":"message_stop"}\n\n',
+    ]);
+    expect(events.length).toBe(1);
+    expect(events[0].type).toBe("message_stop");
+  });
+});
+
+describe("larry-chat: budget", () => {
+  it("leaves room for thinking AND an answer in max_tokens", () => {
+    // claude-sonnet-5 runs adaptive thinking when `thinking` is omitted,
+    // and thinking shares max_tokens with the response text. The spec asked
+    // for 1500 total, which is enough for one or the other on a trade
+    // question. A truncated answer is the failure being fixed here, so the
+    // budget has to hold both.
+    expect(MAX_TOKENS).toBeGreaterThanOrEqual(3000);
+  });
+
+  it("caps itself inside the measured streaming limit", () => {
+    // The probe closed cleanly at 29.4s; the cap has to land below that
+    // with room to flush a cut-short line.
+    expect(STREAM_CAP_MS).toBeGreaterThan(20000);
+    expect(STREAM_CAP_MS).toBeLessThan(28000);
   });
 });

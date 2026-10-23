@@ -20,7 +20,7 @@ js/chat.js              -- Larry AI chat via Claude API proxy [LEGACY ES5]
 manifest.json           -- PWA manifest
 sw.js                   -- Service worker (bump CACHE_VERSION on every deploy)
 netlify/functions/espn-proxy.js   -- ESPN API CORS proxy
-netlify/functions/larry-chat.js   -- Claude API proxy (reads ANTHROPIC_API_KEY env var)
+netlify/functions/larry-chat.mjs  -- Claude API proxy, STREAMS the reply (Functions v2)
 public/                 -- Static pages (Phase 2+): /connect bookmarklet install, /link cookie handler, ios-shortcut.txt
 src/                    -- TypeScript code (Phase 1+); engine, cookies, types, shared
 dist/                   -- Built IIFE bundles, committed to git (larry-engine.js, larry-cookies.js)
@@ -94,7 +94,11 @@ REPO_MAP.md             -- Phase 0 audit: file tree + key-file summaries
 ## Netlify Functions
 
 - `espn-proxy.js` -- ESPN API CORS proxy
-- `larry-chat.js` -- Chat. Builds the system prompt **server-side**; the client sends structured context only. Every ESPN-sourced string is sanitized into a delimited `<data>` block labelled untrusted, because team names are written by other managers in the league. Origin allowlist, per-IP rate limit, payload caps.
+- `larry-chat.mjs` -- Chat. Builds the system prompt **server-side**; the client sends structured context only. Every ESPN-sourced string is sanitized into a delimited `<data>` block labelled untrusted, because team names are written by other managers in the league. Origin allowlist, per-IP rate limit, payload caps.
+  - **Functions v2 and streamed, because a buffered answer does not fit in 10 seconds.** Every real question used to die at 9.6s and come back as a 500 saying "Chat is unavailable right now." Measured on the live site: a streamed response delivers all 31 lines of a 30-second probe unbuffered and closes at 29.4s, first byte ~350ms, so the 10s kill applies to buffered responses only. The function caps itself at 25s. See `docs/CHAT_TIMEOUT_SPEC.md`.
+  - **`claude-sonnet-5` thinks unless you tell it not to, and thinking shares `max_tokens` with the answer.** Omitting `thinking` runs adaptive thinking at effort `high`, and `display` defaults to `"omitted"`, so the old function spent its 9 seconds on reasoning that came back as empty blocks. It now sends `thinking: {type: 'adaptive', display: 'summarized'}` so the reasoning is visible progress instead of a blank wait, and `MAX_TOKENS` is 4000 so thinking and the answer both fit. Do not drop that to 1500; a question that reasons for a while would have nothing left to answer with.
+  - **Frames are newline-delimited JSON**: `{"t":"..."}` answer text, `{"k":"..."}` thinking text, `{"done":true}`, `{"error":"..."}` where `"cut short"` means the cap fired and the partial answer is usable. Answer and thinking are separate keys on purpose: the client renders thinking and throws it away, and must never store it as something Larry said.
+  - A timeout is a **504** with "Larry took too long on that one. Tap retry.", not a 500. The status is chosen before the first frame goes out, which is why the function waits for the first event from Claude before committing to a 200.
 - `larry-move.js` -- Larry's Move. Same trust model, plus a forced `report_move` tool and server-side validation of the result before the client renders it.
 
 Chat reads the model from `process.env.ANTHROPIC_MODEL` (default `claude-sonnet-5`). Larry's Move reads `process.env.ANTHROPIC_MOVE_MODEL` (default `claude-haiku-5-5`) and deliberately does NOT inherit `ANTHROPIC_MODEL`: it must finish inside Netlify's 10s limit, and on the chat model every request timed out at 8.5 to 9.3s. On a 404 it falls back to `ANTHROPIC_MODEL`. Never pin a model id in code: `claude-sonnet-4-20250514` was hardcoded here and silently 404'd for months after it retired.
@@ -206,6 +210,13 @@ Chat context sent to Claude includes:
 
 The chat is strategy-aware. It references target categories when discussing pickups and trades.
 
+The reply **streams**. `runChatRequest()` reads newline-delimited JSON frames (see `larry-chat.mjs` above) and patches two elements inside the live bubble, never the input, per the mobile-keyboard rule. Rules that have each broken once and are invisible when they break:
+- **Nothing enters `_chatHistory` until the stream finishes.** A cut-short answer goes in with a plain-text "(answer was cut short)" note.
+- **Error text never enters `_chatHistory`**, or every later request replays "Chat is unavailable right now." to the model as a real assistant turn and teaches it that apologising is a normal answer.
+- **Thinking text never enters `_chatHistory` either.** It is the model's own reasoning, shown dimmed as progress and discarded when the answer starts.
+- Any retryable failure (504, 502, 500, 429, or a cut-short) shows a **Retry** button. Retry resends the question already at the end of the history; it must not push the user turn again.
+Pinned by `tests/functions/chatClient.test.ts` and `tests/functions/larryChatStream.test.ts`.
+
 ## Testing Checklist (run after every feature)
 
 1. `node --check js/*.js` passes (legacy ES5 syntax check)
@@ -243,6 +254,8 @@ The chat is strategy-aware. It references target categories when discussing pick
 - Change the ranking, preseason or in-season, without beating the backtest gates in `docs/RANKINGS_V3_AND_LIVE_DRAFT_SPEC.md` and recording the result in `docs/RANKINGS_V3_BACKTEST.md`. `npx tsx tools/rank-v2-vs-experts.ts` must stay at parity with `proto.py` and rho 0.758, and `npx tsx tools/backtest-preseason-board.ts` must reconcile against the reviewer's baseline before any tuning is believed. Agreeing with the experts is not the target; actual outcomes are. Preseason work goes behind `isPreseason()`; projection work goes behind `S.prefs.useLarryProjections`.
 - Put an injury opinion in `data/projection-overrides.json`. It is for cases where ESPN's data is provably wrong, with an `until` date so it expires.
 - Pin a Claude model id in a Netlify function. Read `process.env.ANTHROPIC_MODEL` with a current default, or it silently 404s when the model retires.
+- Make `larry-chat` buffer its reply again, or lower its `MAX_TOKENS` to fit one. A buffered answer dies at 10s and thinking shares the budget (see Netlify Functions).
+- Push streamed thinking text, or any error text, into `_chatHistory`. Both get replayed to the model as a real assistant turn on every later message.
 - Add an HTML page without the home-screen icon block (manifest, 180px `apple-touch-icon`, favicon, `apple-mobile-web-app-title`). Phones take the icon from whichever page is open when "Add to Home Screen" is tapped; `/connect` and `/link` had none, so the app was saved as a letter "L". Icons are generated from `assets/icon-512.png`: opaque 180px for iOS at `/apple-touch-icon.png`, and `icon-maskable-*.png` with the art inside the 80% safe zone for Android.
 - Commit any league member's draft history, manager names, or derived profiles. The repo is public. Tests use the synthetic generator in `tests/engine/draftFixtures.ts`; real exports live in git-ignored `tests/fixtures/users/`.
 - Measure Draft Room reach against `draftRanksByRankType` or `ownership.averageDraftPosition` for a PAST season. Both are end-of-season values and make every manager look like a genius or an idiot depending on who broke out. Use `data/espn-adp-history.json`.

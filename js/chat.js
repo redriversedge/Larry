@@ -6,6 +6,12 @@
 var _chatHistory = [];
 var _chatSending = false;
 var _chatError = '';
+// The answer being streamed right now: { think: '', text: '' }, or null.
+// Nothing here is in _chatHistory yet; it lands there when the stream ends.
+var _chatStream = null;
+// Whether the current error is worth a Retry button. A timeout is; a 400 is
+// not, because the same request will fail the same way.
+var _chatCanRetry = false;
 
 function renderChat(container) {
   var html = '<div class="chat-container">';
@@ -91,9 +97,14 @@ function chatMessagesHtml() {
     });
   }
 
+  // The live bubble. Built once per request; the deltas patch the two spans
+  // inside it rather than re-rendering the list, so the message area does
+  // not flicker and the input is never touched (mobile keyboard rule).
   if (_chatSending) {
     html += '<div class="chat-bubble assistant"><div class="chat-avatar">' + getLarryAvatar(16) + ' Larry</div>';
-    html += '<div class="typing-dots"><span>.</span><span>.</span><span>.</span></div></div>';
+    html += '<div id="chat-stream-think" class="chat-thinking">' + chatThinkingHtml() + '</div>';
+    html += '<div id="chat-stream-text">' + chatStreamTextHtml() + '</div>';
+    html += '</div>';
   }
 
   // Errors render here rather than being pushed into _chatHistory, so they
@@ -102,16 +113,50 @@ function chatMessagesHtml() {
     html += '<div class="chat-bubble assistant" role="alert" style="border-left:3px solid var(--accent-red,#ef4444)">';
     html += '<div class="chat-avatar">' + getLarryAvatar(16) + ' Larry</div>';
     html += esc(_chatError);
-    html += '<div style="margin-top:8px"><button class="btn btn-sm btn-secondary" ' +
-      'style="min-height:44px" onclick="dismissChatError()">Dismiss</button></div>';
-    html += '</div>';
+    html += '<div style="margin-top:8px">';
+    if (_chatCanRetry) {
+      html += '<button class="btn btn-sm" style="min-height:44px;margin-right:8px" ' +
+        'onclick="retryChat()">Retry</button>';
+    }
+    html += '<button class="btn btn-sm btn-secondary" ' +
+      'style="min-height:44px" onclick="dismissChatError()">Dismiss</button>';
+    html += '</div></div>';
   }
 
   return html;
 }
 
+// Thinking text is progress, not an answer. It is shown while the request
+// is open, replaced by the answer, and never stored: pushing it into
+// _chatHistory would replay the model's own reasoning back to it as
+// something Larry had said out loud.
+function chatThinkingHtml() {
+  if (!_chatStream || !_chatStream.think) {
+    return '<div class="typing-dots"><span>.</span><span>.</span><span>.</span></div>';
+  }
+  return '<span class="muted text-xs">' + esc(_chatStream.think) + '</span>';
+}
+
+function chatStreamTextHtml() {
+  if (!_chatStream || !_chatStream.text) return '';
+  return formatChatMessage(_chatStream.text);
+}
+
+// Patch the live bubble in place. getElementById rather than a re-render so
+// the input element is never replaced mid-answer.
+function paintChatStream() {
+  var think = document.getElementById('chat-stream-think');
+  var text = document.getElementById('chat-stream-text');
+  if (!think || !text) { renderChatMessages(); return; }
+  // Once the answer starts, the reasoning has served its purpose.
+  think.innerHTML = (_chatStream && _chatStream.text) ? '' : chatThinkingHtml();
+  text.innerHTML = chatStreamTextHtml();
+  scrollChatToBottom();
+}
+
 function dismissChatError() {
   _chatError = '';
+  _chatCanRetry = false;
   renderChatMessages();
 }
 
@@ -217,11 +262,29 @@ async function sendChat(presetMsg) {
 
   if (input) input.value = '';
   _chatHistory.push({ role: 'user', content: message });
+  await runChatRequest();
+}
+
+// Resend the question already sitting at the end of _chatHistory. The user
+// turn is a real turn and stays put; only the failed answer is retried, so
+// a retry must not push the question again.
+async function retryChat() {
+  if (_chatSending) return;
+  var last = _chatHistory.length ? _chatHistory[_chatHistory.length - 1] : null;
+  if (!last || last.role !== 'user') return;
+  await runChatRequest();
+}
+
+async function runChatRequest() {
   _chatSending = true;
   _chatError = '';
+  _chatCanRetry = false;
+  _chatStream = { think: '', text: '' };
   // Message list only, so the input keeps focus and the mobile keyboard
   // stays open while Larry is thinking.
   renderChatMessages();
+
+  var cutShort = false;
 
   try {
     var messages = [];
@@ -230,7 +293,7 @@ async function sendChat(presetMsg) {
     });
 
     // No `system` field. The function builds the prompt; see the comment at
-    // the top of netlify/functions/larry-chat.js.
+    // the top of netlify/functions/larry-chat.mjs.
     var response = await fetch('/.netlify/functions/larry-chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -248,11 +311,74 @@ async function sendChat(presetMsg) {
       } catch (parseErr) {
         detail = '';
       }
+      // 504 is a timeout and 502/429 are upstream hiccups: all three are
+      // worth another go. A 4xx from our own validation is not.
+      _chatCanRetry = response.status === 504 || response.status === 502 ||
+        response.status === 500 || response.status === 429;
       throw new Error(detail || ('Chat API error ' + response.status));
     }
 
-    var data = await response.json();
-    var reply = data.content || data.reply || 'Sorry, I had trouble processing that. Try again?';
+    // Newline-delimited JSON, one frame per line. See the framing comment in
+    // netlify/functions/larry-chat.mjs.
+    if (!response.body || typeof response.body.getReader !== 'function') {
+      throw new Error('This browser cannot stream the reply. Try reloading.');
+    }
+    var reader = response.body.getReader();
+    var decoder = new TextDecoder();
+    var buffer = '';
+    var streamError = '';
+
+    for (;;) {
+      var chunk = await reader.read();
+      if (chunk.done) break;
+      buffer += decoder.decode(chunk.value, { stream: true });
+      var nl = buffer.indexOf('\n');
+      while (nl >= 0) {
+        var line = buffer.slice(0, nl).trim();
+        buffer = buffer.slice(nl + 1);
+        if (line) {
+          var evt = null;
+          try { evt = JSON.parse(line); } catch (badLine) { evt = null; }
+          if (evt) {
+            if (typeof evt.t === 'string') {
+              _chatStream.text += evt.t;
+              paintChatStream();
+            } else if (typeof evt.k === 'string') {
+              _chatStream.think += evt.k;
+              paintChatStream();
+            } else if (evt.error === 'cut short') {
+              cutShort = true;
+            } else if (typeof evt.error === 'string') {
+              streamError = evt.error;
+            }
+          }
+        }
+        nl = buffer.indexOf('\n');
+      }
+    }
+
+    if (streamError) {
+      _chatCanRetry = true;
+      throw new Error(streamError);
+    }
+
+    var reply = _chatStream.text;
+    if (cutShort) {
+      // A partial answer is worth keeping; the note tells the reader why it
+      // stops where it does, and tells the model the same thing if they
+      // carry on asking questions.
+      _chatCanRetry = true;
+      // Plain text, not markdown: formatChatMessage only renders ** and
+      // newlines, so underscores would show up as underscores.
+      reply = reply ? reply + '\n\n(answer was cut short)' : '';
+      if (!reply) {
+        throw new Error('Larry took too long on that one. Tap retry.');
+      }
+    }
+    if (!reply) {
+      _chatCanRetry = true;
+      throw new Error('Larry did not manage an answer. Tap retry.');
+    }
 
     _chatHistory.push({ role: 'assistant', content: reply });
     _chatError = '';
@@ -265,6 +391,7 @@ async function sendChat(presetMsg) {
     _chatError = e.message || 'Something went wrong.';
   }
 
+  _chatStream = null;
   _chatSending = false;
   renderChatMessages();
 }
