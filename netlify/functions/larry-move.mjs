@@ -1,4 +1,4 @@
-// netlify/functions/larry-move.js
+// netlify/functions/larry-move.mjs
 //
 // "Larry's Move": one clear answer to "what should I do today to win this
 // matchup", with the reasoning available underneath.
@@ -9,24 +9,32 @@
 // output contract. The card renders fixed fields, so the model is forced
 // through a single tool (`report_move`) and the result is validated against
 // the schema here before the client ever sees it.
-const https = require('https');
+// --- Why this streams ------------------------------------------------------
+//
+// Netlify kills a BUFFERED function response at 10 seconds. That forced
+// this call onto the fastest model with a 900-token answer, and on the chat
+// model every request timed out at 8.5 to 9.3s (Oct 21 logs). A STREAMED
+// response survives past 29s on this site (measured for chat, see
+// docs/CHAT_TIMEOUT_SPEC.md), so Move now streams too: progress heartbeats
+// while the model writes, then one final frame with the validated card.
+// The card is structured, so there is nothing useful to show half-written;
+// the stream is what keeps the connection alive, not a typing effect.
+//
+// Frames, one JSON object per line (application/x-ndjson):
+//   {"p":n}                  progress: n tool-input chunks received so far
+//   {"move":{...},"cached":b} the validated answer, sent once
+//   {"done":true}            end of stream
+//   {"error":"..."}          failure after the headers were sent
 
-// This call has to finish inside Netlify's 10s function limit, so it runs
-// on the fast model by default and does NOT inherit ANTHROPIC_MODEL. It
-// used to, and on the chat model every request in October 2026 timed out
-// at 8.5-9.3s (Netlify request logs), which is what "Larry's Move isn't
-// working" was. ANTHROPIC_MOVE_MODEL still overrides it without a code
-// change; never pin a retired id here.
-const MODEL = process.env.ANTHROPIC_MOVE_MODEL || 'claude-haiku-5-5';
+// Move no longer has to race the clock, so it uses the same model as chat
+// unless ANTHROPIC_MOVE_MODEL says otherwise. Never pin a retired id here.
+const MODEL = process.env.ANTHROPIC_MOVE_MODEL || process.env.ANTHROPIC_MODEL || 'claude-sonnet-5';
 
-// Netlify's synchronous function limit is 10s and is not raisable on the
-// free tier, so the whole job has to finish inside it. Generation time is
-// the dominant cost, not prompt size, which makes max_tokens the main lever:
-// at 1500 a full three-action answer took about 9s and failed roughly half
-// the time. 900 plus the tighter per-field caps in the tool schema below
-// brings a typical answer in around 5-6s.
-const MAX_TOKENS = Number(process.env.ANTHROPIC_MOVE_MAX_TOKENS) || 900;
-const CLAUDE_TIMEOUT_MS = 8500;
+// Room for a full three-action answer. 900 was a timeout workaround.
+const MAX_TOKENS = Number(process.env.ANTHROPIC_MOVE_MAX_TOKENS) || 1500;
+
+// Overall ceiling on one upstream call, inside the ~29s a stream survives.
+const STREAM_CAP_MS = Number(process.env.ANTHROPIC_STREAM_CAP_MS) || 25000;
 
 const MAX_BODY_BYTES = 256 * 1024;
 const MAX_FIELD_CHARS = 60;
@@ -478,173 +486,246 @@ function validateMove(input, ctx) {
   };
 }
 
-exports.handler = async function (event) {
-  const origin = (event.headers && (event.headers.origin || event.headers.Origin)) || '';
-  const { headers, allowed } = corsHeaders(origin);
+function frame(obj) {
+  return JSON.stringify(obj) + '\n';
+}
 
-  if (event.httpMethod === 'OPTIONS') {
-    return { statusCode: allowed ? 200 : 403, headers, body: '' };
-  }
-  if (event.httpMethod !== 'POST') {
-    return { statusCode: 405, headers, body: JSON.stringify({ error: 'POST only' }) };
-  }
-  if (origin && !allowed) {
-    return { statusCode: 403, headers, body: JSON.stringify({ error: 'Origin not allowed' }) };
-  }
-
-  const ip = (event.headers && (event.headers['x-nf-client-connection-ip'] ||
-    event.headers['client-ip'] ||
-    (event.headers['x-forwarded-for'] || '').split(',')[0].trim())) || 'unknown';
-  if (rateLimited(ip)) {
-    return {
-      statusCode: 429,
-      headers: Object.assign({ 'Retry-After': '60' }, headers),
-      body: JSON.stringify({ error: 'Too many requests. Wait a minute and try again.' }),
-    };
-  }
-
-  const raw = event.body || '';
-  if (Buffer.byteLength(raw, 'utf8') > MAX_BODY_BYTES) {
-    return { statusCode: 413, headers, body: JSON.stringify({ error: 'Request too large' }) };
-  }
-
-  try {
-    let body;
-    try {
-      body = JSON.parse(raw);
-    } catch (e) {
-      return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid JSON' }) };
-    }
-    if (!body || body.kind !== 'larry-move') {
-      return { statusCode: 400, headers, body: JSON.stringify({ error: 'Unexpected payload' }) };
-    }
-
-    const hash = clean(body.payloadHash, 128);
-    const cached = cacheGet(hash);
-    if (cached) {
-      return { statusCode: 200, headers, body: JSON.stringify({ move: cached, cached: true }) };
-    }
-
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-      return {
-        statusCode: 500, headers,
-        body: JSON.stringify({ error: 'ANTHROPIC_API_KEY not configured.' }),
-      };
-    }
-
-    const payload = JSON.stringify({
-      model: MODEL,
-      max_tokens: MAX_TOKENS,
-      system: buildSystemPrompt(body),
-      tools: [REPORT_MOVE_TOOL],
-      tool_choice: { type: 'tool', name: 'report_move' },
-      messages: [{
-        role: 'user',
-        content: 'What should I do today to win this matchup? Use the report_move tool.',
-      }],
-    });
-
-    let data;
-    try {
-      data = await callClaude(apiKey, payload);
-    } catch (err) {
-      // A 404 means the model id is wrong or retired. Fall back to the chat
-      // model rather than failing outright; it may be slower, but it is a
-      // configured, known-good id.
-      const fallback = process.env.ANTHROPIC_MODEL;
-      if (err.statusCode !== 404 || !fallback || fallback === MODEL) throw err;
-      console.error("Larry's Move model not found, falling back:", MODEL, '->', fallback);
-      data = await callClaude(apiKey, payload.replace(
-        JSON.stringify(MODEL), JSON.stringify(fallback)));
-    }
-    const parsed = JSON.parse(data);
-
-    let toolInput = null;
-    if (Array.isArray(parsed.content)) {
-      for (const block of parsed.content) {
-        if (block.type === 'tool_use' && block.name === 'report_move') {
-          toolInput = block.input;
-          break;
+// Anthropic's SSE, one parsed event at a time. Same parser as larry-chat.
+async function* sseEvents(body) {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let nl = buffer.indexOf('\n');
+    while (nl >= 0) {
+      const line = buffer.slice(0, nl).trim();
+      buffer = buffer.slice(nl + 1);
+      if (line.startsWith('data:')) {
+        const payload = line.slice(5).trim();
+        if (payload) {
+          try {
+            yield JSON.parse(payload);
+          } catch (e) {
+            console.error("Larry's Move: unparsable SSE line");
+          }
         }
       }
+      nl = buffer.indexOf('\n');
     }
-
-    const move = validateMove(toolInput, body);
-    if (!move) {
-      return {
-        statusCode: 502, headers,
-        body: JSON.stringify({ error: 'Larry could not produce a usable answer. Try again.' }),
-      };
-    }
-
-    move.dataUsed = {
-      syncedAt: clean(body.syncedAt, 40),
-      gamesLeft: {
-        me: Number(body.matchup && body.matchup.myGamesLeft) || 0,
-        opp: Number(body.matchup && body.matchup.oppGamesLeft) || 0,
-      },
-      acquisitions: clean(
-        body.league
-          ? num(body.league.acquisitionsUsed, 0) + ' of ' +
-            (Number(body.league.acquisitionLimit) >= 0 ? num(body.league.acquisitionLimit, 0) : 'unlimited') + ' used'
-          : '', 40),
-    };
-
-    cacheSet(hash, move);
-    return { statusCode: 200, headers, body: JSON.stringify({ move: move, cached: false }) };
-  } catch (error) {
-    console.error("Larry's Move error:", error.message);
-    const status = error.statusCode || 500;
-    return {
-      statusCode: status, headers,
-      body: JSON.stringify({
-        error: status === 429
-          ? 'Claude is rate limiting. Try again shortly.'
-          : "Larry's Move is unavailable right now.",
-      }),
-    };
   }
-};
+}
 
-function callClaude(apiKey, payload) {
-  return new Promise((resolve, reject) => {
-    const options = {
-      hostname: 'api.anthropic.com', port: 443,
-      path: '/v1/messages', method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-        'Content-Length': Buffer.byteLength(payload),
-      },
-    };
-    const req = https.request(options, (res) => {
-      let body = '';
-      res.on('data', (chunk) => body += chunk);
-      res.on('end', () => {
-        if (res.statusCode >= 400) {
-          const err = new Error('Claude API returned ' + res.statusCode + ': ' + body.substring(0, 200));
-          err.statusCode = res.statusCode;
-          reject(err);
-        } else { resolve(body); }
-      });
-    });
-    req.on('error', reject);
-    req.setTimeout(CLAUDE_TIMEOUT_MS, () => {
-      req.destroy();
-      const err = new Error('Claude API timed out');
-      // 504 so the client can tell a timeout from a real failure and
-      // retry it automatically.
-      err.statusCode = 504;
-      reject(err);
-    });
-    req.write(payload);
-    req.end();
+// Collects the forced report_move tool call from the event stream. The tool
+// input arrives as input_json_delta fragments that only parse once joined.
+function toolCollector() {
+  let json = '';
+  let inTool = false;
+  let chunks = 0;
+  return {
+    push(evt) {
+      if (!evt || typeof evt !== 'object') return false;
+      if (evt.type === 'content_block_start' && evt.content_block &&
+          evt.content_block.type === 'tool_use' && evt.content_block.name === 'report_move') {
+        inTool = true;
+        return false;
+      }
+      if (evt.type === 'content_block_stop') { inTool = false; return false; }
+      if (inTool && evt.type === 'content_block_delta' && evt.delta &&
+          evt.delta.type === 'input_json_delta' && typeof evt.delta.partial_json === 'string') {
+        json += evt.delta.partial_json;
+        chunks++;
+        return true;
+      }
+      if (evt.type === 'error') {
+        const err = new Error('upstream stream error: ' + ((evt.error && evt.error.type) || 'unknown'));
+        throw err;
+      }
+      return false;
+    },
+    chunks() { return chunks; },
+    input() {
+      if (!json) return null;
+      try { return JSON.parse(json); } catch (e) { return null; }
+    },
+  };
+}
+
+function dataUsedFor(body) {
+  return {
+    syncedAt: clean(body.syncedAt, 40),
+    gamesLeft: {
+      me: Number(body.matchup && body.matchup.myGamesLeft) || 0,
+      opp: Number(body.matchup && body.matchup.oppGamesLeft) || 0,
+    },
+    acquisitions: clean(
+      body.league
+        ? num(body.league.acquisitionsUsed, 0) + ' of ' +
+          (Number(body.league.acquisitionLimit) >= 0 ? num(body.league.acquisitionLimit, 0) : 'unlimited') + ' used'
+        : '', 40),
+  };
+}
+
+async function openUpstream(apiKey, payload, signal) {
+  return fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+    },
+    body: payload,
+    signal: signal,
   });
 }
 
-module.exports._internal = {
+export default async (req, context) => {
+  const origin = req.headers.get('origin') || '';
+  const { headers, allowed } = corsHeaders(origin);
+  const json = (status, obj, extra) =>
+    new Response(JSON.stringify(obj), { status, headers: Object.assign({}, headers, extra || {}) });
+
+  if (req.method === 'OPTIONS') {
+    return new Response('', { status: allowed ? 200 : 403, headers });
+  }
+  if (req.method !== 'POST') return json(405, { error: 'POST only' });
+  if (origin && !allowed) return json(403, { error: 'Origin not allowed' });
+
+  const ip = req.headers.get('x-nf-client-connection-ip') ||
+    req.headers.get('client-ip') ||
+    (req.headers.get('x-forwarded-for') || '').split(',')[0].trim() ||
+    (context && context.ip) || 'unknown';
+  if (rateLimited(ip)) {
+    return json(429, { error: 'Too many requests. Wait a minute and try again.' }, { 'Retry-After': '60' });
+  }
+
+  const raw = await req.text();
+  if (Buffer.byteLength(raw, 'utf8') > MAX_BODY_BYTES) {
+    return json(413, { error: 'Request too large' });
+  }
+  let body;
+  try {
+    body = JSON.parse(raw);
+  } catch (e) {
+    return json(400, { error: 'Invalid JSON' });
+  }
+  if (!body || body.kind !== 'larry-move') {
+    return json(400, { error: 'Unexpected payload' });
+  }
+
+  const ndjson = Object.assign({}, headers, {
+    'Content-Type': 'application/x-ndjson; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'X-Accel-Buffering': 'no',
+  });
+
+  // A cached answer goes out as a two-line stream so the client has one
+  // response format to read.
+  const hash = clean(body.payloadHash, 128);
+  const cached = cacheGet(hash);
+  if (cached) {
+    return new Response(frame({ move: cached, cached: true }) + frame({ done: true }),
+      { status: 200, headers: ndjson });
+  }
+
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return json(500, { error: 'ANTHROPIC_API_KEY not configured.' });
+
+  const payloadFor = (model) => JSON.stringify({
+    model: model,
+    max_tokens: MAX_TOKENS,
+    stream: true,
+    system: buildSystemPrompt(body),
+    tools: [REPORT_MOVE_TOOL],
+    tool_choice: { type: 'tool', name: 'report_move' },
+    messages: [{
+      role: 'user',
+      content: 'What should I do today to win this matchup? Use the report_move tool.',
+    }],
+  });
+
+  // Abort with no argument so fetch rejects with a real AbortError; a flag
+  // says it was our cap. (An abort('reason') string has no .name.)
+  const controller = new AbortController();
+  let capFired = false;
+  const capTimer = setTimeout(() => { capFired = true; controller.abort(); }, STREAM_CAP_MS);
+  const tooLong = () => json(504, { error: 'Larry took too long. Tap Retry to try again.' });
+
+  let upstream;
+  try {
+    upstream = await openUpstream(apiKey, payloadFor(MODEL), controller.signal);
+    // A 404 means the model id is wrong or retired. Fall back to the chat
+    // model rather than failing outright.
+    const fallback = process.env.ANTHROPIC_MODEL;
+    if (upstream.status === 404 && fallback && fallback !== MODEL) {
+      console.error("Larry's Move model not found, falling back:", MODEL, '->', fallback);
+      upstream = await openUpstream(apiKey, payloadFor(fallback), controller.signal);
+    }
+  } catch (e) {
+    clearTimeout(capTimer);
+    console.error("Larry's Move: upstream connect failed:", capFired ? 'timeout' : e.message);
+    return tooLong();
+  }
+
+  if (!upstream.ok || !upstream.body) {
+    clearTimeout(capTimer);
+    let detail = '';
+    try { detail = (await upstream.text()).slice(0, 200); } catch (e) { detail = ''; }
+    console.error("Larry's Move: upstream status", upstream.status, detail);
+    if (upstream.status === 429) return json(429, { error: 'Claude is rate limiting. Try again shortly.' });
+    return json(502, { error: "Larry's Move is unavailable right now." });
+  }
+
+  const events = sseEvents(upstream.body);
+  const collector = toolCollector();
+  const encoder = new TextEncoder();
+  const out = new ReadableStream({
+    async start(ctrl) {
+      // Something on the wire immediately, so nothing between here and the
+      // browser decides the response is idle.
+      ctrl.enqueue(encoder.encode(frame({ p: 0 })));
+      let lastBeat = Date.now();
+      try {
+        for (;;) {
+          const next = await events.next();
+          if (next.done) break;
+          if (collector.push(next.value) && Date.now() - lastBeat > 700) {
+            ctrl.enqueue(encoder.encode(frame({ p: collector.chunks() })));
+            lastBeat = Date.now();
+          }
+        }
+        const move = validateMove(collector.input(), body);
+        if (!move) {
+          ctrl.enqueue(encoder.encode(frame({ error: 'Larry could not produce a usable answer. Try again.' })));
+        } else {
+          move.dataUsed = dataUsedFor(body);
+          cacheSet(hash, move);
+          ctrl.enqueue(encoder.encode(frame({ move: move, cached: false })));
+          ctrl.enqueue(encoder.encode(frame({ done: true })));
+        }
+      } catch (e) {
+        const timedOut = capFired || (e && e.name === 'AbortError');
+        console.error("Larry's Move: stream ended early:", timedOut ? 'cap ' + STREAM_CAP_MS + 'ms' : e.message);
+        ctrl.enqueue(encoder.encode(frame({
+          error: timedOut ? 'Larry took too long. Tap Retry to try again.' : "Larry's Move is unavailable right now.",
+        })));
+      }
+      clearTimeout(capTimer);
+      ctrl.close();
+    },
+    cancel() {
+      clearTimeout(capTimer);
+      controller.abort();
+    },
+  });
+
+  return new Response(out, { status: 200, headers: ndjson });
+};
+
+// Exported for tests.
+export const _internal = {
   clean, buildDataBlock, buildSystemPrompt, validateMove, pickupsSpent,
-  REPORT_MOVE_TOOL,
+  REPORT_MOVE_TOOL, frame, sseEvents, toolCollector, MODEL, MAX_TOKENS, STREAM_CAP_MS,
 };

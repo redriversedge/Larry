@@ -260,10 +260,8 @@ function requestLarryMove(force) {
   _larryMoveError = '';
   renderLarryMoveCard();
 
-  // One automatic retry. The call sits close to Netlify's 10s synchronous
-  // ceiling, so an occasional timeout is expected rather than a real
-  // failure, and the retry usually lands (the server caches by payloadHash,
-  // so a retry after a slow success is free).
+  // One automatic retry for a transient upstream failure (the server caches
+  // by payloadHash, so a retry after a slow success is free).
   postLarryMove(payload, 1).then(function(data) {
     if (!data || !data.move) throw new Error('Larry did not return an answer.');
     S.analysisCache = S.analysisCache || {};
@@ -285,17 +283,41 @@ function requestLarryMove(force) {
   });
 }
 
+// The function streams newline-delimited JSON: progress lines while the
+// model writes, then {"move":...} and {"done":true}, or an {"error":...}
+// line if it failed after the stream started. Streaming is what lets the
+// answer take longer than Netlify's 10-second limit on a buffered reply.
+// The card is structured, so the client simply waits for the whole stream.
+function parseLarryMoveStream(text) {
+  var out = { move: null, error: '' };
+  String(text || '').split('\n').forEach(function(line) {
+    if (!line.trim()) return;
+    var obj;
+    try { obj = JSON.parse(line); } catch (e) { return; }
+    if (obj && obj.move) out.move = obj.move;
+    if (obj && obj.error && !out.move) out.error = String(obj.error);
+  });
+  return out;
+}
+
 function postLarryMove(payload, retriesLeft) {
   return fetch('/.netlify/functions/larry-move', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
   }).then(function(res) {
-    return res.json().catch(function() { return null; }).then(function(data) {
-      if (res.ok) return data;
-      // 504 is our own timeout, 502/500 a transient upstream failure. Those
-      // are worth one more attempt; a 400 or 429 is not.
-      var retryable = res.status === 504 || res.status === 502 || res.status === 500;
+    return res.text().catch(function() { return ''; }).then(function(text) {
+      if (res.ok) {
+        var parsed = parseLarryMoveStream(text);
+        if (parsed.move) return { move: parsed.move };
+        throw new Error(parsed.error || 'Larry did not return an answer.');
+      }
+      var data = null;
+      try { data = JSON.parse(text); } catch (e) { data = null; }
+      // 502/500 are transient upstream failures and worth one more try. A
+      // 504 already waited up to 25 seconds, so retrying it would double the
+      // wait; a 400 or 429 will not get better on its own.
+      var retryable = res.status === 502 || res.status === 500;
       if (retryable && retriesLeft > 0) {
         return postLarryMove(payload, retriesLeft - 1);
       }
