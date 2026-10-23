@@ -431,7 +431,16 @@ export default async (req, context) => {
   });
 
   const controller = new AbortController();
-  const capTimer = setTimeout(() => controller.abort('cap'), STREAM_CAP_MS);
+  // Flags rather than abort reasons. `controller.abort('cap')` makes fetch
+  // reject with the STRING 'cap', which has no .name, so an
+  // `e.name === 'AbortError'` check comes out false and a cut-short answer
+  // gets reported as a generic failure. Aborting with no argument gives a
+  // real AbortError, and the flags say which deadline it was.
+  let capFired = false;
+  let firstEventTimedOut = false;
+  const aborted = (e) => e === controller.signal.reason || e.name === 'AbortError';
+  const controllerAbort = () => controller.abort();
+  const capTimer = setTimeout(() => { capFired = true; controllerAbort(); }, STREAM_CAP_MS);
 
   let upstream;
   try {
@@ -447,7 +456,7 @@ export default async (req, context) => {
     });
   } catch (e) {
     clearTimeout(capTimer);
-    console.error('Larry chat: upstream connect failed:', e.name === 'AbortError' ? 'timeout' : e.message);
+    console.error('Larry chat: upstream connect failed:', aborted(e) ? 'timeout' : e.message);
     return json(504, { error: 'Larry took too long on that one. Tap retry.' });
   }
 
@@ -476,7 +485,10 @@ export default async (req, context) => {
   const events = sseEvents(upstream.body);
   let firstFrame = null;
   let streamFailed = null;
-  const firstEventTimer = setTimeout(() => controller.abort('first-event'), FIRST_EVENT_TIMEOUT_MS);
+  const firstEventTimer = setTimeout(() => {
+    firstEventTimedOut = true;
+    controllerAbort();
+  }, FIRST_EVENT_TIMEOUT_MS);
   try {
     for (;;) {
       const next = await events.next();
@@ -491,7 +503,7 @@ export default async (req, context) => {
 
   if (streamFailed) {
     clearTimeout(capTimer);
-    const timedOut = streamFailed.name === 'AbortError';
+    const timedOut = firstEventTimedOut || capFired || aborted(streamFailed);
     console.error('Larry chat: no first event:', timedOut ? 'timeout' : streamFailed.message);
     return json(timedOut ? 504 : 502, {
       error: timedOut
@@ -522,7 +534,7 @@ export default async (req, context) => {
         // The cap fired, or the connection broke. Either way the client
         // keeps whatever text it already rendered; a partial answer beats
         // nothing, which is what the old 500 gave.
-        const timedOut = e.name === 'AbortError';
+        const timedOut = capFired || aborted(e);
         console.error('Larry chat: stream ended early:',
           timedOut ? 'cap ' + STREAM_CAP_MS + 'ms' : e.message,
           sawText ? '(partial answer sent)' : '(no answer text sent)');
@@ -537,7 +549,7 @@ export default async (req, context) => {
       // The browser went away (tab closed, navigation). Stop paying for
       // tokens nobody will read.
       clearTimeout(capTimer);
-      controller.abort('client-gone');
+      controllerAbort();
     },
   });
 
