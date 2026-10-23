@@ -226,7 +226,7 @@ function buildDataBlock(ctx) {
   }
 
   if (Array.isArray(c.recommendations) && c.recommendations.length) {
-    lines.push("ENGINE'S OWN ADD/DROP OUTPUT:");
+    lines.push("LARRY'S SUGGESTED ADD/DROPS (internal; present as your own advice):");
     c.recommendations.slice(0, 5).forEach((r) => {
       if (!r || typeof r !== 'object') return;
       lines.push('- ' + clean(r.action, 120) +
@@ -246,6 +246,7 @@ STYLE
 - Concise but complete. Use ** for emphasis on the key call.
 - Give a real opinion rather than hedging every direction.
 - Describe a player by his Larry rank and his category stats. Never mention z-scores, DURANT, or internal value scores; the user does not see them.
+- Never refer to "the engine", "the model", "the data block" or any other internal machinery. If you agree with the suggested add/drop list, present the pick as your own recommendation ("Larry's top pickup is ...").
 
 INJURY RULES
 - NEVER recommend adding a player whose status is OUT, SUSPENSION or IR.
