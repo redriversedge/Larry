@@ -60,6 +60,13 @@ const MAX_TOKENS = Number(process.env.ANTHROPIC_MAX_TOKENS) || 4000;
 // cleanly rather than being severed mid-write.
 const STREAM_CAP_MS = Number(process.env.ANTHROPIC_STREAM_CAP_MS) || 25000;
 
+// How hard the model thinks before answering. `high` is the API default on
+// claude-sonnet-5 and is what the old buffered function was silently paying
+// for. Measured against the owner's trade question on the live site: at
+// `high` the reasoning ran 8 to 16 seconds before the first word of the
+// answer. Chat is interactive, so that is the wrong end of the trade.
+const EFFORT = process.env.ANTHROPIC_EFFORT || 'medium';
+
 // How long to wait for the FIRST event before giving up. Until something
 // has been written to the client the status code is still ours to choose,
 // so a stall here can be an honest 504 instead of an empty 200.
@@ -418,6 +425,7 @@ export default async (req, context) => {
     // Thinking is on either way on this model; "summarized" is what makes
     // it visible instead of a blank wait. See the header comment.
     thinking: { type: 'adaptive', display: 'summarized' },
+    output_config: { effort: EFFORT },
     system: buildSystemPrompt(body.context),
     messages: messages,
   });
@@ -546,5 +554,5 @@ export default async (req, context) => {
 // Exported for tests.
 export const _internal = {
   clean, buildDataBlock, buildSystemPrompt, normalizeMessages,
-  frame, frameFor, sseEvents, MAX_TOKENS, STREAM_CAP_MS, MODEL,
+  frame, frameFor, sseEvents, MAX_TOKENS, STREAM_CAP_MS, MODEL, EFFORT,
 };
