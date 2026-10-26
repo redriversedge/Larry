@@ -30,8 +30,10 @@
 // unless ANTHROPIC_MOVE_MODEL says otherwise. Never pin a retired id here.
 const MODEL = process.env.ANTHROPIC_MOVE_MODEL || process.env.ANTHROPIC_MODEL || 'claude-sonnet-5';
 
-// Room for a full three-action answer. 900 was a timeout workaround.
-const MAX_TOKENS = Number(process.env.ANTHROPIC_MOVE_MAX_TOKENS) || 1500;
+// Back to the pre-streaming 900. The owner found the answers worse after
+// this went to 1500 (Oct 23): the card wants a short, decisive call, and a
+// bigger budget bought longer, vaguer reasoning in the same fixed fields.
+const MAX_TOKENS = Number(process.env.ANTHROPIC_MOVE_MAX_TOKENS) || 900;
 
 // Overall ceiling on one upstream call, inside the ~29s a stream survives.
 const STREAM_CAP_MS = Number(process.env.ANTHROPIC_STREAM_CAP_MS) || 25000;
@@ -641,6 +643,10 @@ export default async (req, context) => {
     system: buildSystemPrompt(body),
     tools: [REPORT_MOVE_TOOL],
     tool_choice: { type: 'tool', name: 'report_move' },
+    // Explicitly off. Sonnet-class models think adaptively when this is
+    // omitted, and a forced tool call is the one shape thinking cannot
+    // combine with. The pre-streaming Move never thought either.
+    thinking: { type: 'disabled' },
     messages: [{
       role: 'user',
       content: 'What should I do today to win this matchup? Use the report_move tool.',

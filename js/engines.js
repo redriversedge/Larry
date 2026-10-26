@@ -1819,7 +1819,14 @@ var Engines = (function() {
       var p = enrichPlayer(players[i]);
       var games = p.gamesRemaining || 0;
       if (games <= 0) continue;
-      var perGame = p.stats && p.stats.season ? (p.stats.season[cat.abbr] || 0) : 0;
+      // Season line blended toward ESPN's projection (blendedPerGame in
+      // core.js), the same rate the matchup projections and Larry's Move
+      // use. Raw season averages are noise for the first few weeks and zero
+      // for anyone who has not played, which called winnable categories
+      // lost and fed that straight into Larry's Move and chat.
+      var rates = typeof blendedPerGame === 'function' ? blendedPerGame(p) : null;
+      var perGame = rates ? (rates[cat.abbr] || 0)
+        : (p.stats && p.stats.season ? (p.stats.season[cat.abbr] || 0) : 0);
       mean += perGame * games;
       var sd = perGame * cv;
       variance += sd * sd * games;
