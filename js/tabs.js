@@ -1701,16 +1701,12 @@ function renderTradeCenter() {
   html += 'value="' + esc(_tradeSearchTerm) + '" oninput="handleTradeSearch(this.value)">';
   html += '<div id="trade-results"></div></div>';
 
-  // Trade Analyzer
+  // Trade Analyzer: up to three players a side.
   html += '<div class="card"><div class="card-header">Trade Analyzer</div>';
-  html += '<p class="muted text-sm" style="margin-bottom:8px">Compare two players to evaluate a trade.</p>';
-  html += '<div style="display:flex;gap:8px;margin-bottom:8px">';
-  html += '<input type="text" class="filter-search" id="trade-give-input" aria-label="Players you give" placeholder="You give..." style="flex:1" oninput="tradeAnalyzerSearch(\'give\',this.value)">';
-  html += '<input type="text" class="filter-search" id="trade-get-input" aria-label="Players you get" placeholder="You get..." style="flex:1" oninput="tradeAnalyzerSearch(\'get\',this.value)">';
-  html += '</div>';
-  html += '<div id="trade-give-results" class="trade-analyzer-results"></div>';
-  html += '<div id="trade-get-results" class="trade-analyzer-results"></div>';
-  html += '<div id="trade-analysis-output"></div>';
+  html += '<p class="muted text-sm" style="margin:0 12px 8px">Up to ' + TRADE_MAX_SIDE + ' players a side. ' +
+    'See what it does to your category ranks, and whether Larry would take it.</p>';
+  html += '<div id="trade-builder">' + renderTradeBuilder() + '</div>';
+  html += '<div id="trade-analysis-output">' + renderTradeAnalysisHtml() + '</div>';
   html += '</div>';
   return html;
 }
@@ -2372,85 +2368,343 @@ function renderSeasonTimeline() {
 }
 
 
-// ========== TRADE ANALYZER HELPERS ==========
+// ========== TRADE ANALYZER ==========
+//
+// Up to three players a side. Shows each category's per-game total for your
+// roster before and after, with your rank in the league, and a plain-English
+// verdict. No z-scores or internal scores on screen.
 
-var _tradeGivePlayer = null;
-var _tradeGetPlayer = null;
+var TRADE_MAX_SIDE = 3;
+var _tradeGive = [];
+var _tradeGet = [];
+
+function tradeFindPlayer(id) {
+  return (S.allPlayers || []).find(function(pl) { return pl.id === id; }) || null;
+}
+
+function renderTradeSide(side) {
+  var list = side === 'give' ? _tradeGive : _tradeGet;
+  var html = '<div class="trade-side"><div class="text-xs muted" style="margin-bottom:4px">' +
+    (side === 'give' ? 'You give' : 'You get') + '</div>';
+  list.forEach(function(id) {
+    var p = tradeFindPlayer(id);
+    if (!p) return;
+    html += '<div class="trade-chip"><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' +
+      esc(p.name) + ' <span class="text-xs muted">' + esc(larryRankText(p).replace('Larry rank ', '')) + '</span></span>' +
+      '<button aria-label="Remove ' + esc(p.name) + '" onclick="removeTradePlayer(\'' + side + '\',' + p.id + ')">\u2716</button></div>';
+  });
+  if (list.length < TRADE_MAX_SIDE) {
+    html += '<input type="text" class="filter-search" id="trade-' + side + '-input" aria-label="' +
+      (side === 'give' ? 'Players you give' : 'Players you get') + '" placeholder="' +
+      (side === 'give' ? 'Add a player you give...' : 'Add a player you get...') +
+      '" oninput="tradeAnalyzerSearch(\'' + side + '\',this.value)">';
+    html += '<div id="trade-' + side + '-results" class="trade-analyzer-results"></div>';
+  }
+  return html + '</div>';
+}
+
+function renderTradeBuilder() {
+  var html = '<div class="trade-builder">' + renderTradeSide('give') + renderTradeSide('get') + '</div>';
+  if (_tradeGive.length || _tradeGet.length) {
+    html += '<div style="text-align:right;padding:0 12px 8px"><button class="btn btn-sm btn-secondary" ' +
+      'style="min-height:36px" onclick="clearTrade()">Clear</button></div>';
+  }
+  return html;
+}
 
 function tradeAnalyzerSearch(side, query) {
   var resultsEl = document.getElementById('trade-' + side + '-results');
   if (!resultsEl) return;
   if (!query || query.length < 2) { resultsEl.innerHTML = ''; return; }
-
   var q = query.toLowerCase();
-  var matches = S.allPlayers.filter(function(p) {
-    return p.name && p.name.toLowerCase().indexOf(q) >= 0;
+  var taken = _tradeGive.concat(_tradeGet);
+  var myId = S.myTeam.teamId;
+  var matches = (S.allPlayers || []).filter(function(p) {
+    if (!p.name || p.name.toLowerCase().indexOf(q) < 0) return false;
+    if (taken.indexOf(p.id) >= 0) return false;
+    // You give your own players; you get someone else's.
+    return side === 'give' ? p.onTeamId === myId : p.onTeamId !== myId;
   }).slice(0, 6);
-
   var html = '';
+  if (!matches.length) {
+    html = '<div class="text-xs muted" style="padding:4px 8px">' +
+      (side === 'give' ? 'No match on your roster.' : 'No match outside your roster.') + '</div>';
+  }
   matches.forEach(function(p) {
-    html += '<div class="mini-row" style="cursor:pointer;padding:4px 8px" onclick="selectTradePlayer(\'' + side + '\',' + p.id + ')">';
-    html += '<span>' + esc(p.name) + '</span>';
-    html += '<span class="text-xs muted">' + formatPositions(p.eligibleSlots) + ' | ' + esc(p.nbaTeam) + '</span>';
+    html += '<div class="mini-row" style="cursor:pointer;padding:8px;min-height:44px" onclick="selectTradePlayer(\'' + side + '\',' + p.id + ')">';
+    html += '<span style="flex:1">' + esc(p.name) + '</span>';
+    html += '<span class="text-xs muted">' + formatPositions(p.eligibleSlots) + ' | ' + esc(p.nbaTeam) +
+      (p.onTeamId > 0 ? ' | ' + esc(teamNameFor(p.onTeamId)) : ' | FA') + '</span>';
     html += '</div>';
   });
   resultsEl.innerHTML = html;
 }
 
-function selectTradePlayer(side, playerId) {
-  var p = S.allPlayers.find(function(pl) { return pl.id === playerId; });
-  if (!p) return;
-
-  if (side === 'give') {
-    _tradeGivePlayer = p;
-    var inp = document.getElementById('trade-give-input');
-    if (inp) inp.value = p.name;
-  } else {
-    _tradeGetPlayer = p;
-    var inp2 = document.getElementById('trade-get-input');
-    if (inp2) inp2.value = p.name;
-  }
-
-  document.getElementById('trade-' + side + '-results').innerHTML = '';
-
-  if (_tradeGivePlayer && _tradeGetPlayer) {
-    renderTradeAnalysis();
-  }
+function refreshTradeUI() {
+  var b = document.getElementById('trade-builder');
+  if (b) b.innerHTML = renderTradeBuilder();
+  var o = document.getElementById('trade-analysis-output');
+  if (o) o.innerHTML = renderTradeAnalysisHtml();
 }
 
-function renderTradeAnalysis() {
-  var container = document.getElementById('trade-analysis-output');
-  if (!container || !_tradeGivePlayer || !_tradeGetPlayer) return;
+function selectTradePlayer(side, playerId) {
+  var list = side === 'give' ? _tradeGive : _tradeGet;
+  if (list.length >= TRADE_MAX_SIDE || list.indexOf(playerId) >= 0) return;
+  list.push(playerId);
+  refreshTradeUI();
+  // Keep adding without another tap on the input.
+  var inp = document.getElementById('trade-' + side + '-input');
+  if (inp) inp.focus();
+}
 
-  var result = Engines.analyzeTrade([_tradeGivePlayer], [_tradeGetPlayer]);
+function removeTradePlayer(side, playerId) {
+  var list = side === 'give' ? _tradeGive : _tradeGet;
+  var i = list.indexOf(playerId);
+  if (i >= 0) list.splice(i, 1);
+  refreshTradeUI();
+}
+
+function clearTrade() {
+  _tradeGive = [];
+  _tradeGet = [];
+  refreshTradeUI();
+}
+
+// Pure. teams: [{ teamId, name, players: [full player] }]. rate(p) gives
+// per-game category rates. Returns per-category totals and league ranks
+// before and after for you, and for the partner team when every player you
+// get comes from one team.
+function computeTradeImpact(teams, myTeamId, give, get, cats, rate) {
+  var giveIds = give.map(function(p) { return p.id; });
+  var getIds = get.map(function(p) { return p.id; });
+  var partnerIds = {};
+  get.forEach(function(p) { if (p.onTeamId > 0) partnerIds[p.onTeamId] = true; });
+  var partnerList = Object.keys(partnerIds);
+  var partnerId = partnerList.length === 1 ? Number(partnerList[0]) : null;
+
+  function totals(players) {
+    var t = {};
+    cats.forEach(function(c) { t[c.abbr] = 0; });
+    players.forEach(function(p) {
+      if (p.slotId === 13) return; // IR does not play
+      var r = rate(p) || {};
+      cats.forEach(function(c) { t[c.abbr] += r[c.abbr] || 0; });
+    });
+    return t;
+  }
+  function rosterAfter(team) {
+    var list = (team.players || []).slice();
+    if (team.teamId === myTeamId) {
+      list = list.filter(function(p) { return getIds.indexOf(p.id) < 0 && giveIds.indexOf(p.id) < 0; }).concat(get);
+    } else if (team.teamId === partnerId) {
+      list = list.filter(function(p) { return getIds.indexOf(p.id) < 0; }).concat(give);
+    }
+    return list;
+  }
+  var before = {}, after = {};
+  teams.forEach(function(t) {
+    before[t.teamId] = totals(t.players || []);
+    after[t.teamId] = totals(rosterAfter(t));
+  });
+  // Rank of one team in a category against everyone else's numbers.
+  function rankOf(teamId, cat, mine, others) {
+    var v = mine[teamId][cat.abbr];
+    var r = 1;
+    teams.forEach(function(t) {
+      if (t.teamId === teamId) return;
+      var o = others[t.teamId][cat.abbr];
+      if (cat.isNegative ? o < v : o > v) r++;
+    });
+    return r;
+  }
+  function sideView(teamId) {
+    if (teamId === null || !before[teamId]) return null;
+    // After the trade only the two teams involved change.
+    var afterWorld = {};
+    teams.forEach(function(t) {
+      afterWorld[t.teamId] = (t.teamId === myTeamId || t.teamId === partnerId) ? after[t.teamId] : before[t.teamId];
+    });
+    var out = {};
+    cats.forEach(function(c) {
+      out[c.abbr] = {
+        before: before[teamId][c.abbr], after: afterWorld[teamId][c.abbr],
+        rankBefore: rankOf(teamId, c, before, before),
+        rankAfter: rankOf(teamId, c, afterWorld, afterWorld)
+      };
+    });
+    return out;
+  }
+  var mine = sideView(myTeamId);
+  var rankDelta = 0, better = [], worse = [];
+  cats.forEach(function(c) {
+    var d = mine[c.abbr].rankBefore - mine[c.abbr].rankAfter;
+    rankDelta += d;
+    if (d > 0) better.push(c.abbr); else if (d < 0) worse.push(c.abbr);
+  });
+  return { mine: mine, partner: sideView(partnerId), partnerId: partnerId,
+    rankDelta: rankDelta, better: better, worse: worse,
+    max: (function() {
+      var m = {};
+      cats.forEach(function(c) {
+        m[c.abbr] = 0;
+        teams.forEach(function(t) { m[c.abbr] = Math.max(m[c.abbr], before[t.teamId][c.abbr], after[t.teamId][c.abbr]); });
+      });
+      return m;
+    })() };
+}
+
+// Verdict from two signals: category ranks, and player value with the
+// roster spot accounted for (a 2-for-1 costs you your worst player; a
+// 1-for-2 frees a spot for the best free agent). Value is internal.
+function tradeVerdict(impact, valueEdge, giveValue) {
+  // Ranks summed over the five categories: a swing of 6 or more places is
+  // a big enough category story to decide the verdict on its own.
+  var rd = impact.rankDelta;
+  var catSignal = rd >= 6 ? 2 : (rd >= 2 ? 1 : (rd <= -6 ? -2 : (rd <= -2 ? -1 : 0)));
+  var rel = valueEdge / Math.max(Math.abs(giveValue), 10);
+  var valueSignal = rel > 0.1 ? 1 : (rel < -0.1 ? -1 : 0);
+  var sum = catSignal + valueSignal;
+  if (sum >= 2) return { label: 'Take it', color: 'var(--accent-green)', catSignal: catSignal, valueSignal: valueSignal };
+  if (sum === 1) return { label: 'Lean yes', color: 'var(--accent-green)', catSignal: catSignal, valueSignal: valueSignal };
+  if (sum === 0) return { label: 'Toss-up', color: 'var(--accent-gold)', catSignal: catSignal, valueSignal: valueSignal };
+  if (sum === -1) return { label: 'Lean no', color: 'var(--accent-red)', catSignal: catSignal, valueSignal: valueSignal };
+  return { label: 'Pass', color: 'var(--accent-red)', catSignal: catSignal, valueSignal: valueSignal };
+}
+
+function tradeRate(p) {
+  if (typeof blendedPerGame === 'function') return blendedPerGame(p);
+  return (p.stats && p.stats.season) || {};
+}
+
+function tradeScore(p) {
+  return p && !p.noEvidence && typeof p.durantScore === 'number' ? p.durantScore : 0;
+}
+
+function ordinal(n) {
+  var s = ['th', 'st', 'nd', 'rd'], v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+}
+
+function renderTradeAnalysisHtml() {
+  if (!_tradeGive.length || !_tradeGet.length) {
+    return '<div class="text-xs muted" style="padding:0 12px 12px">Add at least one player on each side.</div>';
+  }
+  if (typeof Engines !== 'undefined' && Engines.ensureDURANT) Engines.ensureDURANT(S.allPlayers || []);
   var cats = getOrderedCategories();
+  var give = _tradeGive.map(tradeFindPlayer).filter(Boolean);
+  var get = _tradeGet.map(tradeFindPlayer).filter(Boolean);
+  var full = function(stub) {
+    var f = tradeFindPlayer(stub.id);
+    return f ? Object.assign({}, f, { slotId: stub.slotId }) : stub;
+  };
+  var teams = (S.teams || []).map(function(t) {
+    return { teamId: t.teamId, name: t.name, players: (t.players || []).map(full) };
+  });
+  if (!teams.length) return '<div class="empty-state"><p>No league data. Sync first.</p></div>';
+  var impact = computeTradeImpact(teams, S.myTeam.teamId, give, get, cats, tradeRate);
 
-  var gradeColors = {A:'var(--accent-green)',B:'var(--accent-blue)',C:'var(--accent-gold)',D:'var(--accent-red)',F:'var(--accent-red)'};
+  // Roster spots: who you would drop, or who you could add.
+  var myRoster = (teams.find(function(t) { return t.teamId === S.myTeam.teamId; }) || { players: [] }).players;
+  var extra = get.length - give.length;
+  var spotNote = '', spotValue = 0;
+  if (extra > 0) {
+    var droppable = myRoster.filter(function(p) {
+      return _tradeGive.indexOf(p.id) < 0 && p.slotId !== 13;
+    }).sort(byDurantRank).reverse().slice(0, extra);
+    droppable.forEach(function(p) { spotValue -= tradeScore(p); });
+    if (droppable.length) {
+      spotNote = 'You take back ' + extra + ' more player' + (extra > 1 ? 's' : '') + ', so you would have to drop ' +
+        droppable.map(function(p) { return p.name; }).join(' and ') + '.';
+    }
+  } else if (extra < 0) {
+    var fa = (S.allPlayers || []).filter(function(p) {
+      return !(p.onTeamId > 0) && !p.noEvidence &&
+        !/^(OUT|SUSPENSION|IR|INJURED_RESERVE)$/i.test(p.injuryStatus || '');
+    }).sort(byDurantRank).slice(0, -extra);
+    fa.forEach(function(p) { spotValue += tradeScore(p); });
+    if (fa.length) {
+      spotNote = 'It frees ' + (-extra) + ' roster spot' + (-extra > 1 ? 's' : '') + '. Best free agent' +
+        (fa.length > 1 ? 's' : '') + ' right now: ' + fa.map(function(p) { return p.name; }).join(', ') + '.';
+    }
+  }
+  var giveValue = give.reduce(function(a, p) { return a + tradeScore(p); }, 0);
+  var getValue = get.reduce(function(a, p) { return a + tradeScore(p); }, 0);
+  var valueEdge = getValue - giveValue + spotValue;
+  var verdict = tradeVerdict(impact, valueEdge, giveValue);
 
-  var html = '<div style="margin-top:12px;padding:12px;background:var(--bg-input);border-radius:8px">';
-  html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">';
-  html += '<div><strong>' + esc(_tradeGivePlayer.name) + '</strong> <span class="text-xs muted">' + larryRankText(_tradeGivePlayer) + '</span></div>';
-  html += '<span style="font-size:1.2rem">\u{27A1}\u{FE0F}</span>';
-  html += '<div><strong>' + esc(_tradeGetPlayer.name) + '</strong> <span class="text-xs muted">' + larryRankText(_tradeGetPlayer) + '</span></div>';
+  // Narrative.
+  var lines = [];
+  var bestGet = get.slice().sort(byDurantRank)[0];
+  var bestGive = give.slice().sort(byDurantRank)[0];
+  if (bestGet && bestGive) {
+    var a = bestGet.durantRank, b = bestGive.durantRank;
+    if (a && b && !bestGet.noEvidence && !bestGive.noEvidence) {
+      lines.push(a < b
+        ? 'You get the best player in the deal: ' + bestGet.name + ' (Larry rank #' + a + ') against ' + bestGive.name + ' (#' + b + ').'
+        : (a > b ? 'The best player in the deal is yours: ' + bestGive.name + ' (Larry rank #' + b + ') against ' + bestGet.name + ' (#' + a + ').'
+          : 'The headliners are dead even on Larry\'s board.'));
+    }
+  }
+  if (impact.better.length || impact.worse.length) {
+    var parts = [];
+    if (impact.better.length) parts.push('climbs in ' + impact.better.join(', '));
+    if (impact.worse.length) parts.push('slips in ' + impact.worse.join(', '));
+    lines.push('Your team ' + parts.join(' and ') + '.');
+  } else {
+    lines.push('Your category ranks do not move.');
+  }
+  // The biggest per-game swing either way.
+  var swings = cats.map(function(c) {
+    var m = impact.mine[c.abbr];
+    return { abbr: c.abbr, d: m.after - m.before, rel: (m.after - m.before) / (m.before || 1) };
+  }).sort(function(x, y) { return Math.abs(y.rel) - Math.abs(x.rel); });
+  if (swings[0] && Math.abs(swings[0].d) >= 0.1) {
+    lines.push('Biggest swing: ' + (swings[0].d > 0 ? '+' : '') + fmt(swings[0].d, 1) + ' ' + swings[0].abbr + ' per game.');
+  }
+  var strat = (S.matchup && S.matchup.strategy) || {};
+  var hitPunts = (strat.punts || []).filter(function(c) { return impact.better.indexOf(c) >= 0; });
+  var hitTargets = (strat.targets || []).filter(function(c) { return impact.worse.indexOf(c) >= 0; });
+  if (hitTargets.length) lines.push('Careful: it costs you in ' + hitTargets.join(', ') + ', which you are fighting for this week.');
+  if (hitPunts.length && !impact.worse.length) lines.push('Some of the gain lands in ' + hitPunts.join(', ') + ', which you are punting this week.');
+  get.forEach(function(p) {
+    if (/^(OUT|SUSPENSION|IR|INJURED_RESERVE)$/i.test(p.injuryStatus || '')) lines.push(p.name + ' is ' + watchStatusLabel(p.injuryStatus).toLowerCase() + ' right now.');
+  });
+  if (spotNote) lines.push(spotNote);
+  if (impact.partner) {
+    var pb = 0;
+    cats.forEach(function(c) { pb += impact.partner[c.abbr].rankBefore - impact.partner[c.abbr].rankAfter; });
+    var pName = teamNameFor(impact.partnerId);
+    lines.push(pb > 0 ? pName + ' improves too, so they have a reason to say yes.'
+      : (pb < 0 ? pName + ' gets worse in the categories, so expect pushback.' : pName + ' comes out about even.'));
+  }
+  if (verdict.catSignal > 0 && verdict.valueSignal < 0) lines.push('You give up more talent than you get, but it fits your categories.');
+  if (verdict.catSignal < 0 && verdict.valueSignal > 0) lines.push('You win on talent but your category ranks pay for it.');
+
+  var html = '<div class="trade-verdict">';
+  html += '<div style="font-size:1.4rem;font-weight:800;color:' + verdict.color + '">' + verdict.label + '</div>';
+  html += '<div class="text-sm" style="margin-top:6px;line-height:1.45">' + lines.map(esc).join(' ') + '</div>';
   html += '</div>';
 
-  html += '<div style="text-align:center;margin:8px 0">';
-  html += '<span style="font-size:1.5rem;font-weight:700;color:' + (gradeColors[result.grade] || 'inherit') + '">Grade: ' + result.grade + '</span>';
-  html += '<div class="text-xs muted">Net value: ' + (result.netValue > 0 ? '+' : '') + fmt(result.netValue, 1) + '</div>';
-  html += '</div>';
-
-  html += '<div style="font-size:0.8rem;margin-top:8px">';
-  cats.forEach(function(cat) {
-    var diff = result.catDiffs[cat.abbr] || 0;
-    var cls = diff > 0.3 ? 'stat-positive' : (diff < -0.3 ? 'stat-negative' : '');
-    html += '<div class="mini-row" style="padding:2px 0">';
-    html += '<span style="color:' + cat.color + ';font-weight:700;min-width:35px">' + cat.abbr + '</span>';
-    html += '<span class="' + cls + '">' + (diff > 0 ? '+' : '') + fmt(diff, 2) + ' z</span>';
+  // Before/after bars with league rank.
+  html += '<div style="padding:0 12px 12px"><div class="text-xs muted" style="margin-bottom:6px">Your roster, per game: before \u2192 after (league rank)</div>';
+  cats.forEach(function(c) {
+    var m = impact.mine[c.abbr];
+    var max = impact.max[c.abbr] || 1;
+    var d = m.rankBefore - m.rankAfter;
+    var rankCol = d > 0 ? 'var(--accent-green)' : (d < 0 ? 'var(--accent-red)' : 'var(--text-secondary)');
+    html += '<div class="trade-bar-row">';
+    html += '<div class="trade-bar-label" style="color:' + c.color + '">' + c.abbr + '</div>';
+    html += '<div class="trade-bars">';
+    html += '<div class="trade-bar before" style="width:' + Math.max(2, m.before / max * 100).toFixed(1) + '%"></div>';
+    html += '<div class="trade-bar after" style="width:' + Math.max(2, m.after / max * 100).toFixed(1) + '%;background:' + c.color + '"></div>';
+    html += '</div>';
+    html += '<div class="trade-bar-nums"><div>' + fmt(m.before, 1) + ' \u2192 <strong>' + fmt(m.after, 1) + '</strong></div>' +
+      '<div style="color:' + rankCol + '">' + ordinal(m.rankBefore) + ' \u2192 ' + ordinal(m.rankAfter) + '</div></div>';
     html += '</div>';
   });
-  html += '</div></div>';
-
-  container.innerHTML = html;
+  html += '<div class="text-xs muted" style="margin-top:6px">Gray is now, color is after. Rates blend this season with the preseason projection while samples are small.</div>';
+  html += '</div>';
+  return html;
 }
 
 
