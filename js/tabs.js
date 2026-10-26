@@ -639,102 +639,163 @@ function renderScheduleAdvantage() {
   return html;
 }
 
-function computeTOTW(cats) {
-  // Rank league managers by how they'd do vs every other current-matchup winner.
-  // Uses team z-score sums per category as a proxy for current matchup performance,
-  // since full league matchup scores are not stored in S.
-  if (!cats.length || !S.teams.length) return [];
+// --- TEAM OF THE WEEK ---
+// The owner's definition: take the winner of every matchup this week (six
+// in a 12-team league) and play each of them against every other winner on
+// the week's actual category totals. Whoever beats the most other winners is
+// Team of the Week. During the week it runs on the live totals, so it reads
+// as "who would be Team of the Week right now".
 
-  // Compute per-team category z-score totals (starters only)
-  var teamStats = S.teams.map(function(team) {
-    var catZ = {};
-    cats.forEach(function(cat) {
-      var sum = 0;
-      (team.players || []).forEach(function(p) {
-        if (p.slotId < 12) sum += (p.zScores ? p.zScores[cat.abbr] || 0 : 0);
-      });
-      catZ[cat.abbr] = sum;
-    });
-    return { team: team, catZ: catZ };
-  });
-
-  // Find current matchup pairs from schedule
-  var mp = S.league.currentMatchupPeriod;
-  var currentMatchups = (S.league.schedule || []).filter(function(m) {
-    return m.matchupPeriodId === mp;
-  });
-
-  // Determine winners of each current matchup using z-score proxy
-  var winners = [];
-  currentMatchups.forEach(function(m) {
-    var homeId = m.home ? m.home.teamId : null;
-    var awayId = m.away ? m.away.teamId : null;
-    if (!homeId || !awayId) return;
-
-    var homeStats = teamStats.find(function(ts) { return ts.team.teamId === homeId; });
-    var awayStats = teamStats.find(function(ts) { return ts.team.teamId === awayId; });
-    if (!homeStats || !awayStats) return;
-
-    var homeCatWins = 0, awayCatWins = 0;
-    cats.forEach(function(cat) {
-      var hZ = homeStats.catZ[cat.abbr] || 0;
-      var aZ = awayStats.catZ[cat.abbr] || 0;
-      if (hZ > aZ) homeCatWins++;
-      else if (aZ > hZ) awayCatWins++;
-    });
-    if (homeCatWins > awayCatWins) winners.push(homeStats);
-    else if (awayCatWins > homeCatWins) winners.push(awayStats);
-    else { winners.push(homeStats); winners.push(awayStats); } // tie: include both
-  });
-
-  // Fallback: if no schedule pairs, use all teams
-  if (!winners.length) winners = teamStats;
-
-  // For each winner, simulate vs all other winners
-  var results = winners.map(function(w) {
-    var winsAgainst = winners.filter(function(other) {
-      if (other === w) return false;
-      var wCatWins = 0, otherCatWins = 0;
-      cats.forEach(function(cat) {
-        var wZ = w.catZ[cat.abbr] || 0;
-        var oZ = other.catZ[cat.abbr] || 0;
-        if (wZ > oZ) wCatWins++;
-        else if (oZ > wZ) otherCatWins++;
-      });
-      return wCatWins > otherCatWins;
-    }).length;
-    return {
-      team: w.team,
-      winsAgainst: winsAgainst,
-      total: Math.max(0, winners.length - 1)
-    };
-  });
-
-  results.sort(function(a, b) { return b.winsAgainst - a.winsAgainst; });
-  return results;
+// One category comparison, honouring negative categories.
+function totwCatResult(cat, a, b) {
+  if (a === b) return 0;
+  var better = cat.isNegative ? a < b : a > b;
+  return better ? 1 : -1;
 }
 
-function renderTeamOfWeek(cats) {
-  if (!cats.length || !S.teams.length) return '';
-  var html = '<div class="card"><div class="card-header" onclick="this.nextElementSibling.classList.toggle(\'hidden\')">Team of the Week <span class="text-xs muted">\u25BC</span></div>';
-  html += '<div class="hidden">';
+// a vs b over the categories: { w, l, t } from a's side.
+function totwCompare(cats, a, b) {
+  var r = { w: 0, l: 0, t: 0 };
+  cats.forEach(function(cat) {
+    var x = totwCatResult(cat, a[cat.abbr] || 0, b[cat.abbr] || 0);
+    if (x > 0) r.w++; else if (x < 0) r.l++; else r.t++;
+  });
+  return r;
+}
 
-  var results = computeTOTW(cats);
-  if (!results.length) {
-    html += '<div class="empty-state"><p>No matchup data available.</p></div>';
-  } else {
-    html += '<div class="mini-table">';
-    results.forEach(function(r, i) {
-      var isMe = r.team.teamId === S.myTeam.teamId;
-      html += '<div class="mini-row' + (isMe ? ' my-team-row' : '') + '">';
-      html += '<span class="text-xs muted" style="min-width:20px">' + (i + 1) + '</span>';
-      html += '<span style="flex:1;font-weight:' + (i === 0 ? '700' : '400') + '">' + esc(r.team.name) + '</span>';
-      html += '<span class="text-xs">' + r.winsAgainst + '/' + r.total + ' matchups won</span>';
-      html += '</div>';
+// Pure: schedule entries (with side.cats), the matchup period, categories.
+// Returns null when there are no category totals for the period yet.
+function computeTeamOfWeek(schedule, mp, cats) {
+  if (!cats || !cats.length) return null;
+  var games = (schedule || []).filter(function(m) {
+    return m.matchupPeriodId === mp && m.home && m.away && m.home.cats && m.away.cats;
+  });
+  if (!games.length) return null;
+
+  // The winners. A dead-even matchup sends both teams through, flagged.
+  var winners = [];
+  games.forEach(function(m) {
+    var r = totwCompare(cats, m.home.cats, m.away.cats);
+    if (r.w > r.l) winners.push({ teamId: m.home.teamId, cats: m.home.cats, beat: m.away.teamId, score: r, tied: false });
+    else if (r.l > r.w) winners.push({ teamId: m.away.teamId, cats: m.away.cats, beat: m.home.teamId, score: { w: r.l, l: r.w, t: r.t }, tied: false });
+    else {
+      winners.push({ teamId: m.home.teamId, cats: m.home.cats, beat: m.away.teamId, score: r, tied: true });
+      winners.push({ teamId: m.away.teamId, cats: m.away.cats, beat: m.home.teamId, score: r, tied: true });
+    }
+  });
+
+  // Every winner against every other winner.
+  winners.forEach(function(w) {
+    w.record = { w: 0, l: 0, t: 0 };
+    w.catRecord = { w: 0, l: 0, t: 0 };
+    w.vs = [];
+    winners.forEach(function(o) {
+      if (o === w) return;
+      var r = totwCompare(cats, w.cats, o.cats);
+      w.catRecord.w += r.w; w.catRecord.l += r.l; w.catRecord.t += r.t;
+      var res = r.w > r.l ? 'W' : (r.l > r.w ? 'L' : 'T');
+      if (res === 'W') w.record.w++; else if (res === 'L') w.record.l++; else w.record.t++;
+      w.vs.push({ teamId: o.teamId, result: res, score: r });
     });
-    html += '</div>';
+  });
+
+  // Most head-to-head wins; ties broken by category wins, then fewest
+  // category losses.
+  winners.sort(function(a, b) {
+    var ka = a.record.w + a.record.t / 2, kb = b.record.w + b.record.t / 2;
+    if (kb !== ka) return kb - ka;
+    if (b.catRecord.w !== a.catRecord.w) return b.catRecord.w - a.catRecord.w;
+    return a.catRecord.l - b.catRecord.l;
+  });
+  return { winners: winners, final: false };
+}
+
+function totwTeamName(teamId) {
+  var t = (S.teams || []).find(function(x) { return x.teamId === teamId; });
+  return t ? t.name : ('Team ' + teamId);
+}
+
+function recText(r) { return r.w + '-' + r.l + (r.t ? '-' + r.t : ''); }
+
+// Small card for the Matchup tab: who is Team of the Week right now.
+function renderTeamOfWeek(cats) {
+  var res = computeTeamOfWeek(S.league.schedule, S.league.currentMatchupPeriod, cats);
+  if (!res || !res.winners.length) return '';
+  var top = res.winners[0];
+  var mine = res.winners.find(function(w) { return w.teamId === S.myTeam.teamId; });
+  var html = '<div class="card"><div style="padding:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">';
+  html += '<div style="flex:1;min-width:0"><div class="text-xs muted">Team of the Week right now</div>' +
+    '<div style="font-weight:700">\u{1F947} ' + esc(totwTeamName(top.teamId)) + ' <span class="text-xs muted">' +
+    recText(top.record) + ' vs the other winners</span></div>';
+  if (mine && mine !== top) {
+    html += '<div class="text-xs">You: ' + recText(mine.record) + '</div>';
+  } else if (!mine) {
+    html += '<div class="text-xs muted">You are not leading your matchup yet.</div>';
   }
+  html += '</div><button class="btn btn-sm btn-secondary" style="min-height:44px" ' +
+    'onclick="openLeagueSub(\'teamOfWeek\')">See all</button></div></div>';
+  return html;
+}
+
+var _totwOpen = {};
+function toggleTotwRow(teamId) { _totwOpen[teamId] = !_totwOpen[teamId]; render(); }
+
+function renderTeamOfWeekPage() {
+  var cats = getOrderedCategories();
+  var mp = S.league.currentMatchupPeriod;
+  var res = computeTeamOfWeek(S.league.schedule, mp, cats);
+  if (!res || !res.winners.length) {
+    return '<div class="empty-state"><p>No category totals for this matchup yet.</p>' +
+      '<p class="text-xs muted">They appear once the first games of the week are scored. Sync to refresh.</p></div>';
+  }
+  var win = typeof getMatchupWindow === 'function' ? getMatchupWindow() : null;
+  var html = '<div class="card"><div style="padding:12px">';
+  html += '<div class="text-sm">Matchup ' + mp + (win && win.label ? ' &middot; ' + esc(win.label) : '') + '</div>';
+  html += '<div class="text-xs muted" style="margin-top:4px">Each team currently winning its matchup, played ' +
+    'against every other winner on this week\'s category totals so far. ' +
+    (win && win.daysLeft > 0 ? 'Live: it changes as games are played.' : 'Final for the week.') + '</div>';
   html += '</div></div>';
+
+  html += '<div class="card"><div class="mini-table">';
+  res.winners.forEach(function(w, i) {
+    var isMe = w.teamId === S.myTeam.teamId;
+    html += '<div class="mini-row' + (isMe ? ' my-team-row' : '') + '" style="cursor:pointer;min-height:44px" ' +
+      'onclick="toggleTotwRow(' + w.teamId + ')">';
+    html += '<span class="text-xs muted" style="min-width:20px">' + (i === 0 ? '\u{1F947}' : (i + 1)) + '</span>';
+    html += '<span style="flex:1;font-weight:' + (i === 0 ? '700' : '400') + '">' + esc(totwTeamName(w.teamId)) +
+      (w.tied ? ' <span class="text-xs muted">(tied matchup)</span>' : '') + '</span>';
+    html += '<span class="text-sm" style="font-weight:700">' + recText(w.record) + '</span>';
+    html += '<span class="text-xs muted" style="min-width:64px;text-align:right">cats ' + recText(w.catRecord) + '</span>';
+    html += '</div>';
+    if (_totwOpen[w.teamId]) {
+      html += '<div style="padding:4px 12px 10px 32px">';
+      html += '<div class="text-xs muted">Leads ' + esc(totwTeamName(w.beat)) + ' ' + recText(w.score) + ' in their real matchup</div>';
+      w.vs.forEach(function(v) {
+        var col = v.result === 'W' ? 'var(--accent-green)' : (v.result === 'L' ? 'var(--accent-red)' : 'var(--text-secondary)');
+        html += '<div class="text-xs"><span style="color:' + col + ';font-weight:700;display:inline-block;width:14px">' +
+          v.result + '</span> ' + recText(v.score) + ' vs ' + esc(totwTeamName(v.teamId)) + '</div>';
+      });
+      html += '</div>';
+    }
+  });
+  html += '</div></div>';
+
+  // The numbers behind it.
+  html += '<div class="card"><div class="card-header">Winners\' totals so far</div><div class="table-scroll">' +
+    '<table class="data-table compact"><thead><tr><th style="text-align:left">Team</th>';
+  cats.forEach(function(cat) { html += '<th class="stat-col" style="color:' + cat.color + '">' + cat.abbr + '</th>'; });
+  html += '</tr></thead><tbody>';
+  res.winners.forEach(function(w) {
+    html += '<tr' + (w.teamId === S.myTeam.teamId ? ' class="my-team-row"' : '') + '><td>' + esc(totwTeamName(w.teamId)) + '</td>';
+    cats.forEach(function(cat) {
+      var best = res.winners.every(function(o) { return totwCatResult(cat, w.cats[cat.abbr] || 0, o.cats[cat.abbr] || 0) >= 0; });
+      html += '<td class="stat-col"' + (best ? ' style="font-weight:700;color:var(--accent-gold)"' : '') + '>' +
+        fmt(w.cats[cat.abbr] || 0, 0) + '</td>';
+    });
+    html += '</tr>';
+  });
+  html += '</tbody></table></div></div>';
+  html += '<div class="text-xs muted" style="padding:0 12px 12px">Tap a team to see each result.</div>';
   return html;
 }
 
@@ -1266,7 +1327,8 @@ function renderLeague(container) {
   // Group menu items with section headers
   var sections = {
     'Overview': ['standings', 'projectedStandings', 'playoffs', 'timeline'],
-    'Analysis': ['trades', 'teamAnalyzer', 'projections'],
+    'This Week': ['teamOfWeek', 'lastNight', 'lmNotes'],
+    'Analysis': ['trades', 'teamAnalyzer', 'rookies', 'projections'],
     'Info': ['news'],
     'System': ['notifications', 'settings']
   };
@@ -1274,7 +1336,7 @@ function renderLeague(container) {
   // opens the app for. Once the season starts it drops back under Info.
   if (isPreseason()) sections['Overview'].unshift('draftRoom');
   else sections['Info'].push('draftRoom');
-  var sectionKeys = ['Overview', 'Analysis', 'Info', 'System'];
+  var sectionKeys = ['Overview', 'This Week', 'Analysis', 'Info', 'System'];
   sectionKeys.forEach(function(section) {
     html += '<div class="menu-section-label">' + section + '</div>';
     sections[section].forEach(function(id) {
@@ -1310,6 +1372,10 @@ function renderLeagueSubPage(container) {
       case 'opponentScout': html += renderOpponentScout(); break;
       case 'streaming': html += renderStreamingPage(); break;
       case 'watchlist': html += renderWatchlistPage(); break;
+      case 'teamOfWeek': html += renderTeamOfWeekPage(); break;
+      case 'lastNight': html += renderLastNightPage(); break;
+      case 'rookies': html += renderRookieReport(); break;
+      case 'lmNotes': html += renderLmNotesPage(); break;
       case 'statsTrends': html += renderStatsTrends(); break;
       case 'projections': html += renderROSProjections(); break;
       case 'schedule': html += renderSchedulePage(); break;
@@ -1369,7 +1435,7 @@ function renderWatchlistPage() {
   var html = '';
   players.forEach(function(p) {
     var owner = !(p.onTeamId > 0) ? 'Free agent' :
-      (p.onTeamId === S.myTeam.teamId ? 'Your team' : teamAbbrevFor(p.onTeamId));
+      (p.onTeamId === S.myTeam.teamId ? 'Your team' : teamNameFor(p.onTeamId));
     var alerts = watchlistAlerts(p);
     html += '<div class="card watch-card">';
     html += '<div class="watch-head">';
@@ -1428,9 +1494,9 @@ function watchlistPlayers() {
   return out;
 }
 
-function teamAbbrevFor(teamId) {
-  var t = (S.teams || []).find(function(x) { return x.teamId === teamId || x.id === teamId; });
-  return t ? (t.abbrev || t.name || 'Rostered') : 'Rostered';
+function teamNameFor(teamId) {
+  var t = (S.teams || []).find(function(x) { return x.teamId === teamId; });
+  return t ? (t.name || t.abbrev || 'Rostered') : 'Rostered';
 }
 
 // One label per status family, so "ACTIVE" turning into "HEALTHY" between
