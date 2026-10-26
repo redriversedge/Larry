@@ -320,6 +320,11 @@ body {
 .player-cell-info { min-width: 0; }
 .player-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; max-width: 120px; }
 .player-meta { font-size: 0.68rem; color: var(--text-muted); display: block; }
+/* Must roster (free agent in the top 75) and don't drop (rostered, top 75). */
+.roster-tag { display: inline-block; margin-left: 4px; padding: 0 5px; border-radius: 4px;
+  font-size: 0.58rem; font-weight: 800; letter-spacing: 0.3px; vertical-align: 1px; white-space: nowrap; }
+.roster-tag.must { background: rgba(245,158,11,0.18); color: var(--accent-gold); }
+.roster-tag.keep { background: rgba(59,130,246,0.18); color: var(--accent-blue); }
 
 /* --- SLOT BADGES --- */
 .slot-badge {
