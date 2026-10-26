@@ -157,6 +157,9 @@ function initState() {
     allPlayers: [],
     freeAgents: [],
     watchlist: [],
+    // Last injury status the user acknowledged per watched player id, so
+    // the watchlist can flag a change. See watchlistAlerts in tabs.js.
+    watchlistSeen: {},
     notifications: [],
     notifBadgeCount: 0,
     // NBA schedule, fetched once per season from proTeamSchedules_wl and
