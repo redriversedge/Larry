@@ -100,7 +100,8 @@ describe("larry-move handler: streaming", () => {
     await (await handler(post(Object.assign({}, FIXTURE, { payloadHash: "h-req-" + Date.now() })), {})).text();
     expect(sent.stream).toBe(true);
     expect(sent.tool_choice).toEqual({ type: "tool", name: "report_move" });
-    expect(sent.max_tokens).toBeGreaterThanOrEqual(1500);
+    expect(sent.max_tokens).toBe(900);
+    expect(sent.thinking).toEqual({ type: "disabled" });
   });
 
   it("serves a repeat request from cache without calling the API", async () => {

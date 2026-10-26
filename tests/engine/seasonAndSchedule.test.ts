@@ -446,6 +446,7 @@ describe("matchup windows", () => {
   });
 
   it("uses matchup 1's full opening week before the season starts", () => {
+    pinClock("2026-10-13T12:00:00");
     const state = stateWithSchedule();
     const ESPNSync = loadESPNSync(state);
     ESPNSync.enrichGamesRemaining();
@@ -456,6 +457,7 @@ describe("matchup windows", () => {
   });
 
   it("publishes the window as startDate and endDate for the UI", () => {
+    pinClock("2026-10-13T12:00:00");
     // These two were never assigned, so the dashboard and Timeline had
     // nothing to print.
     const state = stateWithSchedule();
