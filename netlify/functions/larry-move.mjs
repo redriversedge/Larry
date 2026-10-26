@@ -220,21 +220,26 @@ function buildDataBlock(ctx) {
     lines.push('  MATCHUP RUNS: ' + winStart + ' through ' + winEnd +
       ' (this is the scoring window, not a Monday-to-Sunday week)');
   }
+  const dayOf = Number(m.dayOfMatchup), total = Number(m.matchupDays);
+  if (isFinite(dayOf) && isFinite(total) && total > 0 && dayOf > 0) {
+    const early = dayOf * 2 <= total;
+    lines.push('  MATCHUP PROGRESS: day ' + num(dayOf, 0) + ' of ' + num(total, 0) +
+      (early ? ' (EARLY: most of the matchup is still to be played, nothing is decided)' : ''));
+  }
   if (m.myScores && typeof m.myScores === 'object') {
     cats.forEach((cat) => {
       const mine = (m.myScores || {})[cat];
       const theirs = (m.oppScores || {})[cat];
       const wp = m.winProb && m.winProb[cat] !== undefined
         ? ' | win ' + num(m.winProb[cat] * 100, 0) + '%' : '';
-      lines.push('  ' + cat + ': ' + num(mine) + ' vs ' + num(theirs) + wp);
+      const pr = m.projected && typeof m.projected === 'object' &&
+        m.projected.mine && m.projected.theirs &&
+        m.projected.mine[cat] !== undefined && m.projected.theirs[cat] !== undefined
+        ? ' | projected final ' + num(m.projected.mine[cat]) + ' vs ' + num(m.projected.theirs[cat]) : '';
+      lines.push('  ' + cat + ': now ' + num(mine) + ' vs ' + num(theirs) + pr + wp);
     });
-  }
-  if (m.strategy && typeof m.strategy === 'object') {
-    const g = (k) => Array.isArray(m.strategy[k])
-      ? m.strategy[k].slice(0, 10).map((x) => clean(x, 8)).join(', ') : '';
-    if (g('locks')) lines.push('  LOCKS: ' + g('locks'));
-    if (g('targets')) lines.push('  TARGETS: ' + g('targets'));
-    if (g('punts')) lines.push('  PUNTS: ' + g('punts'));
+    lines.push('  (win % is the app\'s projection of the final result. Under 30% means an underdog,');
+    lines.push('   not a category this manager has chosen to give up on.)');
   }
 
   if (Array.isArray(c.myRoster)) {
@@ -308,6 +313,8 @@ function buildSystemPrompt(ctx) {
         'started. Say when a decision can still wait.'
       : 'This league locks lineups DAILY. Lineup advice is for today.';
   const limitReached = pickupsSpent(ctx);
+  const catList = Array.isArray(league.categories) ? league.categories : [];
+  const countingOnly = catList.length > 0 && !catList.some((x) => /%/.test(String(x)));
 
   return `You are Larry, a fantasy basketball analyst helping ONE manager win THIS week's head-to-head category matchup. You are answering a single question: what should they do today?
 
@@ -318,10 +325,13 @@ HARD RULES, in priority order. These are not suggestions.
     ? 'THIS MANAGER HAS NO PICKUPS LEFT THIS MATCHUP. Do not suggest any add or drop. Lineup, IR and hold advice only.'
     : 'If a move would spend their last pickup of the matchup, say so explicitly.'}
 4. Only propose an IR move for a player marked IR ELIGIBLE, and only when an IR slot is free.
-5. ${lockRule}
+5. A player who is OUT or SUSPENDED does not play. Never suggest starting one, or moving one out of IR to "get stats".
+6. Never say a category is decided, conceded or punted while the matchup is EARLY (see MATCHUP PROGRESS). Early on, an underdog category is still in play; say how big the gap is instead.
+7. ${countingOnly ? 'Every category in this league is a counting stat. Do not talk about shooting nights or percentages.' : 'Talk about each category in its own terms: counting stats add up over games, percentages move on makes and attempts.'}
+8. ${lockRule}
 
 METHOD
-a. Decide which categories are winnable, already lost, or genuinely close, using current scores, games left on each side, and per-game rates. A category is not close just because the score is close; weigh how many games remain.
+a. Decide which categories are favored, close, or uphill, from the PROJECTED FINAL totals and win %, not the current score. Early in a matchup the current score is mostly zeros and says nothing; late in it the current score is most of the answer. A category is "lost" only when the remaining games cannot plausibly close the gap.
 b. Check today's lineup: every starter who plays today, bench players with games today who should swap in, and any empty starting slot.
 c. Check the wire: a free agent is only worth adding if they beat the worst healthy bench player in the close categories, or have meaningfully more games left this week.
 d. Check IR: any OUT roster player who is IR eligible and would free a slot.
@@ -440,13 +450,23 @@ function validateMove(input, ctx) {
   // Drop those actions here, where it is enforceable.
   const noAdds = pickupsSpent(ctx);
 
+  // Players who cannot play today. A lineup move that starts one is wrong
+  // however it is worded, so drop it here rather than trust the prompt.
+  const roster = ctx && Array.isArray(ctx.myRoster) ? ctx.myRoster : [];
+  const outNames = roster.filter((p) => p && /^(OUT|SUSPENSION|SUSPENDED|INJURY_RESERVE|IR)$/i
+    .test(String(p.injury || p.rawInjury || ''))).map((p) => String(p.name || '').toLowerCase()).filter(Boolean);
+  const startsOutPlayer = (a) => a.type === 'lineup' && a.players && typeof a.players === 'object' &&
+    outNames.some((n) => String(a.players.in || '').toLowerCase().indexOf(n) >= 0);
+
   const noMove = bool(input.noMove);
   const rawActions = Array.isArray(input.actions) ? input.actions : [];
   const actions = [];
+  let droppedOut = false;
   for (const a of rawActions.slice(0, MAX_ACTIONS)) {
     if (!a || typeof a !== 'object') continue;
     const type = ACTION_TYPES.indexOf(a.type) >= 0 ? a.type : 'hold';
     if (noAdds && (type === 'add_drop' || type === 'stream')) continue;
+    if (startsOutPlayer({ type: type, players: a.players })) { droppedOut = true; continue; }
     const action = clean(a.action, 200);
     const reason = clean(a.reason, 300);
     if (!action) continue;
@@ -467,11 +487,12 @@ function validateMove(input, ctx) {
   // If every action was a pickup we just stripped, the model's headline is
   // almost certainly "pick up X", which would now sit above an empty list.
   const strippedAll = noAdds && rawActions.length > 0 && actions.length === 0;
+  const strippedOut = droppedOut && actions.length === 0;
 
   return {
     headline: strippedAll
       ? 'No pickups left this matchup. Hold the roster and set the lineup.'
-      : headline,
+      : (strippedOut ? 'No move today. Start your healthy players who have games.' : headline),
     // A reply that claims a move but lists none is incoherent; treat it as
     // no-move rather than rendering an empty action list.
     noMove: noMove || actions.length === 0,

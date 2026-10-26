@@ -1186,8 +1186,12 @@ function gameHasStarted(game, now) {
 // a slight overestimate on crowded days. Games already started are left
 // out because the live score already has them. OUT, suspended and IR
 // players are left out entirely.
-function projectRestOfMatchup(players, now) {
+// opts.cv (optional): per-category coefficient of variation per game. When
+// given, the result also carries variance[cat], summed over the same
+// player-games the totals count, for the strategy engine's win odds.
+function projectRestOfMatchup(players, now, opts) {
   now = now || new Date();
+  var cv = (opts && opts.cv) || null;
   var cats = getOrderedCategories();
   var win = getMatchupWindow();
   var todayStr = localDateStr(now);
@@ -1207,7 +1211,8 @@ function projectRestOfMatchup(players, now) {
     });
   });
   var totals = {};
-  cats.forEach(function(cat) { totals[cat.abbr] = 0; });
+  var variance = {};
+  cats.forEach(function(cat) { totals[cat.abbr] = 0; variance[cat.abbr] = 0; });
   var games = 0;
   Object.keys(byDate).forEach(function(d) {
     var list = byDate[d].slice().sort(function(a, b) {
@@ -1215,11 +1220,18 @@ function projectRestOfMatchup(players, now) {
     }).slice(0, slots);
     list.forEach(function(p) {
       var pg = blendedPerGame(p);
-      cats.forEach(function(cat) { totals[cat.abbr] += pg[cat.abbr] || 0; });
+      cats.forEach(function(cat) {
+        var v = pg[cat.abbr] || 0;
+        totals[cat.abbr] += v;
+        if (cv) {
+          var sd = v * (cv[cat.abbr] || 0.6);
+          variance[cat.abbr] += sd * sd;
+        }
+      });
       games++;
     });
   });
-  return { totals: totals, games: games };
+  return { totals: totals, games: games, variance: variance, days: Object.keys(byDate).length };
 }
 
 // Roster tag for a player inside Larry's top 75: "MUST ROSTER" when he is

@@ -126,6 +126,21 @@ function larryMoveIsPreDraft() {
   return !((S.myTeam && S.myTeam.players) || []).length;
 }
 
+// Day N of M for the matchup window, from local date strings.
+function larryMoveWindowDays(win) {
+  if (!win || !win.startStr || !win.endStr) return { dayOf: 0, total: 0 };
+  var count = function(a, b) {
+    var pa = a.split('-'), pb = b.split('-');
+    var da = new Date(Number(pa[0]), Number(pa[1]) - 1, Number(pa[2]));
+    var db = new Date(Number(pb[0]), Number(pb[1]) - 1, Number(pb[2]));
+    return Math.round((db - da) / 86400000) + 1;
+  };
+  var total = count(win.startStr, win.endStr);
+  var today = localDateStr(new Date());
+  var dayOf = today < win.startStr ? 0 : (today > win.endStr ? total : count(win.startStr, today));
+  return { dayOf: dayOf, total: total };
+}
+
 function buildLarryMovePayload() {
   // Same reason as buildChatContext: a sync clears the rank cache and only
   // render paths recompute it, so tapping the Move button first after a
@@ -135,7 +150,10 @@ function buildLarryMovePayload() {
   var cats = getOrderedCategories();
   var myPlayers = (S.myTeam.players || []).slice();
   var strat = (S.matchup && S.matchup.strategy) || {};
-  var dates = getMatchupDates() || {};
+  // The real matchup window. getMatchupDates is a calendar-week guess and
+  // reported the wrong day count in opening week and the playoffs.
+  var win = getMatchupWindow() || {};
+  var winDays = larryMoveWindowDays(win);
 
   var oppTeam = null;
   for (var i = 0; i < (S.teams || []).length; i++) {
@@ -190,7 +208,12 @@ function buildLarryMovePayload() {
     },
     matchup: {
       period: S.league.currentMatchupPeriod || 0,
-      daysLeft: dates.daysLeft || 0,
+      daysLeft: win.daysLeft || 0,
+      // How far into the matchup we are. On day 1 at 0-0 nothing is
+      // decided, and Larry needs to be told that in numbers.
+      dayOfMatchup: winDays.dayOf,
+      matchupDays: winDays.total,
+      projected: strat.projected || null,
       // The real matchup window, which is a span of ESPN weeks and not a
       // Monday-to-Sunday calendar week. Opening week is short (Tue through
       // Sun) and playoff matchups run two weeks, so "how many days are

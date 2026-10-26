@@ -77,13 +77,24 @@ function loadEngines(state: any) {
   const isPreseason = () => state.__preseason === true;
   const larryRankText = (p: any) =>
     (!p || p.noEvidence || !p.durantRank ? "Larry rank --" : "Larry rank #" + p.durantRank);
+  // The real matchup projection from core.js, which the strategy engine
+  // now shares with the Matchup tab. The window is pinned by the test.
+  const core = fs.readFileSync(path.join(ROOT, "js/core.js"), "utf8");
+  const coreSrc = core.slice(core.indexOf("var BLEND_PRIOR_GAMES"), core.indexOf("// Roster tag for a player"));
+  const localDateStr = (d?: Date) => {
+    const x = d || new Date();
+    const p2 = (n: number) => String(n).padStart(2, "0");
+    return x.getFullYear() + "-" + p2(x.getMonth() + 1) + "-" + p2(x.getDate());
+  };
+  const getMatchupWindow = () => state.__window || { startStr: "2000-01-01", endStr: "2000-01-02", daysLeft: 0 };
   const fn = new Function(
     "window", "S", "getOrderedCategories", "fmt", "console", "document", "ESPNSync",
-    "durantKey", "durantText", "isPreseason", "larryRankText",
-    src + "\n; window.Engines = Engines; return window.Engines;",
+    "durantKey", "durantText", "isPreseason", "larryRankText", "localDateStr", "getMatchupWindow",
+    coreSrc + "\n" + src + "\n; window.Engines = Engines; return window.Engines;",
   );
   return fn(sandbox, state, getOrderedCategories, fmt, console,
-    { querySelectorAll: () => [] }, ESPNSync, durantKey, durantText, isPreseason, larryRankText);
+    { querySelectorAll: () => [] }, ESPNSync, durantKey, durantText, isPreseason, larryRankText,
+    localDateStr, getMatchupWindow);
 }
 
 function baseState(): any {
@@ -183,6 +194,7 @@ describe("legacy engines: matchup strategy", () => {
     const state = baseState();
     const strong = (id: number, mult: number) => makePlayer({
       id, slotId: 1, gamesRemaining: 3,
+      ...({ schedule: [{ date: "2030-01-08" }, { date: "2030-01-10" }, { date: "2030-01-12" }] } as any),
       stats: {
         season: { REB: 8 * mult, AST: 5 * mult, STL: 1.2 * mult, BLK: 0.8 * mult, PTS: 22 * mult },
         last7: {}, last30: {}, totals: {}, gp: {},
@@ -202,6 +214,7 @@ describe("legacy engines: matchup strategy", () => {
       oppScores: { REB: 12, AST: 8, STL: 2, BLK: 1, PTS: 35 },
     };
 
+    state.__window = { startStr: "2030-01-07", endStr: "2030-01-13", daysLeft: 7 };
     const Engines = loadEngines(state);
     const strategy = Engines.computeMatchupStrategy();
 
@@ -211,6 +224,55 @@ describe("legacy engines: matchup strategy", () => {
     for (const c of CATS) {
       expect(strategy.winProb[c]).toBeGreaterThan(0);
       expect(strategy.winProb[c]).toBeLessThanOrEqual(0.97);
+    }
+  });
+});
+
+describe("legacy engines: matchup strategy on day one", () => {
+  // Live on Oct 26 2026, first night of a matchup, 0-0 everywhere: the
+  // strategy called REB, AST, BLK and PTS punted and STL an 89% lock, and
+  // Larry's Move said the matchup was "basically decided". Two causes: only
+  // TODAY's starters were projected for the whole week (in a daily league
+  // anyone benched on a light night vanished from the projection), and the
+  // odds ignored that the rates themselves are uncertain.
+  function rosterOf(ids: number[], team: number, rate: number, starters: number) {
+    const days = ["2030-01-07", "2030-01-08", "2030-01-09", "2030-01-10", "2030-01-11", "2030-01-12", "2030-01-13"];
+    return ids.map((id, i) => makePlayer({
+      id, onTeamId: team, slotId: i < starters ? 1 : 12,
+      stats: {
+        season: { REB: 6 * rate, AST: 4 * rate, STL: 1.1 * rate, BLK: 0.7 * rate, PTS: 17 * rate },
+        last7: {}, last30: {}, totals: {}, gp: { season: 20 },
+      },
+      ...({ schedule: days.filter((_, d) => (d + i) % 2 === 0).map((date) => ({ date, timeLocal: "" })) } as any),
+    }));
+  }
+  function setup(myStarters: number) {
+    const state = baseState();
+    state.league.rosterSlots = [{ slotId: 0, count: 10 }];
+    state.__window = { startStr: "2030-01-07", endStr: "2030-01-13", daysLeft: 7 };
+    const mine = rosterOf([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13], 1, 1.0, myStarters);
+    const theirs = rosterOf([21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33], 2, 1.08, 10);
+    state.myTeam.players = mine;
+    state.teams = [{ teamId: 1, players: mine }, { teamId: 2, players: theirs }];
+    state.allPlayers = mine.concat(theirs);
+    state.matchup = { opponentTeamId: 2, myScores: {}, oppScores: {} };
+    return state;
+  }
+
+  it("counts players benched today in the week's projection", () => {
+    const all = loadEngines(setup(10)).computeMatchupStrategy();
+    const fewStarters = loadEngines(setup(3)).computeMatchupStrategy();
+    for (const c of CATS) {
+      expect(fewStarters.projected.mine[c]).toBeCloseTo(all.projected.mine[c], 6);
+    }
+  });
+
+  it("does not write off categories at 0-0 against a slightly better roster", () => {
+    const s = loadEngines(setup(3)).computeMatchupStrategy();
+    expect(s.punts).toEqual([]);
+    for (const c of CATS) {
+      expect(s.winProb[c]).toBeGreaterThan(0.3);
+      expect(s.winProb[c]).toBeLessThan(0.5);
     }
   });
 });
