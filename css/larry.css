@@ -1403,3 +1403,18 @@ body {
   font-size: 0.7rem; font-weight: 800; white-space: nowrap; }
 .lm-notes { margin: 0; padding: 10px 12px 14px; white-space: pre-wrap; word-break: break-word;
   font-family: inherit; font-size: 0.78rem; line-height: 1.45; color: var(--text-primary); }
+
+/* --- TRADE ANALYZER (3 a side) --- */
+.trade-builder { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 0 12px 8px; }
+.trade-side { min-width: 0; }
+.trade-side .filter-search { width: 100%; }
+.trade-chip { display: flex; align-items: center; gap: 4px; background: var(--bg-surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 4px 4px 4px 8px; margin-bottom: 4px; font-size: 0.78rem; }
+.trade-chip button { background: none; border: none; color: var(--text-muted); min-width: 32px; min-height: 32px; cursor: pointer; }
+.trade-verdict { margin: 4px 12px 12px; padding: 12px; background: var(--bg-input); border-radius: 8px; }
+.trade-bar-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; }
+.trade-bar-label { width: 34px; font-weight: 800; font-size: 0.75rem; }
+.trade-bars { flex: 1; min-width: 0; }
+.trade-bar { height: 7px; border-radius: 4px; }
+.trade-bar.before { background: var(--text-muted); opacity: 0.45; margin-bottom: 3px; }
+.trade-bar-nums { width: 104px; text-align: right; font-size: 0.72rem; line-height: 1.35; }
