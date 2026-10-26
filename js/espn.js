@@ -845,15 +845,32 @@ var ESPNSync = (function() {
         home: m.home ? {
           teamId: m.home.teamId,
           wins: m.home.totalPoints || 0,
+          cats: sideCategoryTotals(m.home),
           scoredPeriods: scoredPeriodIds(m.home)
         } : null,
         away: m.away ? {
           teamId: m.away.teamId,
           wins: m.away.totalPoints || 0,
+          cats: sideCategoryTotals(m.away),
           scoredPeriods: scoredPeriodIds(m.away)
         } : null
       };
     });
+  }
+
+  // Category totals for one side of any matchup in the league, keyed by
+  // category abbreviation, live when ESPN has live numbers. Team of the Week
+  // and the LM notes read these; null when ESPN sent no category scores
+  // (future matchups).
+  function sideCategoryTotals(side) {
+    var cum = liveScore(side);
+    if (!cum || !cum.scoreByStat || !Object.keys(cum.scoreByStat).length) return null;
+    var out = {};
+    (S.league.categories || []).forEach(function(cat) {
+      var e = cum.scoreByStat[String(cat.id)];
+      out[cat.abbr] = e && typeof e.score === 'number' ? e.score : 0;
+    });
+    return out;
   }
 
   // The scoring period ids a side was scored in, as numbers. ESPN keys
@@ -1460,6 +1477,16 @@ var ESPNSync = (function() {
     return 0;
   }
 
+  // Any matchup's window, by id. The LM notes and the reports need past
+  // matchups, not just the active one.
+  function windowForMatchup(matchupPeriodId) {
+    try {
+      return matchupWindowFor(matchupPeriodId, weekPlan(), observedMatchupWindows());
+    } catch (e) {
+      return null;
+    }
+  }
+
   // The window to count games against: the current matchup if one is
   // running, otherwise matchup 1 (preseason).
   function activeMatchupWindow() {
@@ -1650,7 +1677,12 @@ var ESPNSync = (function() {
   }
 
   // --- FETCH STATS FOR A SINGLE SCORING PERIOD (DAY) ---
-  function fetchScoringPeriodStats(scoringPeriodId) {
+  // opts (optional): { limit: n, names: {} }. With limit, asks ESPN for the
+  // n most-owned players in every status (rostered and free agents), which
+  // is what the league-wide reports need. With names, fills names[id] with
+  // { n: fullName, t: proTeamId } for every player returned.
+  function fetchScoringPeriodStats(scoringPeriodId, opts) {
+    opts = opts || {};
     var url = PROXY_URL + '?view=kona_player_info&scoringPeriodId=' + scoringPeriodId;
     var headers = {
       'x-espn-league-id': S.espn.leagueId,
@@ -1658,6 +1690,15 @@ var ESPNSync = (function() {
       'x-espn-swid': S.espn.swid,
       'x-espn-season': String(S.league.seasonId)
     };
+    if (opts.limit) {
+      headers['x-fantasy-filter'] = JSON.stringify({
+        players: {
+          limit: opts.limit,
+          filterStatus: { value: ['FREEAGENT', 'WAIVERS', 'ONTEAM'] },
+          sortPercOwned: { sortAsc: false, sortPriority: 1 }
+        }
+      });
+    }
     return fetch(url, { headers: headers })
       .then(function(r) { return r.json(); })
       .then(function(data) {
@@ -1667,7 +1708,11 @@ var ESPNSync = (function() {
         var entries = data && data.playerPoolEntries ? data.playerPoolEntries : [];
         entries.forEach(function(entry) {
           var id = entry.playerId || (entry.playerPoolEntry && entry.playerPoolEntry.player && entry.playerPoolEntry.player.id);
-          var rawStats = entry.playerPoolEntry && entry.playerPoolEntry.player && entry.playerPoolEntry.player.stats;
+          var rawPlayer = (entry.playerPoolEntry && entry.playerPoolEntry.player) || entry.player || null;
+          var rawStats = rawPlayer && rawPlayer.stats;
+          if (id && opts.names && rawPlayer) {
+            opts.names[id] = { n: rawPlayer.fullName || '', t: rawPlayer.proTeamId || 0 };
+          }
           if (id && rawStats) {
             // Find stats for this specific scoring period
             var periodStats = null;
@@ -2061,6 +2106,7 @@ var ESPNSync = (function() {
     openingNightStr: openingNightStr,
     weekRangeFrom: weekRangeFrom,
     matchupWindowFor: matchupWindowFor,
+    windowForMatchup: windowForMatchup,
     matchupForDateStr: matchupForDateStr,
     activeMatchupWindow: activeMatchupWindow,
     // Projection divisor guard: catches ESPN changing what its projection
