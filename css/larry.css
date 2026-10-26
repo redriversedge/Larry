@@ -1382,3 +1382,18 @@ body {
 .dura-green { background: var(--positive, #22c55e); }
 .dura-yellow { background: #f59e0b; }
 .dura-red { background: var(--negative, #ef4444); }
+
+/* --- WATCHLIST (Players tab toggle) --- */
+.players-mode { margin: 0 0 8px; }
+.players-mode .chip { padding: 8px 14px; font-size: 0.8rem; min-height: 36px; }
+.watch-dot { display: inline-block; min-width: 16px; padding: 0 4px; border-radius: 8px;
+  background: var(--accent-red, #ef4444); color: #fff; font-size: 0.62rem; line-height: 16px; text-align: center; }
+.watch-card { padding: 10px 12px; }
+.watch-head { display: flex; align-items: center; gap: 8px; }
+.watch-meta { font-size: 0.72rem; color: var(--text-secondary); margin: 6px 0; }
+.watch-alert { font-size: 0.75rem; font-weight: 600; padding: 6px 8px; border-radius: 6px; margin-top: 6px;
+  display: flex; align-items: center; flex-wrap: wrap; }
+.watch-alert.injury { background: rgba(239,68,68,0.15); color: #ef4444; }
+.watch-alert.hot { background: rgba(34,197,94,0.15); color: #22c55e; }
+.watch-alert.cold { background: rgba(59,130,246,0.15); color: #3b82f6; }
+.watch-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; text-align: center; margin-top: 4px; }

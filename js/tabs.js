@@ -813,6 +813,14 @@ function renderPlayers(container) {
   var cats = getOrderedCategories();
   var html = '';
 
+  html += renderPlayersModeToggle();
+  if (_playersMode === 'watch') {
+    try { html += renderWatchlistPage(); }
+    catch (e) { html += '<div class="card">Watchlist error: ' + esc(e.message) + '</div>'; }
+    container.innerHTML = html;
+    return;
+  }
+
   // Filter bar with dropdowns (v3 fix)
   html += '<div class="filter-bar">';
 
@@ -1342,51 +1350,146 @@ function renderWatchlistPage() {
     return '<div class="empty-state"><p>Nothing on your watchlist yet.</p>' +
       '<p class="text-xs muted">Open any player and tap Watch to add them.</p></div>';
   }
-
-  var players = [];
-  for (var i = 0; i < ids.length; i++) {
-    for (var j = 0; j < (S.allPlayers || []).length; j++) {
-      if (S.allPlayers[j].id === ids[i]) { players.push(S.allPlayers[j]); break; }
-    }
-  }
+  var players = watchlistPlayers();
   if (!players.length) {
     return '<div class="empty-state"><p>Your watchlist players are not in the ' +
       'current player pool. Sync to refresh.</p></div>';
   }
 
-  Engines.ensureDURANT(S.allPlayers || []);
-  players.sort(byDurantRank);
+  if (typeof Engines !== 'undefined' && Engines.ensureDURANT) Engines.ensureDURANT(S.allPlayers || []);
+  // Players with an alert first, then by Larry rank.
+  players.sort(function(a, b) {
+    var aa = watchlistAlerts(a).length ? 0 : 1;
+    var bb = watchlistAlerts(b).length ? 0 : 1;
+    if (aa !== bb) return aa - bb;
+    return byDurantRank(a, b);
+  });
 
   var cats = getOrderedCategories();
-  var html = '<div class="card"><div class="table-scroll">' +
-    '<table class="data-table compact"><thead><tr>' +
-    '<th style="text-align:left;min-width:120px">Player</th>' +
-    '<th class="stat-col">Status</th><th class="stat-col">Games</th>';
-  cats.forEach(function(cat) {
-    html += '<th class="stat-col" style="color:' + cat.color + '">' + cat.abbr + '</th>';
-  });
-  html += '<th class="stat-col"></th></tr></thead><tbody>';
-
+  var html = '';
   players.forEach(function(p) {
-    var owner = p.onTeamId === 0 ? 'FA' : (p.onTeamId === S.myTeam.teamId ? 'Mine' : 'Rostered');
-    html += '<tr>';
-    html += '<td style="cursor:pointer" onclick="openPlayerPopup(' + p.id + ')">' +
-      renderPlayerCell(p) + '</td>';
-    html += '<td class="stat-col text-xs">' + statusBadge(p.injuryStatus) + ' ' + esc(owner) + '</td>';
-    html += '<td class="stat-col">' + (p.gamesRemaining || 0) + '</td>';
-    var pg = ESPNSync.getPerGameStats(p, 'season');
-    cats.forEach(function(cat) {
-      var v = pg ? pg[cat.abbr] : null;
-      html += '<td class="stat-col">' + (v != null ? fmt(v, 1) : '') + '</td>';
-    });
-    html += '<td class="stat-col"><button class="btn btn-sm btn-secondary" ' +
-      'style="min-height:44px" aria-label="Remove from watchlist" ' +
-      'onclick="toggleWatchlist(' + p.id + ');render()">Remove</button></td>';
-    html += '</tr>';
-  });
+    var owner = !(p.onTeamId > 0) ? 'Free agent' :
+      (p.onTeamId === S.myTeam.teamId ? 'Your team' : teamAbbrevFor(p.onTeamId));
+    var alerts = watchlistAlerts(p);
+    html += '<div class="card watch-card">';
+    html += '<div class="watch-head">';
+    html += '<div style="cursor:pointer;flex:1;min-width:0" onclick="openPlayerPopup(' + p.id + ')">' +
+      renderPlayerCell(p) + '</div>';
+    html += '<button class="btn btn-sm btn-secondary" style="min-height:44px" ' +
+      'aria-label="Remove from watchlist" onclick="toggleWatchlist(' + p.id + ');render()">' +
+      '\u2716</button>';
+    html += '</div>';
 
-  html += '</tbody></table></div></div>';
+    alerts.forEach(function(a) {
+      html += '<div class="watch-alert ' + a.kind + '">' + esc(a.text);
+      if (a.kind === 'injury') {
+        html += ' <button class="btn btn-sm btn-secondary" style="min-height:32px;margin-left:6px" ' +
+          'onclick="ackWatchStatus(' + p.id + ')">Got it</button>';
+      }
+      html += '</div>';
+    });
+
+    html += '<div class="watch-meta">' + statusBadge(p.injuryStatus) + ' ' +
+      esc(watchStatusLabel(p.injuryStatus)) + ' &middot; ' + esc(owner) + ' &middot; ' +
+      larryRankText(p) + ' &middot; <strong>' + (p.gamesRemaining || 0) +
+      '</strong> game' + ((p.gamesRemaining || 0) === 1 ? '' : 's') + ' left this week</div>';
+
+    // Recent form: last 7 per game, with the change against the season.
+    var split = 'last7';
+    var recent = ESPNSync.getPerGameStats(p, split);
+    if (!recent) { split = 'last15'; recent = ESPNSync.getPerGameStats(p, split); }
+    var season = ESPNSync.getPerGameStats(p, 'season');
+    if (recent) {
+      html += '<div class="watch-stats"><span class="text-xs muted">' +
+        (split === 'last7' ? 'Last 7' : 'Last 15') + ' per game</span><div class="watch-grid">';
+      cats.forEach(function(cat) {
+        var v = recent[cat.abbr];
+        var base = season ? season[cat.abbr] : null;
+        html += '<div><div class="text-xs" style="color:' + cat.color + '">' + cat.abbr + '</div>' +
+          '<div><strong>' + (v != null ? fmt(v, 1) : '--') + '</strong></div>' +
+          '<div class="text-xs">' + (v != null && base ? trendArrow(v, base) : '') + '</div></div>';
+      });
+      html += '</div></div>';
+    } else {
+      html += '<div class="text-xs muted">No games played yet this season.</div>';
+    }
+    html += '</div>';
+  });
   return html;
+}
+
+function watchlistPlayers() {
+  var ids = S.watchlist || [];
+  var all = S.allPlayers || [];
+  var byId = {};
+  for (var j = 0; j < all.length; j++) byId[all[j].id] = all[j];
+  var out = [];
+  for (var i = 0; i < ids.length; i++) if (byId[ids[i]]) out.push(byId[ids[i]]);
+  return out;
+}
+
+function teamAbbrevFor(teamId) {
+  var t = (S.teams || []).find(function(x) { return x.teamId === teamId || x.id === teamId; });
+  return t ? (t.abbrev || t.name || 'Rostered') : 'Rostered';
+}
+
+// One label per status family, so "ACTIVE" turning into "HEALTHY" between
+// syncs is not reported as a change.
+function watchStatusLabel(status) {
+  switch ((status || '').toUpperCase()) {
+    case 'GTD': case 'DAY_TO_DAY': case 'GAME_TIME_DECISION': return 'Day to day';
+    case 'OUT': return 'Out';
+    case 'SUSPENSION': return 'Suspended';
+    case 'IR': case 'INJURED_RESERVE': return 'IR';
+    default: return 'Healthy';
+  }
+}
+
+// Alerts for one watched player: hot or cold form, and an injury status
+// that differs from the last one the user acknowledged. The acknowledged
+// status is recorded when the player is starred and when "Got it" is tapped.
+function watchlistAlerts(p) {
+  var out = [];
+  if (!p) return out;
+  if (!S.watchlistSeen) S.watchlistSeen = {};
+  var now = watchStatusLabel(p.injuryStatus);
+  var seen = S.watchlistSeen[p.id];
+  if (seen === undefined) { S.watchlistSeen[p.id] = now; seen = now; }
+  if (seen !== now) out.push({ kind: 'injury', text: 'Status changed: ' + seen + ' \u2192 ' + now });
+  if (p.trend === 'hot') out.push({ kind: 'hot', text: '\u{1F525} Heating up: last 7 well above his season line' });
+  else if (p.trend === 'cold') out.push({ kind: 'cold', text: '\u{1F976} Cooling off: last 7 well below his season line' });
+  return out;
+}
+
+function watchlistAlertCount() {
+  var n = 0;
+  watchlistPlayers().forEach(function(p) { if (watchlistAlerts(p).length) n++; });
+  return n;
+}
+
+function ackWatchStatus(playerId) {
+  if (!S.watchlistSeen) S.watchlistSeen = {};
+  var p = watchlistPlayers().find(function(x) { return x.id === playerId; });
+  if (p) S.watchlistSeen[playerId] = watchStatusLabel(p.injuryStatus);
+  autosave();
+  render();
+}
+
+// Players tab: Players / Watchlist toggle.
+var _playersMode = 'all';
+function setPlayersMode(mode) {
+  _playersMode = mode === 'watch' ? 'watch' : 'all';
+  render();
+}
+function renderPlayersModeToggle() {
+  var n = (S.watchlist || []).length;
+  var alerts = n ? watchlistAlertCount() : 0;
+  return '<div class="filter-chips players-mode">' +
+    '<button class="chip' + (_playersMode === 'all' ? ' active' : '') +
+    '" onclick="setPlayersMode(\'all\')">Players</button>' +
+    '<button class="chip' + (_playersMode === 'watch' ? ' active' : '') +
+    '" onclick="setPlayersMode(\'watch\')">\u2B50 Watchlist' + (n ? ' (' + n + ')' : '') +
+    (alerts ? ' <span class="watch-dot">' + alerts + '</span>' : '') + '</button></div>';
 }
 
 // --- STREAMING (phase 8) ---
@@ -3003,8 +3106,15 @@ function renderPopupSchedule(p) {
 function toggleWatchlist(playerId) {
   if (!S.watchlist) S.watchlist = [];
   var idx = S.watchlist.indexOf(playerId);
-  if (idx >= 0) S.watchlist.splice(idx, 1);
-  else S.watchlist.push(playerId);
+  if (!S.watchlistSeen) S.watchlistSeen = {};
+  if (idx >= 0) {
+    S.watchlist.splice(idx, 1);
+    delete S.watchlistSeen[playerId];
+  } else {
+    S.watchlist.push(playerId);
+    var wp = (S.allPlayers || []).find(function(x) { return x.id === playerId; });
+    S.watchlistSeen[playerId] = watchStatusLabel(wp ? wp.injuryStatus : '');
+  }
   autosave();
 }
 
