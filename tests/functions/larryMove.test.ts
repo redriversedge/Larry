@@ -375,3 +375,56 @@ describe("larry-move: field sanitizer", () => {
     expect(clean("<b>x</b>", 50)).toBe("bx/b");
   });
 });
+
+// Oct 26 2026, day 1 of a matchup at 0-0: Move said four categories were
+// "punted", the matchup was "basically decided", and told the manager to
+// swap Chet Holmgren (OUT) in from IR for stats.
+describe("larry-move early-matchup honesty", () => {
+  const { buildDataBlock, buildSystemPrompt, validateMove } = moveInternal as any;
+  const ctx = {
+    league: { categories: ["REB", "AST", "STL", "BLK", "PTS"] },
+    matchup: {
+      opponentName: "Opp", daysLeft: 7, dayOfMatchup: 1, matchupDays: 7,
+      myScores: { REB: 0 }, oppScores: { REB: 0 },
+      projected: { mine: { REB: 210 }, theirs: { REB: 230 } },
+      winProb: { REB: 0.4 },
+      strategy: { locks: [], targets: [], punts: ["REB"] },
+    },
+    myRoster: [{ name: "Chet Holmgren", injury: "OUT" }, { name: "Healthy Guy", injury: "ACTIVE" }],
+  };
+
+  it("tells the model how far into the matchup it is and never says PUNTS", () => {
+    const block = buildDataBlock(ctx);
+    expect(block).toContain("day 1 of 7");
+    expect(block).toContain("EARLY");
+    expect(block).toContain("projected final 210.0 vs 230.0");
+    expect(block).not.toMatch(/PUNTS:/);
+  });
+
+  it("carries the early-matchup and OUT-player rules", () => {
+    const prompt = buildSystemPrompt(ctx);
+    expect(prompt).toMatch(/OUT or SUSPENDED does not play/);
+    expect(prompt).toMatch(/Never say a category is decided, conceded or punted/);
+    expect(prompt).toMatch(/counting stat/);
+  });
+
+  it("drops a lineup move that starts an OUT player", () => {
+    const out = validateMove({
+      headline: "Swap in Chet from IR",
+      actions: [{ type: "lineup", action: "Start Chet", reason: "stats", players: { in: "Chet Holmgren", out: "Healthy Guy" } }],
+      matchupRead: { summary: "Early." },
+    }, ctx);
+    expect(out.actions).toEqual([]);
+    expect(out.noMove).toBe(true);
+    expect(out.headline).not.toMatch(/Chet/);
+  });
+
+  it("keeps a lineup move for a healthy player", () => {
+    const out = validateMove({
+      headline: "Start Healthy Guy",
+      actions: [{ type: "lineup", action: "Start Healthy Guy", reason: "he plays", players: { in: "Healthy Guy" } }],
+      matchupRead: { summary: "Early." },
+    }, ctx);
+    expect(out.actions).toHaveLength(1);
+  });
+});

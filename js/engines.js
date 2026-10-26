@@ -1717,32 +1717,45 @@ var Engines = (function() {
 
     var myScores = S.matchup.myScores || {};
     var oppScores = S.matchup.oppScores || {};
-    var myGR = S.matchup.myGamesRemaining || 0;
-    var oppGR = S.matchup.oppGamesRemaining || 0;
-    var hasScores = Object.keys(myScores).length > 0;
 
-    // Get my team's per-game production by category (starters only)
-    var myPlayers = (S.myTeam.players || []).filter(function(p) { return p.slotId < 12; });
+    // The whole roster, not today's starters. This is a daily league: the
+    // slots ESPN reports are TODAY's lineup, so filtering on slotId < 12
+    // dropped every player benched today from the whole week's projection.
+    // On a light Monday that wrote off four categories at 0-0 and Larry's
+    // Move repeated it. projectRestOfMatchup (core.js) is the same
+    // projection the Matchup tab shows: each remaining day, the best
+    // healthy players with a game fill the starting slots, OUT and IR
+    // excluded.
+    function fullRoster(list) {
+      return (list || []).map(function(stub) {
+        var full = enrichPlayer(stub);
+        return full === stub ? stub : Object.assign({}, full, { slotId: stub.slotId });
+      });
+    }
     var oppTeam = S.teams.find(function(t) { return t.teamId === S.matchup.opponentTeamId; });
-    var oppPlayers = oppTeam ? (oppTeam.players || []).filter(function(p) { return p.slotId < 12; }) : [];
+    var mine = projectRestOfMatchup(fullRoster(S.myTeam.players), null, { cv: CATEGORY_CV });
+    var theirs = projectRestOfMatchup(fullRoster(oppTeam ? oppTeam.players : []), null, { cv: CATEGORY_CV });
 
     strategy.winProb = {};
+    strategy.projected = { mine: {}, theirs: {} };
 
     cats.forEach(function(cat) {
-      var myNow = myScores[cat.abbr] || 0;
-      var oppNow = oppScores[cat.abbr] || 0;
-
-      // Project remaining production and its variance. Variance accumulates
-      // per game, so a category decided over 25 remaining games is far less
-      // certain than the same margin with 2 games left: that is the whole
-      // reason to model it instead of scaling the margin.
-      var myProj = projectSide(myPlayers, cat);
-      var oppProj = projectSide(oppPlayers, cat);
-
-      var myTotal = myNow + myProj.mean;
-      var oppTotal = oppNow + oppProj.mean;
+      var myTotal = (myScores[cat.abbr] || 0) + (mine.totals[cat.abbr] || 0);
+      var oppTotal = (oppScores[cat.abbr] || 0) + (theirs.totals[cat.abbr] || 0);
+      strategy.projected.mine[cat.abbr] = myTotal;
+      strategy.projected.theirs[cat.abbr] = oppTotal;
       var mean = cat.isNegative ? (oppTotal - myTotal) : (myTotal - oppTotal);
-      var variance = myProj.variance + oppProj.variance;
+      // Two sources of doubt. Game-to-game noise (CATEGORY_CV) is
+      // independent per game and mostly cancels over a week. The bigger one
+      // is that the RATES themselves are uncertain, especially early in the
+      // season, and a missed game or a minutes change moves a whole side at
+      // once. That part scales with how much production is still to come,
+      // so it shrinks to nothing as the week runs out. Without it a 4-day
+      // projection edge read as 89% on the first night.
+      var rateSd = function(rest) { return RATE_UNCERTAINTY * rest; };
+      var variance = (mine.variance[cat.abbr] || 0) + (theirs.variance[cat.abbr] || 0) +
+        Math.pow(rateSd(mine.totals[cat.abbr] || 0), 2) +
+        Math.pow(rateSd(theirs.totals[cat.abbr] || 0), 2);
 
       strategy.winProb[cat.abbr] = categoryWinProb(mean, variance);
 
@@ -1788,6 +1801,13 @@ var Engines = (function() {
   var LOCK_THRESHOLD = 0.70;
   var PUNT_THRESHOLD = 0.30;
 
+  // Standard deviation of a side's remaining production from not knowing
+  // its true rates and games, as a fraction of that production. A judgment
+  // call, not a fitted number: 15% makes a 10% projected edge with a full
+  // week left about a 2-in-3 favourite rather than a lock, and fades to
+  // nothing on the last night when there is no production left to doubt.
+  var RATE_UNCERTAINTY = 0.15;
+
   // Per-game standard deviation as a fraction of a player's own per-game
   // mean. Blocks and steals are spiky (a player averaging 1.0 blocks swings
   // between 0 and 3 nightly); points and rebounds are comparatively smooth.
@@ -1806,32 +1826,6 @@ var Engines = (function() {
     var y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t -
       0.284496736) * t + 0.254829592) * t * Math.exp(-x * x);
     return 0.5 * (1 + sign * y);
-  }
-
-  // Projected remaining production for one side of a category: the sum of
-  // each player's per-game rate times their games left, with variance
-  // accumulating per game.
-  function projectSide(players, cat) {
-    var mean = 0;
-    var variance = 0;
-    var cv = CATEGORY_CV[cat.abbr] || DEFAULT_CV;
-    for (var i = 0; i < players.length; i++) {
-      var p = enrichPlayer(players[i]);
-      var games = p.gamesRemaining || 0;
-      if (games <= 0) continue;
-      // Season line blended toward ESPN's projection (blendedPerGame in
-      // core.js), the same rate the matchup projections and Larry's Move
-      // use. Raw season averages are noise for the first few weeks and zero
-      // for anyone who has not played, which called winnable categories
-      // lost and fed that straight into Larry's Move and chat.
-      var rates = typeof blendedPerGame === 'function' ? blendedPerGame(p) : null;
-      var perGame = rates ? (rates[cat.abbr] || 0)
-        : (p.stats && p.stats.season ? (p.stats.season[cat.abbr] || 0) : 0);
-      mean += perGame * games;
-      var sd = perGame * cv;
-      variance += sd * sd * games;
-    }
-    return { mean: mean, variance: variance };
   }
 
   // Probability that a projected margin ends up positive. With no variance
