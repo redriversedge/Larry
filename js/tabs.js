@@ -426,7 +426,7 @@ function renderPlayerCell(p) {
   if (p.trend === 'hot') html += '<span class="trend-badge hot">\u2191 HOT</span>';
   else if (p.trend === 'cold') html += '<span class="trend-badge cold">\u2193 COLD</span>';
   html += '</span>';
-  html += '<span class="player-meta">' + formatPositions(p.eligibleSlots) + ' - ' + esc(p.nbaTeam) + '</span>';
+  html += '<span class="player-meta">' + formatPositions(p.eligibleSlots) + ' - ' + esc(p.nbaTeam) + rosterTagHtml(p) + '</span>';
   html += '</div></div>';
   return html;
 }
@@ -2662,7 +2662,7 @@ function buildPlayerPopup() {
   // every player. "Own: -%" reads like a bug; omit the field instead.
   var ownPct = typeof p.ownership === 'number' && isFinite(p.ownership)
     ? ' | Own: ' + fmt(p.ownership, 0) + '%' : '';
-  html += '<div class="popup-meta">' + formatPositions(p.eligibleSlots) + ' | ' + esc(p.nbaTeam) + ownPct + '</div>';
+  html += '<div class="popup-meta">' + formatPositions(p.eligibleSlots) + ' | ' + esc(p.nbaTeam) + ownPct + rosterTagHtml(p) + '</div>';
   var info = _playerInfo[parseInt(p.id, 10)] || {};
   var bio = info.bio;
   if (bio) {

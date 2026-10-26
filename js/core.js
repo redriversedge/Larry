@@ -1216,6 +1216,23 @@ function projectRestOfMatchup(players, now) {
   return { totals: totals, games: games };
 }
 
+// Roster tag for a player inside Larry's top 75: "MUST ROSTER" when he is
+// a free agent (grab him), "DON'T DROP" when he is on any team. Players are
+// ranked against the whole league, so these are players every 12-team
+// roster wants. Returns '' when no tag applies.
+var ROSTER_TAG_CUTOFF = 75;
+function rosterTagFor(p) {
+  if (!p || p.noEvidence || !p.durantRank || p.durantRank > ROSTER_TAG_CUTOFF) return '';
+  return p.onTeamId > 0 ? 'dontdrop' : 'must';
+}
+function rosterTagHtml(p) {
+  var t = rosterTagFor(p);
+  if (!t) return '';
+  return t === 'must'
+    ? ' <span class="roster-tag must" title="Top ' + ROSTER_TAG_CUTOFF + ' and unrostered: pick him up">MUST ROSTER</span>'
+    : ' <span class="roster-tag keep" title="Top ' + ROSTER_TAG_CUTOFF + ': keep him">DON\'T DROP</span>';
+}
+
 // What users see in place of the DURANT score: the rank, which is what the
 // score is for. The score itself stays internal, like the z-scores.
 function larryRankText(p) {
