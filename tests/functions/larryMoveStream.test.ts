@@ -100,7 +100,7 @@ describe("larry-move handler: streaming", () => {
     await (await handler(post(Object.assign({}, FIXTURE, { payloadHash: "h-req-" + Date.now() })), {})).text();
     expect(sent.stream).toBe(true);
     expect(sent.tool_choice).toEqual({ type: "tool", name: "report_move" });
-    expect(sent.max_tokens).toBe(900);
+    expect(sent.max_tokens).toBe(1800);
     expect(sent.thinking).toEqual({ type: "disabled" });
   });
 
@@ -174,5 +174,19 @@ describe("larry-move client: parseLarryMoveStream", () => {
     const out = parse('{"p":0}\n{"error":"Larry took too long. Tap Retry to try again."}\n');
     expect(out.move).toBeNull();
     expect(out.error).toMatch(/took too long/);
+  });
+});
+
+// Oct 29-30 2026: every Move call ran ~11s and came back "could not produce
+// a usable answer". The tool JSON was being cut off at max_tokens.
+describe("larry-move truncated tool input", () => {
+  it("records why: stop_reason max_tokens and an unparsable fragment", () => {
+    const c = (_internal as any).toolCollector();
+    c.push({ type: "content_block_start", content_block: { type: "tool_use", name: "report_move" } });
+    c.push({ type: "content_block_delta", delta: { type: "input_json_delta", partial_json: '{"headline":"Start Chet","matchupRead":{"summ' } });
+    c.push({ type: "message_delta", delta: { stop_reason: "max_tokens" } });
+    expect(c.input()).toBeNull();
+    expect(c.stopReason()).toBe("max_tokens");
+    expect(c.jsonLength()).toBeGreaterThan(0);
   });
 });

@@ -33,7 +33,13 @@ const MODEL = process.env.ANTHROPIC_MOVE_MODEL || process.env.ANTHROPIC_MODEL ||
 // Back to the pre-streaming 900. The owner found the answers worse after
 // this went to 1500 (Oct 23): the card wants a short, decisive call, and a
 // bigger budget bought longer, vaguer reasoning in the same fixed fields.
-const MAX_TOKENS = Number(process.env.ANTHROPIC_MOVE_MAX_TOKENS) || 900;
+// Room for the whole report_move call. At 900 the tool input was being cut
+// off mid-JSON (every call ran ~11s, which is 900 tokens at this model's
+// speed), the truncated JSON failed to parse, and the card said "Larry
+// could not produce a usable answer" on every try from Oct 29. Thinking is
+// disabled, so all of this goes to the answer; 1800 still finishes well
+// inside the 25s cap at the measured rate.
+const MAX_TOKENS = Number(process.env.ANTHROPIC_MOVE_MAX_TOKENS) || 1800;
 
 // Overall ceiling on one upstream call, inside the ~29s a stream survives.
 const STREAM_CAP_MS = Number(process.env.ANTHROPIC_STREAM_CAP_MS) || 25000;
@@ -548,9 +554,13 @@ function toolCollector() {
   let json = '';
   let inTool = false;
   let chunks = 0;
+  let stopReason = '';
   return {
     push(evt) {
       if (!evt || typeof evt !== 'object') return false;
+      if (evt.type === 'message_delta' && evt.delta && evt.delta.stop_reason) {
+        stopReason = String(evt.delta.stop_reason);
+      }
       if (evt.type === 'content_block_start' && evt.content_block &&
           evt.content_block.type === 'tool_use' && evt.content_block.name === 'report_move') {
         inTool = true;
@@ -570,6 +580,8 @@ function toolCollector() {
       return false;
     },
     chunks() { return chunks; },
+    stopReason() { return stopReason; },
+    jsonLength() { return json.length; },
     input() {
       if (!json) return null;
       try { return JSON.parse(json); } catch (e) { return null; }
@@ -726,6 +738,10 @@ export default async (req, context) => {
         }
         const move = validateMove(collector.input(), body);
         if (!move) {
+          // Say why in the function log, so the next failure is diagnosable
+          // from Netlify without reproducing it. No request content.
+          console.error("Larry's Move: unusable answer:", 'stop_reason=' + (collector.stopReason() || 'none'),
+            'json_chars=' + collector.jsonLength(), 'parsed=' + (collector.input() ? 'yes' : 'no'));
           ctrl.enqueue(encoder.encode(frame({ error: 'Larry could not produce a usable answer. Try again.' })));
         } else {
           move.dataUsed = dataUsedFor(body);
