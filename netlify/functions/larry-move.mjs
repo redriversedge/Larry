@@ -331,7 +331,8 @@ HARD RULES, in priority order. These are not suggestions.
     ? 'THIS MANAGER HAS NO PICKUPS LEFT THIS MATCHUP. Do not suggest any add or drop. Lineup, IR and hold advice only.'
     : 'If a move would spend their last pickup of the matchup, say so explicitly.'}
 4. Only propose an IR move for a player marked IR ELIGIBLE, and only when an IR slot is free.
-5. A player who is OUT or SUSPENDED does not play. Never suggest starting one, or moving one out of IR to "get stats".
+5. Only move a player INTO the starting lineup if his line says PLAYS TODAY. A player with no game today scores nothing from a starting slot, so starting him over someone who plays today throws stats away. Never do it.
+5b. A player who is OUT or SUSPENDED does not play. Never suggest starting one, or moving one out of IR to "get stats".
 6. Never say a category is decided, conceded or punted while the matchup is EARLY (see MATCHUP PROGRESS). Early on, an underdog category is still in play; say how big the gap is instead.
 7. ${countingOnly ? 'Every category in this league is a counting stat. Do not talk about shooting nights or percentages.' : 'Talk about each category in its own terms: counting stats add up over games, percentages move on makes and attempts.'}
 8. ${lockRule}
@@ -463,6 +464,20 @@ function validateMove(input, ctx) {
     .test(String(p.injury || p.rawInjury || ''))).map((p) => String(p.name || '').toLowerCase()).filter(Boolean);
   const startsOutPlayer = (a) => a.type === 'lineup' && a.players && typeof a.players === 'object' &&
     outNames.some((n) => String(a.players.in || '').toLowerCase().indexOf(n) >= 0);
+  // Roster players with no game today. Starting one is never right: he
+  // scores nothing from the slot. Oct 30 2026: Move said to start Fox and
+  // Daniels over Draymond and Poeltl while its own reason said Fox and
+  // Daniels had no game.
+  const idleNames = roster.filter((p) => p && p.gamesToday === false && p.name)
+    .map((p) => String(p.name).toLowerCase());
+  const startsIdlePlayer = (a) => {
+    if (a.type !== 'lineup') return false;
+    const into = a.players && typeof a.players === 'object' && a.players.in
+      ? String(a.players.in)
+      : (/\bstart\s+(.*)$/i.exec(String(a.action || '')) || [])[1] || '';
+    const text = into.toLowerCase();
+    return text && idleNames.some((n) => text.indexOf(n) >= 0);
+  };
 
   const noMove = bool(input.noMove);
   const rawActions = Array.isArray(input.actions) ? input.actions : [];
@@ -473,6 +488,7 @@ function validateMove(input, ctx) {
     const type = ACTION_TYPES.indexOf(a.type) >= 0 ? a.type : 'hold';
     if (noAdds && (type === 'add_drop' || type === 'stream')) continue;
     if (startsOutPlayer({ type: type, players: a.players })) { droppedOut = true; continue; }
+    if (startsIdlePlayer({ type: type, players: a.players, action: a.action })) { droppedOut = true; continue; }
     const action = clean(a.action, 200);
     const reason = clean(a.reason, 300);
     if (!action) continue;
@@ -498,7 +514,11 @@ function validateMove(input, ctx) {
   return {
     headline: strippedAll
       ? 'No pickups left this matchup. Hold the roster and set the lineup.'
-      : (strippedOut ? 'No move today. Start your healthy players who have games.' : headline),
+      : (strippedOut ? 'No move today. Start your healthy players who have games.'
+        // Something was dropped but other actions survive: the model's
+        // headline probably describes the dropped one, so lead with the
+        // first surviving action instead.
+        : (droppedOut ? clean(actions[0].action, MAX_HEADLINE) : headline)),
     // A reply that claims a move but lists none is incoherent; treat it as
     // no-move rather than rendering an empty action list.
     noMove: noMove || actions.length === 0,

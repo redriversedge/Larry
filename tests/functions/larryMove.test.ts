@@ -428,3 +428,47 @@ describe("larry-move early-matchup honesty", () => {
     expect(out.actions).toHaveLength(1);
   });
 });
+
+// Oct 30 2026: Move told the manager to start Fox and Daniels over Draymond
+// and Poeltl, while its own reason said Fox and Daniels had no game today.
+describe("larry-move never starts a player with no game today", () => {
+  const { validateMove, buildSystemPrompt } = moveInternal as any;
+  const ctx = {
+    league: { categories: ["REB", "AST", "STL", "BLK", "PTS"] },
+    myRoster: [
+      { name: "De'Aaron Fox", injury: "ACTIVE", gamesToday: false },
+      { name: "Dyson Daniels", injury: "ACTIVE", gamesToday: false },
+      { name: "Draymond Green", injury: "ACTIVE", gamesToday: true },
+      { name: "Bench Guy", injury: "ACTIVE", gamesToday: true },
+    ],
+  };
+  const move = (actions: any[]) => validateMove({
+    headline: "Start Fox and Daniels over Draymond and Poeltl",
+    actions, matchupRead: { summary: "Three days left." },
+  }, ctx);
+
+  it("drops the swap and the headline that described it", () => {
+    const out = move([
+      { type: "lineup", action: "Sit Draymond Green, start De'Aaron Fox and Dyson Daniels today", reason: "x",
+        players: { in: "De'Aaron Fox, Dyson Daniels", out: "Draymond Green" } },
+      { type: "hold", action: "Don't use your last pickup today", reason: "nobody better" },
+    ]);
+    expect(out.actions.map((a: any) => a.type)).toEqual(["hold"]);
+    expect(out.headline).toBe("Don't use your last pickup today");
+  });
+
+  it("reads the action text when players.in is missing", () => {
+    const out = move([{ type: "lineup", action: "Start Dyson Daniels over Bench Guy", reason: "x" }]);
+    expect(out.actions).toEqual([]);
+    expect(out.noMove).toBe(true);
+  });
+
+  it("keeps starting someone who plays today", () => {
+    const out = move([{ type: "lineup", action: "Start Bench Guy over Draymond Green", reason: "x", players: { in: "Bench Guy" } }]);
+    expect(out.actions).toHaveLength(1);
+  });
+
+  it("says so in the prompt", () => {
+    expect(buildSystemPrompt(ctx)).toMatch(/Only move a player INTO the starting lineup if his line says PLAYS TODAY/);
+  });
+});
