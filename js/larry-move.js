@@ -47,6 +47,13 @@ function larryMoveIsStale() {
 }
 
 function larryMovePlayer(p, includeOwnership) {
+  // Whether he plays TODAY, read from the schedule now. p.gamesToday is
+  // stamped at sync time, so after midnight, or on the roster's own stub
+  // copies, it can describe a different day.
+  var todayStr = localDateStr(new Date());
+  var today = null;
+  (p.schedule || []).forEach(function(g) { if (!today && g && g.date === todayStr) today = g; });
+  if (!today && !(p.schedule && p.schedule.length) && p.gamesToday) today = p.gameToday || { opponent: '' };
   var slotEligible = (p.eligibleSlots || []).map(function(sid) {
     return ESPN_SLOT_MAP[sid];
   }).filter(Boolean);
@@ -60,11 +67,11 @@ function larryMovePlayer(p, includeOwnership) {
     injury: Engines.normalizeInjuryStatus(p.injuryStatus),
     rawInjury: p.injuryStatus,
     irEligible: larryMoveIrEligible(p),
-    gamesToday: !!p.gamesToday,
-    gameToday: p.gameToday ? {
-      opp: p.gameToday.opponent,
-      home: !!p.gameToday.isHome,
-      timeLocal: p.gameToday.time || ''
+    gamesToday: !!today,
+    gameToday: today ? {
+      opp: today.opponent,
+      home: !!today.isHome,
+      timeLocal: today.timeLocal || today.time || ''
     } : null,
     gamesLeftThisWeek: p.gamesRemaining || 0,
     perGame: larryMovePerGame(p),
@@ -148,7 +155,12 @@ function buildLarryMovePayload() {
   Engines.ensureDURANT(S.allPlayers || []);
 
   var cats = getOrderedCategories();
-  var myPlayers = (S.myTeam.players || []).slice();
+  // Roster stubs carry the lineup slot; the live player in S.allPlayers
+  // carries the schedule and stats. Merge them, keeping the slot.
+  var myPlayers = (S.myTeam.players || []).map(function(stub) {
+    var full = Engines.enrichPlayer(stub);
+    return full === stub ? stub : Object.assign({}, full, { slot: stub.slot, slotId: stub.slotId });
+  });
   var strat = (S.matchup && S.matchup.strategy) || {};
   // The real matchup window. getMatchupDates is a calendar-week guess and
   // reported the wrong day count in opening week and the playoffs.
