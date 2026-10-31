@@ -186,8 +186,20 @@ function buildChatContext() {
   var rec = S.myTeam.record || { wins: 0, losses: 0, ties: 0 };
   var strat = S.matchup.strategy || {};
 
-  function playerPayload(p) {
+  // Real dates, not a count. The chat only ever got "games left 1" and
+  // told the owner it could not see the schedule, then suggested a stream
+  // whose one game was tonight, after pickups for tonight had closed.
+  var win = getMatchupWindow() || {};
+  var todayStr = localDateStr(new Date());
+  var endStr = win.endStr || todayStr;
+  var pickupFrom = pickupStartDateStr();
+
+  function playerPayload(p, isFreeAgent) {
+    var from = isFreeAgent ? pickupFrom : todayStr;
+    var days = gameDatesBetween(p, from, endStr);
     return {
+      gameDays: days.map(shortDayLabel),
+      usableGames: days.length,
       name: p.name,
       pos: p.positions || [],
       team: p.nbaTeam,
@@ -195,7 +207,6 @@ function buildChatContext() {
       // The rank, not the internal score: the model quotes what it is
       // given, and "value 12.3" means nothing to the reader.
       rank: (!p.noEvidence && p.durantRank) ? p.durantRank : undefined,
-      gamesLeft: p.gamesRemaining || 0,
       owned: p.percentOwned || 0
     };
   }
@@ -210,6 +221,11 @@ function buildChatContext() {
     return p.onTeamId === 0 && Engines.isValidAddCandidate(p);
   });
   freeAgents.sort(byDurantRank);
+  // For this matchup, free agents who still have a game a pickup made now
+  // can use, best first. Plus the best overall for longer-term questions.
+  var streamers = freeAgents.filter(function(p) {
+    return gameDatesBetween(p, pickupFrom, endStr).length > 0;
+  });
 
   var matchupCats = cats.map(function(cat) {
     return {
@@ -239,9 +255,13 @@ function buildChatContext() {
     categories: cats.map(function(c) { return c.abbr; }),
     teamName: S.myTeam.name,
     record: rec.wins + '-' + rec.losses + '-' + rec.ties,
+    today: shortDayLabel(todayStr),
+    pickupStartsOn: shortDayLabel(pickupFrom),
+    pickupStartsToday: pickupFrom === todayStr,
+    matchupEnds: win.endStr ? shortDayLabel(win.endStr) : '',
     matchup: {
       opponent: S.matchup.opponentName,
-      daysLeft: (getMatchupDates() || {}).daysLeft || 0,
+      daysLeft: win.daysLeft || 0,
       categories: matchupCats
     },
     strategy: {
@@ -249,8 +269,9 @@ function buildChatContext() {
       locks: strat.locks || [],
       punts: strat.punts || []
     },
-    roster: myPlayers.map(playerPayload),
-    freeAgents: freeAgents.slice(0, 15).map(playerPayload),
+    roster: myPlayers.map(function(p) { return playerPayload(p, false); }),
+    streamers: streamers.slice(0, 15).map(function(p) { return playerPayload(p, true); }),
+    freeAgents: freeAgents.slice(0, 10).map(function(p) { return playerPayload(p, true); }),
     recommendations: engineRecs
   };
 }

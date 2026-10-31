@@ -167,7 +167,12 @@ function playerLine(p) {
   if (p.injury) line += ' | status ' + clean(p.injury, 20);
   if (p.rank !== undefined) line += ' | Larry rank #' + num(p.rank, 0);
   else if (p.value !== undefined) line += ' | value ' + num(p.value);
-  if (p.gamesLeft !== undefined) line += ' | games left ' + num(p.gamesLeft, 0);
+  if (Array.isArray(p.gameDays)) {
+    const days = p.gameDays.slice(0, 14).map((d) => clean(d, 12)).filter(Boolean);
+    line += days.length ? ' | plays ' + days.join(', ') : ' | no usable games left this matchup';
+  } else if (p.gamesLeft !== undefined) {
+    line += ' | games left ' + num(p.gamesLeft, 0);
+  }
   if (p.owned !== undefined) line += ' | owned ' + num(p.owned, 0) + '%';
   return line;
 }
@@ -187,6 +192,14 @@ function buildDataBlock(ctx) {
       (c.record ? ' | record ' + clean(c.record, 20) : ''));
   }
 
+  if (c.today) {
+    lines.push('TODAY: ' + clean(c.today, 12) +
+      (c.matchupEnds ? ' | matchup ends ' + clean(c.matchupEnds, 12) : ''));
+  }
+  if (c.pickupStartsOn) {
+    lines.push('PICKUP TIMING: a player added right now first counts on ' + clean(c.pickupStartsOn, 12) +
+      (c.pickupStartsToday ? '.' : ', because today\'s first game has tipped and this league does not add players to today\'s lineup after that.'));
+  }
   if (c.matchup && typeof c.matchup === 'object') {
     lines.push('MATCHUP vs ' + clean(c.matchup.opponent) +
       ' | days left ' + num(c.matchup.daysLeft, 0));
@@ -217,8 +230,16 @@ function buildDataBlock(ctx) {
     });
   }
 
+  if (Array.isArray(c.streamers) && c.streamers.length) {
+    lines.push('FREE AGENTS WHO CAN STILL PLAY FOR YOU THIS MATCHUP (filtered: none are OUT, SUSPENSION or IR; "plays" lists only days a pickup made now can use):');
+    c.streamers.slice(0, 15).forEach((p) => {
+      const line = playerLine(p);
+      if (line) lines.push(line);
+    });
+  }
+
   if (Array.isArray(c.freeAgents) && c.freeAgents.length) {
-    lines.push('TOP FREE AGENTS (already filtered: none are OUT, SUSPENSION or IR):');
+    lines.push('TOP FREE AGENTS OVERALL (already filtered: none are OUT, SUSPENSION or IR; "plays" lists only days a pickup made now can use):');
     c.freeAgents.slice(0, 15).forEach((p) => {
       const line = playerLine(p);
       if (line) lines.push(line);
@@ -255,6 +276,9 @@ INJURY RULES
 - Check and mention injury status before recommending anyone.
 
 MATCHUP RULES
+- You DO have the schedule: each player line lists the days he plays for the rest of this matchup. Use them. Never say you cannot see the schedule.
+- For a pickup, count only the days in his "plays" list. Those already respect PICKUP TIMING: a free agent whose only game is today after the first tip is worth nothing this matchup and will not appear with that day.
+- When the manager asks for a specific day, recommend only players whose "plays" list includes that day, and name the day.
 - Prioritise TARGET categories over raw season value.
 - Advice is about winning THIS week, not general value.
 - When a player helps a target category, say which one.

@@ -54,6 +54,8 @@ function larryMovePlayer(p, includeOwnership) {
   var today = null;
   (p.schedule || []).forEach(function(g) { if (!today && g && g.date === todayStr) today = g; });
   if (!today && !(p.schedule && p.schedule.length) && p.gamesToday) today = p.gameToday || { opponent: '' };
+  var win = getMatchupWindow() || {};
+  var gameDays = gameDatesBetween(p, includeOwnership ? pickupStartDateStr() : todayStr, win.endStr || todayStr);
   var slotEligible = (p.eligibleSlots || []).map(function(sid) {
     return ESPN_SLOT_MAP[sid];
   }).filter(Boolean);
@@ -73,7 +75,10 @@ function larryMovePlayer(p, includeOwnership) {
       home: !!today.isHome,
       timeLocal: today.timeLocal || today.time || ''
     } : null,
-    gamesLeftThisWeek: p.gamesRemaining || 0,
+    // For a free agent, only the games a pickup made now can use (see
+    // pickupStartDateStr in core.js); for a rostered player, from today.
+    gamesLeftThisWeek: gameDays.length,
+    gameDays: gameDays.map(shortDayLabel),
     perGame: larryMovePerGame(p),
     gp: p.gamesPlayed || 0,
     mpg: p.minutesPerGame || 0,
@@ -176,6 +181,15 @@ function buildLarryMovePayload() {
     return p.onTeamId === 0 && Engines.isValidAddCandidate(p);
   });
   freeAgents.sort(byDurantRank);
+  // Streaming candidates first: a free agent with no game a pickup made now
+  // can use does nothing for this matchup.
+  var winNow = getMatchupWindow() || {};
+  var pickFrom = pickupStartDateStr();
+  freeAgents = freeAgents.filter(function(p) {
+    return gameDatesBetween(p, pickFrom, winNow.endStr || pickFrom).length > 0;
+  }).concat(freeAgents.filter(function(p) {
+    return gameDatesBetween(p, pickFrom, winNow.endStr || pickFrom).length === 0;
+  }));
 
   var engineRecs = [];
   try {
@@ -199,6 +213,8 @@ function buildLarryMovePayload() {
   return {
     kind: 'larry-move',
     today: localDateStr(new Date()),
+    pickupStartsOn: shortDayLabel(pickupStartDateStr()),
+    pickupStartsToday: pickupStartDateStr() === localDateStr(new Date()),
     syncedAt: (S.espn && S.espn.lastSync) || '',
     league: {
       scoringType: S.league.scoringType,

@@ -332,3 +332,23 @@ describe("larry-chat: budget", () => {
     expect(STREAM_CAP_MS).toBeLessThan(28000);
   });
 });
+
+// Oct 31 2026: asked for someone who plays Sunday, chat said it could not
+// see the schedule and suggested players whose only game was Saturday,
+// after Saturday's pickups had closed.
+describe("larry-chat sees game days and pickup timing", () => {
+  const ctx = {
+    today: "Sat 10/31", pickupStartsOn: "Sun 11/1", pickupStartsToday: false, matchupEnds: "Sun 11/1",
+    streamers: [{ name: "Sunday Guy", gameDays: ["Sun 11/1"], injury: "ACTIVE" }],
+    freeAgents: [{ name: "Saturday Guy", gameDays: [], injury: "ACTIVE" }],
+  };
+  it("lists the days each free agent can play for you", () => {
+    const block = buildDataBlock(ctx);
+    expect(block).toContain("PICKUP TIMING: a player added right now first counts on Sun 11/1");
+    expect(block).toMatch(/Sunday Guy.*plays Sun 11\/1/);
+    expect(block).toMatch(/Saturday Guy.*no usable games left this matchup/);
+  });
+  it("tells the model it has the schedule", () => {
+    expect(buildSystemPrompt(ctx)).toMatch(/You DO have the schedule/);
+  });
+});

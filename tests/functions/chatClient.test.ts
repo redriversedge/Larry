@@ -57,6 +57,11 @@ function loadChat() {
     getOrderedCategories: () => [{ abbr: "PTS" }],
     byDurantRank: () => 0,
     getMatchupDates: () => ({ start: new Date(), end: new Date(), daysLeft: 4 }),
+    getMatchupWindow: () => ({ startStr: "2026-10-26", endStr: "2026-11-01", daysLeft: 2 }),
+    localDateStr: () => "2026-10-31",
+    pickupStartDateStr: () => "2026-11-01",
+    gameDatesBetween: () => [],
+    shortDayLabel: (d: string) => d,
     Engines: {
       ensureDURANT: () => {},
       isValidAddCandidate: () => false,
