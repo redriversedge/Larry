@@ -142,7 +142,7 @@ function renderAddDropTiles(recommendations) {
 function getGameForDate(player, dateStr) {
   if (!player.schedule || !player.schedule.length) return null;
   return player.schedule.find(function(g) {
-    return g.date && g.date.startsWith(dateStr);
+    return g.date === dateStr;
   }) || null;
 }
 
@@ -364,24 +364,31 @@ function renderRosterTable(rows, cats) {
       html += '</tr>';
       return;
     }
-    var hasGameCls = p.gamesToday ? 'has-game' : '';
+    // The game on the day being VIEWED, from the live player's schedule.
+    // This used to fall back to today's game whenever the viewed day had
+    // none, so on "Tomorrow" a player with no Sunday game showed his
+    // Saturday opponent. Only today may use the sync-time gameToday note,
+    // and only when there is no schedule at all.
+    var viewDate = new Date();
+    viewDate.setDate(viewDate.getDate() + _rosterDateOffset);
+    var viewStr = localDateStr(viewDate);
+    var live = Engines.enrichPlayer(p) || p;
+    var schedGame = getGameForDate(live, viewStr);
+    var noSchedule = !(live.schedule && live.schedule.length);
+    if (!schedGame && noSchedule && _rosterDateOffset === 0 && p.gamesToday) {
+      schedGame = p.gameToday || { opponent: '' };
+    }
+    var hasGameCls = schedGame ? 'has-game' : '';
     html += '<tr class="' + hasGameCls + '">';
     html += '<td><span class="slot-badge">' + esc(row.slot || p.slot || 'BE') + '</span></td>';
     html += '<td style="cursor:pointer" onclick="openPlayerPopup(' + p.id + ')">';
     html += renderPlayerCell(p);
     html += '</td>';
 
-    // Today column: show opponent and game time using date-nav date
-    var viewDate = new Date();
-    viewDate.setDate(viewDate.getDate() + _rosterDateOffset);
-    var todayStr = localDateStr(viewDate);
-    var schedGame = getGameForDate(p, todayStr);
-    var gameCellText = schedGame ? formatGameCell(schedGame) : (p.gameToday ? formatGameCell(p.gameToday) : '');
+    var gameCellText = schedGame ? formatGameCell(schedGame) : '';
     html += '<td class="game-cell">';
     if (gameCellText) {
       html += '<span class="game-info">' + esc(gameCellText) + '</span>';
-    } else if (p.gamesToday) {
-      html += '<span class="game-info">' + esc(p.nbaTeam || '') + '</span>';
     } else {
       html += '<span class="no-game-label">-</span>';
     }
