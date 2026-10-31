@@ -1234,6 +1234,23 @@ function projectRestOfMatchup(players, now, opts) {
   return { totals: totals, games: games, variance: variance, days: Object.keys(byDate).length };
 }
 
+// Games a roster can still USE this matchup: each remaining day, the
+// healthy non-IR players with a game, capped at the starting slots, games
+// already tipped today excluded. This is the number the Schedule Advantage
+// card and Larry's Move show. Counting every rostered player's games
+// overstated it: bench players beyond the slots, OUT players, and (through a
+// UTC date parse) the day after the matchup ended all got counted.
+function matchupGamesLeft(rosterStubs, now) {
+  var all = (S && S.allPlayers) || [];
+  var byId = {};
+  for (var i = 0; i < all.length; i++) byId[all[i].id] = all[i];
+  var players = (rosterStubs || []).map(function(stub) {
+    var full = stub && byId[stub.id];
+    return full && full !== stub ? Object.assign({}, full, { slotId: stub.slotId }) : stub;
+  });
+  return projectRestOfMatchup(players, now).games;
+}
+
 // Roster tag for a player inside Larry's top 75: "MUST ROSTER" when he is
 // a free agent (grab him), "DON'T DROP" when he is on any team. Players are
 // ranked against the whole league, so these are players every 12-team
