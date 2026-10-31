@@ -168,6 +168,9 @@ function rosterLine(p, cats) {
     ' | ' + clean(p.injury, 20);
   if (p.injuryNote) line += ' (' + clean(p.injuryNote, 60) + ')';
   line += ' | games this week ' + num(p.gamesLeftThisWeek, 0);
+  if (Array.isArray(p.gameDays) && p.gameDays.length) {
+    line += ' (' + p.gameDays.slice(0, 14).map((d) => clean(d, 12)).filter(Boolean).join(', ') + ')';
+  }
   line += bool(p.gamesToday) ? ' | PLAYS TODAY' : ' | no game today';
   if (p.gameToday && typeof p.gameToday === 'object') {
     line += ' (' + (bool(p.gameToday.home) ? 'vs ' : '@ ') +
@@ -189,6 +192,11 @@ function buildDataBlock(ctx) {
   const lines = [];
 
   lines.push('TODAY: ' + clean(c.today, 12));
+  if (c.pickupStartsOn) {
+    lines.push('PICKUP TIMING: a player added right now first counts on ' + clean(c.pickupStartsOn, 12) +
+      (bool(c.pickupStartsToday) ? '.' : ', because today\'s first game has tipped and this league does not add players to today\'s lineup after that.') +
+      ' Free agents\' games-this-week counts and dates already reflect this.');
+  }
   lines.push('LEAGUE: ' + clean(league.scoringType, 30) +
     ' | ' + num(league.teamCount, 0) + ' teams' +
     ' | categories ' + cats.join(', ') +
@@ -340,7 +348,7 @@ HARD RULES, in priority order. These are not suggestions.
 METHOD
 a. Decide which categories are favored, close, or uphill, from the PROJECTED FINAL totals and win %, not the current score. Early in a matchup the current score is mostly zeros and says nothing; late in it the current score is most of the answer. A category is "lost" only when the remaining games cannot plausibly close the gap.
 b. Check today's lineup: every starter who plays today, bench players with games today who should swap in, and any empty starting slot.
-c. Check the wire: a free agent is only worth adding if they beat the worst healthy bench player in the close categories, or have meaningfully more games left this week.
+c. Check the wire: a free agent is only worth adding if they beat the worst healthy bench player in the close categories, or have meaningfully more games left this week. Count only the free agent's listed game days; they already respect PICKUP TIMING. Name the day(s) he plays.
 d. Check IR: any OUT roster player who is IR eligible and would free a slot.
 e. If nothing clears the bar, say so. "No move today" is a correct and useful answer. Do not invent activity.
 

@@ -1251,6 +1251,46 @@ function matchupGamesLeft(rosterStubs, now) {
   return projectRestOfMatchup(players, now).games;
 }
 
+// The first day a pickup made NOW can play for you. League rule: once the
+// first NBA game of the day has tipped, an add does not join the lineup
+// until tomorrow. So after the first tip, a free agent's game tonight is
+// useless to you and only his games from tomorrow on count.
+function pickupStartDateStr(now) {
+  now = now || new Date();
+  var todayStr = localDateStr(now);
+  var lookup = (S && S.scheduleLookup) || {};
+  var started = false;
+  Object.keys(lookup).forEach(function(tid) {
+    if (started) return;
+    (lookup[tid] || []).forEach(function(g) {
+      if (!started && g && g.date === todayStr && gameHasStarted(g, now)) started = true;
+    });
+  });
+  if (!started) return todayStr;
+  var t = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  return localDateStr(t);
+}
+
+// The player's game dates from fromStr through toStr, as local YYYY-MM-DD
+// strings, using the live player's schedule.
+function gameDatesBetween(p, fromStr, toStr) {
+  var live = p;
+  if (S && S.allPlayers && p && !(p.schedule && p.schedule.length)) {
+    live = S.allPlayers.find(function(x) { return x.id === p.id; }) || p;
+  }
+  return ((live && live.schedule) || []).filter(function(g) {
+    return g && g.date && g.date >= fromStr && g.date <= toStr;
+  }).map(function(g) { return g.date; });
+}
+
+// "Sun 11/1" from a local YYYY-MM-DD string.
+function shortDayLabel(dateStr) {
+  var parts = String(dateStr).split('-');
+  var d = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+  return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getDay()] + ' ' +
+    (d.getMonth() + 1) + '/' + d.getDate();
+}
+
 // Roster tag for a player inside Larry's top 75: "MUST ROSTER" when he is
 // a free agent (grab him), "DON'T DROP" when he is on any team. Players are
 // ranked against the whole league, so these are players every 12-team
