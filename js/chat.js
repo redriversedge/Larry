@@ -296,6 +296,91 @@ async function retryChat() {
   await runChatRequest();
 }
 
+// One request to the chat function. Streams text and thinking into the
+// live bubble. Resolves with { tools, assistant } when Larry stopped to ask
+// the app something, { cutShort } when the cap fired, or {} when done.
+// Throws on failure, with _chatCanRetry set when another go might work.
+async function chatRound(messages, toolTurns) {
+  // No `system` field. The function builds the prompt; see the comment at
+  // the top of netlify/functions/larry-chat.mjs.
+  var response = await fetch('/.netlify/functions/larry-chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      context: buildChatContext(),
+      messages: messages,
+      toolTurns: toolTurns
+    })
+  });
+
+  if (!response.ok) {
+    var detail = '';
+    try {
+      var errJson = await response.json();
+      detail = errJson && errJson.error ? errJson.error : '';
+    } catch (parseErr) {
+      detail = '';
+    }
+    // 504 is a timeout and 502/429 are upstream hiccups: all three are
+    // worth another go. A 4xx from our own validation is not.
+    _chatCanRetry = response.status === 504 || response.status === 502 ||
+      response.status === 500 || response.status === 429;
+    throw new Error(detail || ('Chat API error ' + response.status));
+  }
+
+  // Newline-delimited JSON, one frame per line. See the framing comment in
+  // netlify/functions/larry-chat.mjs.
+  if (!response.body || typeof response.body.getReader !== 'function') {
+    throw new Error('This browser cannot stream the reply. Try reloading.');
+  }
+  var reader = response.body.getReader();
+  var decoder = new TextDecoder();
+  var buffer = '';
+  var streamError = '';
+  var out = {};
+
+  for (;;) {
+    var chunk = await reader.read();
+    if (chunk.done) break;
+    buffer += decoder.decode(chunk.value, { stream: true });
+    var nl = buffer.indexOf('\n');
+    while (nl >= 0) {
+      var line = buffer.slice(0, nl).trim();
+      buffer = buffer.slice(nl + 1);
+      if (line) {
+        var evt = null;
+        try { evt = JSON.parse(line); } catch (badLine) { evt = null; }
+        if (evt) {
+          if (typeof evt.t === 'string') {
+            _chatStream.text += evt.t;
+            paintChatStream();
+          } else if (typeof evt.k === 'string') {
+            _chatStream.think += evt.k;
+            paintChatStream();
+          } else if (typeof evt.u === 'string') {
+            _chatStream.think = ChatTools.label(evt.u) + '...';
+            paintChatStream();
+          } else if (Array.isArray(evt.tools)) {
+            out.tools = evt.tools;
+            out.assistant = Array.isArray(evt.assistant) ? evt.assistant : [];
+          } else if (evt.error === 'cut short') {
+            out.cutShort = true;
+          } else if (typeof evt.error === 'string') {
+            streamError = evt.error;
+          }
+        }
+      }
+      nl = buffer.indexOf('\n');
+    }
+  }
+
+  if (streamError) {
+    _chatCanRetry = true;
+    throw new Error(streamError);
+  }
+  return out;
+}
+
 async function runChatRequest() {
   _chatSending = true;
   _chatError = '';
@@ -313,77 +398,32 @@ async function runChatRequest() {
       messages.push({ role: msg.role, content: msg.content });
     });
 
-    // No `system` field. The function builds the prompt; see the comment at
-    // the top of netlify/functions/larry-chat.mjs.
-    var response = await fetch('/.netlify/functions/larry-chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        context: buildChatContext(),
-        messages: messages
-      })
-    });
-
-    if (!response.ok) {
-      var detail = '';
-      try {
-        var errJson = await response.json();
-        detail = errJson && errJson.error ? errJson.error : '';
-      } catch (parseErr) {
-        detail = '';
-      }
-      // 504 is a timeout and 502/429 are upstream hiccups: all three are
-      // worth another go. A 4xx from our own validation is not.
-      _chatCanRetry = response.status === 504 || response.status === 502 ||
-        response.status === 500 || response.status === 429;
-      throw new Error(detail || ('Chat API error ' + response.status));
+    // Tool rounds for THIS question only. Larry asks the app (js/chat-tools.js)
+    // for what the snapshot does not hold; each round sends back every
+    // earlier call and its answer. None of it enters _chatHistory: only the
+    // final text does, same as before.
+    var toolTurns = [];
+    var MAX_ROUNDS = 6;
+    for (var round = 0; round < MAX_ROUNDS; round++) {
+      var result = await chatRound(messages, toolTurns);
+      if (result.cutShort) { cutShort = true; break; }
+      if (!result.tools) break;
+      _chatStream.think = '';
+      var labels = result.tools.map(function(c) { return ChatTools.label(c.name); });
+      _chatStream.think = labels.filter(function(l, i) { return labels.indexOf(l) === i; }).join(', ') + '...';
+      paintChatStream();
+      var answers = await Promise.all(result.tools.map(function(c) {
+        return ChatTools.run(c.name, c.input).then(function(text) {
+          return { tool_use_id: c.id, content: text };
+        });
+      }));
+      toolTurns.push({ assistant: result.assistant, results: answers });
+      // Text written before a tool call is usually "let me check"; keep it
+      // apart from what comes next.
+      if (_chatStream.text && !/\n\n$/.test(_chatStream.text)) _chatStream.text += '\n\n';
     }
 
-    // Newline-delimited JSON, one frame per line. See the framing comment in
-    // netlify/functions/larry-chat.mjs.
-    if (!response.body || typeof response.body.getReader !== 'function') {
-      throw new Error('This browser cannot stream the reply. Try reloading.');
-    }
-    var reader = response.body.getReader();
-    var decoder = new TextDecoder();
-    var buffer = '';
-    var streamError = '';
-
-    for (;;) {
-      var chunk = await reader.read();
-      if (chunk.done) break;
-      buffer += decoder.decode(chunk.value, { stream: true });
-      var nl = buffer.indexOf('\n');
-      while (nl >= 0) {
-        var line = buffer.slice(0, nl).trim();
-        buffer = buffer.slice(nl + 1);
-        if (line) {
-          var evt = null;
-          try { evt = JSON.parse(line); } catch (badLine) { evt = null; }
-          if (evt) {
-            if (typeof evt.t === 'string') {
-              _chatStream.text += evt.t;
-              paintChatStream();
-            } else if (typeof evt.k === 'string') {
-              _chatStream.think += evt.k;
-              paintChatStream();
-            } else if (evt.error === 'cut short') {
-              cutShort = true;
-            } else if (typeof evt.error === 'string') {
-              streamError = evt.error;
-            }
-          }
-        }
-        nl = buffer.indexOf('\n');
-      }
-    }
-
-    if (streamError) {
-      _chatCanRetry = true;
-      throw new Error(streamError);
-    }
-
-    var reply = _chatStream.text;
+    var reply = _chatStream.text.replace(/\n+$/, '');
     if (cutShort) {
       // A partial answer is worth keeping; the note tells the reader why it
       // stops where it does, and tells the model the same thing if they

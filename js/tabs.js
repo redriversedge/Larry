@@ -2580,14 +2580,15 @@ function ordinal(n) {
   return n + (s[(v - 20) % 10] || s[v] || s[0]);
 }
 
-function renderTradeAnalysisHtml() {
-  if (!_tradeGive.length || !_tradeGet.length) {
-    return '<div class="text-xs muted" style="padding:0 12px 12px">Add at least one player on each side.</div>';
-  }
+// The whole trade read as data: verdict, narrative lines, and per-category
+// before/after with league rank. The Trade Center renders it; Larry chat's
+// analyze_trade tool returns it. One function so they cannot disagree.
+function tradeAnalysisData(giveIds, getIds) {
   if (typeof Engines !== 'undefined' && Engines.ensureDURANT) Engines.ensureDURANT(S.allPlayers || []);
   var cats = getOrderedCategories();
-  var give = _tradeGive.map(tradeFindPlayer).filter(Boolean);
-  var get = _tradeGet.map(tradeFindPlayer).filter(Boolean);
+  var give = giveIds.map(tradeFindPlayer).filter(Boolean);
+  var get = getIds.map(tradeFindPlayer).filter(Boolean);
+  if (!give.length || !get.length) return { error: 'Need at least one player on each side.' };
   var full = function(stub) {
     var f = tradeFindPlayer(stub.id);
     return f ? Object.assign({}, f, { slotId: stub.slotId }) : stub;
@@ -2595,7 +2596,7 @@ function renderTradeAnalysisHtml() {
   var teams = (S.teams || []).map(function(t) {
     return { teamId: t.teamId, name: t.name, players: (t.players || []).map(full) };
   });
-  if (!teams.length) return '<div class="empty-state"><p>No league data. Sync first.</p></div>';
+  if (!teams.length) return { error: 'No league data. Sync first.' };
   var impact = computeTradeImpact(teams, S.myTeam.teamId, give, get, cats, tradeRate);
 
   // Roster spots: who you would drop, or who you could add.
@@ -2604,7 +2605,7 @@ function renderTradeAnalysisHtml() {
   var spotNote = '', spotValue = 0;
   if (extra > 0) {
     var droppable = myRoster.filter(function(p) {
-      return _tradeGive.indexOf(p.id) < 0 && p.slotId !== 13;
+      return giveIds.indexOf(p.id) < 0 && p.slotId !== 13;
     }).sort(byDurantRank).reverse().slice(0, extra);
     droppable.forEach(function(p) { spotValue -= tradeScore(p); });
     if (droppable.length) {
@@ -2674,6 +2675,17 @@ function renderTradeAnalysisHtml() {
   }
   if (verdict.catSignal > 0 && verdict.valueSignal < 0) lines.push('You give up more talent than you get, but it fits your categories.');
   if (verdict.catSignal < 0 && verdict.valueSignal > 0) lines.push('You win on talent but your category ranks pay for it.');
+
+  return { cats: cats, impact: impact, verdict: verdict, lines: lines, give: give, get: get };
+}
+
+function renderTradeAnalysisHtml() {
+  if (!_tradeGive.length || !_tradeGet.length) {
+    return '<div class="text-xs muted" style="padding:0 12px 12px">Add at least one player on each side.</div>';
+  }
+  var t = tradeAnalysisData(_tradeGive, _tradeGet);
+  if (t.error) return '<div class="empty-state"><p>' + esc(t.error) + '</p></div>';
+  var cats = t.cats, impact = t.impact, verdict = t.verdict, lines = t.lines;
 
   var html = '<div class="trade-verdict">';
   html += '<div style="font-size:1.4rem;font-weight:800;color:' + verdict.color + '">' + verdict.label + '</div>';

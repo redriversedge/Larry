@@ -62,6 +62,10 @@ function loadChat() {
     pickupStartDateStr: () => "2026-11-01",
     gameDatesBetween: () => [],
     shortDayLabel: (d: string) => d,
+    ChatTools: {
+      label: (n: string) => "Checking " + n,
+      run: async (name: string, input: any) => JSON.stringify({ tool: name, input }),
+    },
     Engines: {
       ensureDURANT: () => {},
       isValidAddCandidate: () => false,
@@ -295,5 +299,44 @@ describe("chat client: retry", () => {
     ]);
     // Still no client-supplied system prompt.
     expect(bodies[1].system).toBeUndefined();
+  });
+});
+
+
+// Oct 31 2026: chat asks the app through tools. The client runs each call
+// locally and sends the answer back; only the final text is history.
+describe("chat client: app tools", () => {
+  it("runs the requested tool, sends the result back, and stores only the answer", async () => {
+    const bodies: any[] = [];
+    let call = 0;
+    globalThis.fetch = vi.fn(async (_u: any, init: any) => {
+      bodies.push(JSON.parse(init.body));
+      call++;
+      if (call === 1) {
+        return ndjson([
+          { k: "Need Sunday games." }, { u: "search_free_agents" },
+          { tools: [{ id: "tu_1", name: "search_free_agents", input: { plays_on: "Sunday" } }],
+            assistant: [{ type: "tool_use", id: "tu_1", name: "search_free_agents", input: { plays_on: "Sunday" } }] },
+        ]);
+      }
+      return ndjson([{ t: "Grab **Watford** for Sunday." }, { done: true }]);
+    }) as any;
+
+    await chat.api.sendChat("I need someone who plays Sunday");
+
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0].toolTurns).toEqual([]);
+    expect(bodies[1].toolTurns).toEqual([{
+      assistant: [{ type: "tool_use", id: "tu_1", name: "search_free_agents", input: { plays_on: "Sunday" } }],
+      results: [{ tool_use_id: "tu_1", content: JSON.stringify({ tool: "search_free_agents", input: { plays_on: "Sunday" } }) }],
+    }]);
+    // The question is sent once; tool rounds never enter the history.
+    expect(bodies[1].messages).toEqual([{ role: "user", content: "I need someone who plays Sunday" }]);
+    const s = chat.api.state();
+    expect(s.history).toEqual([
+      { role: "user", content: "I need someone who plays Sunday" },
+      { role: "assistant", content: "Grab **Watford** for Sunday." },
+    ]);
+    expect(s.error).toBe("");
   });
 });

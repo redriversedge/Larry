@@ -321,7 +321,7 @@ describe("larry-chat handler: the guards still hold", () => {
 
   it("still rejects an oversized body before calling the API", async () => {
     globalThis.fetch = vi.fn() as any;
-    const huge = { messages: [{ role: "user", content: "x".repeat(200 * 1024) }] };
+    const huge = { messages: [{ role: "user", content: "x".repeat(400 * 1024) }] };
     const res = await handler(post(huge), {});
     expect(res.status).toBe(413);
     expect(globalThis.fetch).not.toHaveBeenCalled();
@@ -363,5 +363,87 @@ describe("larry-chat handler: the guards still hold", () => {
     const limited = last as Response;
     expect(limited.status).toBe(429);
     expect(limited.headers.get("Retry-After")).toBe("60");
+  });
+});
+
+// Oct 31 2026: chat could only see a snapshot and told the owner it could
+// not look at the schedule. It now asks the app through tools that run in
+// the browser; this function only forwards the call and the answer.
+describe("larry-chat handler: app tools", () => {
+  function toolUseStream(id: string, name: string, json: string) {
+    return [
+      sse({ type: "message_start", message: {} }),
+      sse({ type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "", signature: "" } }),
+      sse({ type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "Need Sunday games." } }),
+      sse({ type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "sig123" } }),
+      sse({ type: "content_block_stop", index: 0 }),
+      sse({ type: "content_block_start", index: 1, content_block: { type: "tool_use", id, name, input: {} } }),
+      sse({ type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: json.slice(0, 5) } }),
+      sse({ type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: json.slice(5) } }),
+      sse({ type: "content_block_stop", index: 1 }),
+      sse({ type: "message_delta", delta: { stop_reason: "tool_use" } }),
+      sse({ type: "message_stop" }),
+    ];
+  }
+
+  it("offers the tools and hands a tool call back to the client with the blocks to replay", async () => {
+    let sent: any = null;
+    globalThis.fetch = vi.fn(async (_u: any, init: any) => {
+      sent = JSON.parse(init.body);
+      return upstreamStream(toolUseStream("tu_1", "search_free_agents", '{"plays_on":"Sunday"}'));
+    }) as any;
+    const res = await handler(post(ASK, { "x-nf-client-connection-ip": "10.9.0.1" }), {});
+    expect(res.status).toBe(200);
+    const frames = await framesOf(res);
+    expect(sent.tools.map((t: any) => t.name)).toContain("search_free_agents");
+    expect(sent.tool_choice).toEqual({ type: "auto" });
+    expect(frames.some((f) => f.u === "search_free_agents")).toBe(true);
+    const tf = frames.find((f) => Array.isArray(f.tools));
+    expect(tf.tools).toEqual([{ id: "tu_1", name: "search_free_agents", input: { plays_on: "Sunday" } }]);
+    expect(tf.assistant[0]).toEqual({ type: "thinking", thinking: "Need Sunday games.", signature: "sig123" });
+    expect(frames.some((f) => f.done)).toBe(false);
+  });
+
+  it("replays earlier tool turns, then forces an answer once out of rounds", async () => {
+    let sent: any = null;
+    globalThis.fetch = vi.fn(async (_u: any, init: any) => {
+      sent = JSON.parse(init.body);
+      return upstreamStream([sse(textDelta("Grab Watford.")), sse({ type: "message_stop" })]);
+    }) as any;
+    const turn = {
+      assistant: [{ type: "tool_use", id: "tu_1", name: "get_player", input: { name: "Watford" } }],
+      results: [{ tool_use_id: "tu_1", content: '{"name":"Trendon Watford"}' }],
+    };
+    const res = await handler(post(Object.assign({}, ASK, { toolTurns: [turn, turn, turn, turn, turn] }),
+      { "x-nf-client-connection-ip": "10.9.0.2" }), {});
+    expect(res.status).toBe(200);
+    expect(sent.tool_choice).toEqual({ type: "none" });
+    expect(sent.messages[1]).toEqual({ role: "assistant", content: turn.assistant });
+    expect(sent.messages[2].content[0]).toEqual({ type: "tool_result", tool_use_id: "tu_1", content: '{"name":"Trendon Watford"}' });
+    const frames = await framesOf(res);
+    expect(frames.some((f) => f.done)).toBe(true);
+  });
+
+  it("rejects tool turns naming an unknown tool or too many rounds", async () => {
+    globalThis.fetch = vi.fn() as any;
+    const bad = { assistant: [{ type: "tool_use", id: "x", name: "run_shell", input: {} }], results: [] };
+    const res = await handler(post(Object.assign({}, ASK, { toolTurns: [bad] }), { "x-nf-client-connection-ip": "10.9.0.3" }), {});
+    expect(res.status).toBe(400);
+    const ok = { assistant: [{ type: "tool_use", id: "x", name: "get_player", input: {} }], results: [] };
+    const res2 = await handler(post(Object.assign({}, ASK, { toolTurns: [ok, ok, ok, ok, ok, ok] }), { "x-nf-client-connection-ip": "10.9.0.4" }), {});
+    expect(res2.status).toBe(400);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it("answers a missing tool result with an error result rather than a broken request", async () => {
+    let sent: any = null;
+    globalThis.fetch = vi.fn(async (_u: any, init: any) => {
+      sent = JSON.parse(init.body);
+      return upstreamStream([sse(textDelta("ok")), sse({ type: "message_stop" })]);
+    }) as any;
+    const turn = { assistant: [{ type: "tool_use", id: "tu_9", name: "get_standings", input: {} }], results: [] };
+    await handler(post(Object.assign({}, ASK, { toolTurns: [turn] }), { "x-nf-client-connection-ip": "10.9.0.5" }), {});
+    expect(sent.messages[2].content[0].tool_use_id).toBe("tu_9");
+    expect(sent.messages[2].content[0].content).toMatch(/did not answer/);
   });
 });
