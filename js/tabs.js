@@ -581,26 +581,13 @@ function renderMatchupScore(cats) {
 }
 
 function computeScheduleAdvantage(myPlayers, oppPlayers) {
-  var now = new Date();
-  var matchupEnd = getMatchupDates().end;
-  function countGamesRemaining(players) {
-    return (players || [])
-      .filter(function(p) { return p.slotId !== 13; }) // exclude IR
-      .reduce(function(sum, p) {
-        if (p.schedule && p.schedule.length) {
-          var games = p.schedule.filter(function(g) {
-            var d = new Date(g.date);
-            return d >= now && d <= matchupEnd;
-          });
-          return sum + games.length;
-        }
-        // Fallback to gamesRemaining estimate
-        return sum + (p.gamesRemaining || 0);
-      }, 0);
-  }
+  // Games each side can still put in a starting slot this matchup. The old
+  // count added every non-IR player's games, parsed dates as UTC (so the
+  // day after the matchup ended crept in after 7pm Central), used a
+  // calendar week instead of the real window, and counted OUT players.
   return {
-    mine: countGamesRemaining(myPlayers),
-    opp: countGamesRemaining(oppPlayers)
+    mine: matchupGamesLeft(myPlayers),
+    opp: matchupGamesLeft(oppPlayers)
   };
 }
 
@@ -616,9 +603,9 @@ function renderScheduleAdvantage() {
   var diff = myGames - oppGames;
   var html = '<div class="card"><div class="card-header">Schedule Advantage</div>';
   html += '<div class="sched-adv">';
-  html += '<div class="sched-adv-team"><div class="adv-count">' + myGames + '</div><div class="adv-label">Your Games</div></div>';
+  html += '<div class="sched-adv-team"><div class="adv-count">' + myGames + '</div><div class="adv-label">Your Games Left</div></div>';
   html += '<div class="sched-adv-diff ' + (diff > 0 ? 'positive' : (diff < 0 ? 'negative' : '')) + '">' + (diff > 0 ? '+' : '') + diff + '</div>';
-  html += '<div class="sched-adv-team"><div class="adv-count">' + oppGames + '</div><div class="adv-label">Opp Games</div></div>';
+  html += '<div class="sched-adv-team"><div class="adv-count">' + oppGames + '</div><div class="adv-label">Opp Games Left</div></div>';
   html += '</div>';
 
   // Days remaining callout. Uses the real matchup window, not the calendar
@@ -627,6 +614,7 @@ function renderScheduleAdvantage() {
   var win = getMatchupWindow();
   html += '<div style="text-align:center;padding:8px;font-size:0.8rem;color:var(--text-secondary)">';
   html += win.daysLeft + ' days remaining in matchup period';
+  html += '<div class="text-xs muted" style="margin-top:2px">Games that can fill a starting slot: healthy players, IR excluded, games already started today excluded.</div>';
   if (win.label) {
     html += '<div class="text-xs muted" style="margin-top:2px">' + esc(win.label) + '</div>';
   }

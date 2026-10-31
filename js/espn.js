@@ -1633,17 +1633,14 @@ var ESPNSync = (function() {
     });
 
     // Update matchup games remaining totals
-    var myPlayers = S.myTeam.players || [];
-    var myGames = 0;
-    myPlayers.forEach(function(p) { if (p.slotId < 12) myGames += (p.gamesRemaining || 0); });
-    S.matchup.myGamesRemaining = myGames;
-
+    // Usable games, not raw games: today's starters times the whole week
+    // missed everyone benched today and counted OUT players. See
+    // matchupGamesLeft in core.js.
     var oppTeam = S.teams.find(function(t) { return t.teamId === S.matchup.opponentTeamId; });
-    var oppGames = 0;
-    if (oppTeam && oppTeam.players) {
-      oppTeam.players.forEach(function(p) { if (p.slotId < 12) oppGames += (p.gamesRemaining || 0); });
+    if (typeof matchupGamesLeft === 'function') {
+      S.matchup.myGamesRemaining = matchupGamesLeft(S.myTeam.players || []);
+      S.matchup.oppGamesRemaining = matchupGamesLeft(oppTeam ? (oppTeam.players || []) : []);
     }
-    S.matchup.oppGamesRemaining = oppGames;
   }
 
   // --- PER-GAME STAT HELPER ---
