@@ -313,7 +313,8 @@ function requestLarryMove(force) {
 
   // One automatic retry for a transient upstream failure (the server caches
   // by payloadHash, so a retry after a slow success is free).
-  postLarryMove(payload, 1).then(function(data) {
+  _larryMoveStatus = '';
+  postLarryMoveRounds(payload).then(function(data) {
     if (!data || !data.move) throw new Error('Larry did not return an answer.');
     S.analysisCache = S.analysisCache || {};
     S.analysisCache.larryMove = {
@@ -340,15 +341,48 @@ function requestLarryMove(force) {
 // answer take longer than Netlify's 10-second limit on a buffered reply.
 // The card is structured, so the client simply waits for the whole stream.
 function parseLarryMoveStream(text) {
-  var out = { move: null, error: '' };
+  var out = { move: null, error: '', tools: null, assistant: null };
   String(text || '').split('\n').forEach(function(line) {
     if (!line.trim()) return;
     var obj;
     try { obj = JSON.parse(line); } catch (e) { return; }
     if (obj && obj.move) out.move = obj.move;
+    if (obj && Array.isArray(obj.tools)) {
+      out.tools = obj.tools;
+      out.assistant = Array.isArray(obj.assistant) ? obj.assistant : [];
+    }
     if (obj && obj.error && !out.move) out.error = String(obj.error);
   });
   return out;
+}
+
+// Larry's Move can stop to ask the app something (a player's schedule, who
+// plays Sunday, the opponent's roster). The calls run here, through the
+// same ChatTools chat uses, and the answers go back as the next round.
+// Shown on the loading card so the wait reads as progress.
+var _larryMoveStatus = '';
+var LARRY_MOVE_MAX_TOOL_ROUNDS = 3;
+
+function postLarryMoveRounds(payload) {
+  var toolTurns = [];
+  function round() {
+    payload.toolTurns = toolTurns;
+    return postLarryMove(payload, 1).then(function(data) {
+      if (data.move || !data.tools || toolTurns.length >= LARRY_MOVE_MAX_TOOL_ROUNDS) return data;
+      var labels = data.tools.map(function(c) { return ChatTools.label(c.name); });
+      _larryMoveStatus = labels.filter(function(l, i) { return labels.indexOf(l) === i; }).join(', ') + '...';
+      renderLarryMoveCard();
+      return Promise.all(data.tools.map(function(c) {
+        return ChatTools.run(c.name, c.input).then(function(text) {
+          return { tool_use_id: c.id, content: text };
+        });
+      })).then(function(results) {
+        toolTurns.push({ assistant: data.assistant, results: results });
+        return round();
+      });
+    });
+  }
+  return round();
 }
 
 function postLarryMove(payload, retriesLeft) {
@@ -361,6 +395,7 @@ function postLarryMove(payload, retriesLeft) {
       if (res.ok) {
         var parsed = parseLarryMoveStream(text);
         if (parsed.move) return { move: parsed.move };
+        if (parsed.tools) return { tools: parsed.tools, assistant: parsed.assistant };
         throw new Error(parsed.error || 'Larry did not return an answer.');
       }
       var data = null;
@@ -416,7 +451,7 @@ function larryMoveCardHtml() {
     return '<div class="card"><div class="card-header">Larry\'s Move</div>' +
       '<div style="padding:16px;text-align:center" aria-live="polite">' +
       '<div class="typing-dots"><span>.</span><span>.</span><span>.</span></div>' +
-      '<div class="text-xs muted" style="margin-top:6px">Larry is thinking...</div></div></div>';
+      '<div class="text-xs muted" style="margin-top:6px">' + esc(_larryMoveStatus || 'Larry is thinking...') + '</div></div></div>';
   }
 
   if (_larryMoveError) {

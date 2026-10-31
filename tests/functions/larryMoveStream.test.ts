@@ -99,7 +99,10 @@ describe("larry-move handler: streaming", () => {
     }) as any;
     await (await handler(post(Object.assign({}, FIXTURE, { payloadHash: "h-req-" + Date.now() })), {})).text();
     expect(sent.stream).toBe(true);
-    expect(sent.tool_choice).toEqual({ type: "tool", name: "report_move" });
+    // First round: some tool must be called, report_move or an app lookup.
+    expect(sent.tool_choice).toEqual({ type: "any" });
+    expect(sent.tools.map((t: any) => t.name)).toContain("report_move");
+    expect(sent.tools.map((t: any) => t.name)).toContain("search_free_agents");
     expect(sent.max_tokens).toBe(1800);
     expect(sent.thinking).toEqual({ type: "disabled" });
   });
@@ -188,5 +191,59 @@ describe("larry-move truncated tool input", () => {
     expect(c.input()).toBeNull();
     expect(c.stopReason()).toBe("max_tokens");
     expect(c.jsonLength()).toBeGreaterThan(0);
+  });
+});
+
+
+// Oct 31 2026: Move gets the same app tools as chat.
+describe("larry-move app tools", () => {
+  function post2(body: any, ip: string) {
+    return new Request("https://larrybball.netlify.app/.netlify/functions/larry-move", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", origin: "https://larrybball.netlify.app", "x-nf-client-connection-ip": ip },
+      body: JSON.stringify(body),
+    });
+  }
+  function sseLine(obj: any) { return "event: " + obj.type + "\ndata: " + JSON.stringify(obj) + "\n\n"; }
+  function stream(chunks: string[]) {
+    const enc = new TextEncoder();
+    return new Response(new ReadableStream({ start(c) { chunks.forEach((x) => c.enqueue(enc.encode(x))); c.close(); } }), { status: 200 });
+  }
+  const base = { kind: "larry-move", league: { categories: ["REB"] }, matchup: {}, myRoster: [] };
+
+  it("hands a data-tool call to the client instead of a move", async () => {
+    process.env.ANTHROPIC_API_KEY = "sk-ant-test";
+    globalThis.fetch = vi.fn(async () => stream([
+      sseLine({ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "tu_1", name: "search_free_agents", input: {} } }),
+      sseLine({ type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: '{"plays_on":"Sunday"}' } }),
+      sseLine({ type: "content_block_stop", index: 0 }),
+      sseLine({ type: "message_delta", delta: { stop_reason: "tool_use" } }),
+    ])) as any;
+    const res = await handler(post2(Object.assign({ payloadHash: "h-tools-1" }, base), "10.8.0.1"), {});
+    const lines: any[] = (await res.text()).split("\n").filter(Boolean).map((l: string) => JSON.parse(l));
+    const tf = lines.find((l) => Array.isArray(l.tools));
+    expect(tf.tools).toEqual([{ id: "tu_1", name: "search_free_agents", input: { plays_on: "Sunday" } }]);
+    expect(lines.some((l) => l.move)).toBe(false);
+    expect(lines.some((l) => l.error)).toBe(false);
+  });
+
+  it("forces report_move once the rounds are used up, replaying the earlier turns", async () => {
+    process.env.ANTHROPIC_API_KEY = "sk-ant-test";
+    let sent: any = null;
+    globalThis.fetch = vi.fn(async (_u: any, init: any) => { sent = JSON.parse(init.body); return stream([]); }) as any;
+    const turn = { assistant: [{ type: "tool_use", id: "tu_1", name: "get_matchup", input: {} }], results: [{ tool_use_id: "tu_1", content: "{}" }] };
+    await handler(post2(Object.assign({ payloadHash: "h-tools-2", toolTurns: [turn, turn, turn] }, base), "10.8.0.2"), {});
+    expect(sent.tool_choice).toEqual({ type: "tool", name: "report_move" });
+    expect(sent.messages).toHaveLength(7);
+    expect(sent.messages[2].content[0].type).toBe("tool_result");
+  });
+
+  it("refuses a tool Move does not offer", async () => {
+    process.env.ANTHROPIC_API_KEY = "sk-ant-test";
+    globalThis.fetch = vi.fn() as any;
+    const turn = { assistant: [{ type: "tool_use", id: "x", name: "analyze_trade", input: {} }], results: [] };
+    const res = await handler(post2(Object.assign({ payloadHash: "h-tools-3", toolTurns: [turn] }, base), "10.8.0.3"), {});
+    expect(res.status).toBe(400);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 });

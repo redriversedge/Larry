@@ -1,5 +1,5 @@
 // Larry v3.0 Service Worker
-var CACHE_VERSION = 'larry-v3.35.16';
+var CACHE_VERSION = 'larry-v3.35.17';
 var CACHE_FILES = [
   '/',
   '/index.html',

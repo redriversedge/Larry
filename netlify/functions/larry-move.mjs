@@ -39,6 +39,15 @@ const MODEL = process.env.ANTHROPIC_MOVE_MODEL || process.env.ANTHROPIC_MODEL ||
 // could not produce a usable answer" on every try from Oct 29. Thinking is
 // disabled, so all of this goes to the answer; 1800 still finishes well
 // inside the 25s cap at the measured rate.
+import { CHAT_TOOLS, normalizeAppToolTurns } from '../shared/app-tools.mjs';
+
+// Larry's Move can ask the app for more than the payload holds, the same way
+// chat does (netlify/shared/app-tools.mjs, run by js/chat-tools.js in the
+// browser). A smaller set than chat, and fewer rounds: Move is a quick card.
+const MOVE_TOOL_NAMES = ['get_player', 'get_player_news', 'search_free_agents', 'get_team', 'get_matchup', 'get_day_schedule'];
+const MOVE_TOOLS = CHAT_TOOLS.filter((t) => MOVE_TOOL_NAMES.indexOf(t.name) >= 0);
+const MAX_MOVE_TOOL_ROUNDS = 3;
+
 const MAX_TOKENS = Number(process.env.ANTHROPIC_MOVE_MAX_TOKENS) || 1800;
 
 // Overall ceiling on one upstream call, inside the ~29s a stream survives.
@@ -350,7 +359,8 @@ a. Decide which categories are favored, close, or uphill, from the PROJECTED FIN
 b. Check today's lineup: every starter who plays today, bench players with games today who should swap in, and any empty starting slot.
 c. Check the wire: a free agent is only worth adding if they beat the worst healthy bench player in the close categories, or have meaningfully more games left this week. Count only the free agent's listed game days; they already respect PICKUP TIMING. Name the day(s) he plays.
 d. Check IR: any OUT roster player who is IR eligible and would free a slot.
-e. If nothing clears the bar, say so. "No move today" is a correct and useful answer. Do not invent activity.
+e. If the data below is not enough, ask the app with a tool: a player's full stats, schedule or news, free agents who play a given day, a full roster, the matchup projection, or who plays on a day. Do it in as few rounds as you can, several calls at once, then call report_move.
+f. If nothing clears the bar, say so. "No move today" is a correct and useful answer. Do not invent activity.
 
 HONESTY
 - The engine suggestions in the data are inputs, not answers. Disagree with them when the numbers say so, and explain why in one line.
@@ -579,27 +589,36 @@ async function* sseEvents(body) {
 // Collects the forced report_move tool call from the event stream. The tool
 // input arrives as input_json_delta fragments that only parse once joined.
 function toolCollector() {
-  let json = '';
-  let inTool = false;
+  // Every content block by index: report_move's input arrives as
+  // input_json_delta fragments that only parse once joined, and the data
+  // tools (get_player and friends) arrive the same way.
+  const blocks = [];
   let chunks = 0;
   let stopReason = '';
+  const reportBlock = () => blocks.find((b) => b && b.type === 'tool_use' && b.name === 'report_move');
   return {
     push(evt) {
       if (!evt || typeof evt !== 'object') return false;
       if (evt.type === 'message_delta' && evt.delta && evt.delta.stop_reason) {
         stopReason = String(evt.delta.stop_reason);
       }
-      if (evt.type === 'content_block_start' && evt.content_block &&
-          evt.content_block.type === 'tool_use' && evt.content_block.name === 'report_move') {
-        inTool = true;
+      if (evt.type === 'content_block_start' && evt.content_block) {
+        const cb = evt.content_block;
+        const idx = typeof evt.index === 'number' ? evt.index : blocks.length;
+        if (cb.type === 'tool_use') blocks[idx] = { type: 'tool_use', id: cb.id, name: cb.name, json: '' };
+        else if (cb.type === 'text') blocks[idx] = { type: 'text', text: cb.text || '' };
         return false;
       }
-      if (evt.type === 'content_block_stop') { inTool = false; return false; }
-      if (inTool && evt.type === 'content_block_delta' && evt.delta &&
-          evt.delta.type === 'input_json_delta' && typeof evt.delta.partial_json === 'string') {
-        json += evt.delta.partial_json;
-        chunks++;
-        return true;
+      if (evt.type === 'content_block_delta' && evt.delta) {
+        const idx = typeof evt.index === 'number' ? evt.index : blocks.length - 1;
+        const b = blocks[idx];
+        if (b && b.type === 'tool_use' && evt.delta.type === 'input_json_delta' && typeof evt.delta.partial_json === 'string') {
+          b.json += evt.delta.partial_json;
+          chunks++;
+          return true;
+        }
+        if (b && b.type === 'text' && evt.delta.type === 'text_delta') b.text += evt.delta.text || '';
+        return false;
       }
       if (evt.type === 'error') {
         const err = new Error('upstream stream error: ' + ((evt.error && evt.error.type) || 'unknown'));
@@ -609,10 +628,29 @@ function toolCollector() {
     },
     chunks() { return chunks; },
     stopReason() { return stopReason; },
-    jsonLength() { return json.length; },
+    jsonLength() { const b = reportBlock(); return b ? b.json.length : 0; },
+    // The report_move input, or null when there is none or it does not parse.
     input() {
-      if (!json) return null;
-      try { return JSON.parse(json); } catch (e) { return null; }
+      const b = reportBlock();
+      if (!b || !b.json) return null;
+      try { return JSON.parse(b.json); } catch (e) { return null; }
+    },
+    // Data-tool calls the client should answer, and the assistant content to
+    // send back with the answers. Empty when report_move was called.
+    toolTurn() {
+      if (reportBlock()) return null;
+      const content = [];
+      const calls = [];
+      for (const b of blocks) {
+        if (!b) continue;
+        if (b.type === 'text') { if (b.text) content.push({ type: 'text', text: b.text }); continue; }
+        if (MOVE_TOOL_NAMES.indexOf(b.name) < 0) continue;
+        let input = {};
+        try { input = b.json ? JSON.parse(b.json) : {}; } catch (e) { input = {}; }
+        content.push({ type: 'tool_use', id: b.id, name: b.name, input: input });
+        calls.push({ id: b.id, name: b.name, input: input });
+      }
+      return calls.length ? { assistant: content, calls: calls } : null;
     },
   };
 }
@@ -678,6 +716,10 @@ export default async (req, context) => {
   if (!body || body.kind !== 'larry-move') {
     return json(400, { error: 'Unexpected payload' });
   }
+  const toolTurns = normalizeAppToolTurns(body.toolTurns, MAX_MOVE_TOOL_ROUNDS, MOVE_TOOL_NAMES);
+  if (toolTurns === null) {
+    return json(400, { error: 'Unusable tool turns' });
+  }
 
   const ndjson = Object.assign({}, headers, {
     'Content-Type': 'application/x-ndjson; charset=utf-8',
@@ -702,8 +744,12 @@ export default async (req, context) => {
     max_tokens: MAX_TOKENS,
     stream: true,
     system: buildSystemPrompt(body),
-    tools: [REPORT_MOVE_TOOL],
-    tool_choice: { type: 'tool', name: 'report_move' },
+    tools: [REPORT_MOVE_TOOL].concat(MOVE_TOOLS),
+    // A tool every round: data tools while rounds remain, then report_move
+    // is forced so the card always gets an answer.
+    tool_choice: toolTurns.length >= MAX_MOVE_TOOL_ROUNDS
+      ? { type: 'tool', name: 'report_move' }
+      : { type: 'any' },
     // Explicitly off. Sonnet-class models think adaptively when this is
     // omitted, and a forced tool call is the one shape thinking cannot
     // combine with. The pre-streaming Move never thought either.
@@ -711,7 +757,10 @@ export default async (req, context) => {
     messages: [{
       role: 'user',
       content: 'What should I do today to win this matchup? Use the report_move tool.',
-    }],
+    }].concat(...toolTurns.map((t) => [
+      { role: 'assistant', content: t.assistant },
+      { role: 'user', content: t.results },
+    ])),
   });
 
   // Abort with no argument so fetch rejects with a real AbortError; a flag
@@ -764,6 +813,15 @@ export default async (req, context) => {
             lastBeat = Date.now();
           }
         }
+        // The model asked the app for something: hand the calls to the
+        // client, which answers them and posts the next round.
+        const turn = collector.toolTurn();
+        if (turn) {
+          ctrl.enqueue(encoder.encode(frame({ tools: turn.calls, assistant: turn.assistant })));
+          clearTimeout(capTimer);
+          ctrl.close();
+          return;
+        }
         const move = validateMove(collector.input(), body);
         if (!move) {
           // Say why in the function log, so the next failure is diagnosable
@@ -800,4 +858,5 @@ export default async (req, context) => {
 export const _internal = {
   clean, buildDataBlock, buildSystemPrompt, validateMove, pickupsSpent,
   REPORT_MOVE_TOOL, frame, sseEvents, toolCollector, MODEL, MAX_TOKENS, STREAM_CAP_MS,
+  MOVE_TOOLS, MAX_MOVE_TOOL_ROUNDS,
 };
