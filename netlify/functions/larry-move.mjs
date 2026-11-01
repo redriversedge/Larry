@@ -464,10 +464,33 @@ function strArray(v, maxItems, maxLen) {
 
 // Validate and normalize the model's tool input. Anything unexpected is
 // dropped rather than passed through: the client renders this into the DOM.
-function validateMove(input, ctx) {
+// The model's report_move input, unwrapped if it nested the fields one
+// level down ({"report": {...}}), and with JSON-string fields parsed. After
+// app-tool rounds it sometimes did one or the other, and a strict reader
+// threw away a complete answer (Oct 31 2026: 1,134 characters, parsed fine,
+// "could not produce a usable answer").
+function unwrapMove(input) {
   if (!input || typeof input !== 'object') return null;
-  const headline = clean(input.headline, MAX_HEADLINE);
-  if (!headline) return null;
+  let src = input;
+  if (!src.headline && !src.matchupRead) {
+    for (const k of Object.keys(src)) {
+      const v = src[k];
+      if (v && typeof v === 'object' && !Array.isArray(v) && (v.headline || v.matchupRead || v.actions)) { src = v; break; }
+    }
+  }
+  const out = Object.assign({}, src);
+  for (const k of ['actions', 'matchupRead', 'risks', 'wouldChangeIf']) {
+    if (typeof out[k] === 'string') {
+      try { out[k] = JSON.parse(out[k]); } catch (e) { /* leave it; checks below handle it */ }
+    }
+  }
+  return out;
+}
+
+function validateMove(rawInput, ctx) {
+  const input = unwrapMove(rawInput);
+  if (!input) return null;
+  const givenHeadline = clean(input.headline, MAX_HEADLINE);
 
   // The prompt tells the model not to suggest pickups once the matchup limit
   // is spent, but a prompt rule is advisory. ESPN would reject the add, so
@@ -521,8 +544,13 @@ function validateMove(input, ctx) {
   }
 
   const mr = input.matchupRead && typeof input.matchupRead === 'object' ? input.matchupRead : {};
-  const summary = clean(mr.summary, 400);
-  if (!summary) return null;
+  // A missing headline or summary is filled from what IS there; only an
+  // answer with nothing usable at all is rejected.
+  const headline = givenHeadline ||
+    (actions.length ? clean(actions[0].action, MAX_HEADLINE) : '') ||
+    (bool(input.noMove) ? 'No move today.' : '');
+  if (!headline) return null;
+  const summary = clean(mr.summary, 400) || clean(input.summary, 400) || clean(typeof input.matchupRead === 'string' ? input.matchupRead : '', 400) || headline;
 
   // If every action was a pickup we just stripped, the model's headline is
   // almost certainly "pick up X", which would now sit above an empty list.
@@ -826,8 +854,12 @@ export default async (req, context) => {
         if (!move) {
           // Say why in the function log, so the next failure is diagnosable
           // from Netlify without reproducing it. No request content.
+          const parsedIn = collector.input();
           console.error("Larry's Move: unusable answer:", 'stop_reason=' + (collector.stopReason() || 'none'),
-            'json_chars=' + collector.jsonLength(), 'parsed=' + (collector.input() ? 'yes' : 'no'));
+            'json_chars=' + collector.jsonLength(), 'parsed=' + (parsedIn ? 'yes' : 'no'),
+            // Field NAMES only, never values: enough to see the shape it
+            // used without logging anything about the league.
+            'keys=' + (parsedIn && typeof parsedIn === 'object' ? Object.keys(parsedIn).slice(0, 12).join('|') : ''));
           ctrl.enqueue(encoder.encode(frame({ error: 'Larry could not produce a usable answer. Try again.' })));
         } else {
           move.dataUsed = dataUsedFor(body);
