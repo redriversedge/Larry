@@ -266,14 +266,20 @@ describe("larry-move: output validation", () => {
     expect(out.confidence).toBe("high");
   });
 
-  it("rejects a reply with no headline, since the card leads with it", () => {
-    expect(validateMove({ ...good, headline: "" })).toBeNull();
-    expect(validateMove({ ...good, headline: "   " })).toBeNull();
+  // The card leads with a headline, but a reply that has actions without
+  // one is still a usable answer: lead with the first action. Only a reply
+  // with no headline, no actions and no no-move flag is rejected.
+  it("leads with the first action when the headline is missing", () => {
+    const out = validateMove({ ...good, headline: "" });
+    if (good.actions && good.actions.length) {
+      expect(out.headline).toBe(out.actions[0].action);
+    }
+    expect(validateMove({ ...good, headline: "   ", actions: [], noMove: false })).toBeNull();
   });
 
-  it("rejects a reply with no matchup summary", () => {
-    expect(validateMove({ ...good, matchupRead: {} })).toBeNull();
-    expect(validateMove({ ...good, matchupRead: undefined })).toBeNull();
+  it("uses the headline when the matchup summary is missing", () => {
+    expect(validateMove({ ...good, matchupRead: {} }).matchupRead.summary).toBeTruthy();
+    expect(validateMove({ ...good, matchupRead: undefined }).matchupRead.summary).toBeTruthy();
   });
 
   it("rejects non-objects outright", () => {
@@ -470,5 +476,37 @@ describe("larry-move never starts a player with no game today", () => {
 
   it("says so in the prompt", () => {
     expect(buildSystemPrompt(ctx)).toMatch(/Only move a player INTO the starting lineup if his line says PLAYS TODAY/);
+  });
+});
+
+// Oct 31 2026: after app-tool rounds, a complete report_move answer (1,134
+// characters, valid JSON) was thrown away as unusable. Accept the shapes it
+// can safely be read from.
+describe("larry-move reads a report in the shapes the model actually sends", () => {
+  const { validateMove } = moveInternal as any;
+  const ctx = { league: { categories: ["REB"] }, myRoster: [{ name: "Bench Guy", injury: "ACTIVE", gamesToday: true }] };
+  const good = {
+    headline: "Start Bench Guy tonight.",
+    actions: [{ type: "lineup", action: "Start Bench Guy", reason: "He plays", players: { in: "Bench Guy" } }],
+    matchupRead: { summary: "Close in REB." },
+  };
+  it("unwraps fields nested one level down", () => {
+    const out = validateMove({ report: good }, ctx);
+    expect(out.headline).toBe("Start Bench Guy tonight.");
+    expect(out.actions).toHaveLength(1);
+  });
+  it("parses fields sent as JSON strings", () => {
+    const out = validateMove(Object.assign({}, good, {
+      actions: JSON.stringify(good.actions), matchupRead: JSON.stringify(good.matchupRead),
+    }), ctx);
+    expect(out.actions).toHaveLength(1);
+    expect(out.matchupRead.summary).toBe("Close in REB.");
+  });
+  it("fills a missing summary or headline instead of discarding the answer", () => {
+    expect(validateMove({ headline: "Hold.", actions: [] }, ctx).matchupRead.summary).toBe("Hold.");
+    expect(validateMove({ actions: good.actions, matchupRead: { summary: "x" } }, ctx).headline).toBe("Start Bench Guy");
+  });
+  it("still rejects an answer with nothing usable", () => {
+    expect(validateMove({ risks: ["x"] }, ctx)).toBeNull();
   });
 });
