@@ -1418,3 +1418,7 @@ body {
 .trade-bar { height: 7px; border-radius: 4px; }
 .trade-bar.before { background: var(--text-muted); opacity: 0.45; margin-bottom: 3px; }
 .trade-bar-nums { width: 104px; text-align: right; font-size: 0.72rem; line-height: 1.35; }
+
+/* --- TRADE FINDER --- */
+.trade-offer { margin: 0 12px 8px; padding: 10px; background: var(--bg-input); border-radius: 8px; }
+.trade-offer-verdict { font-weight: 800; font-size: 0.85rem; }
