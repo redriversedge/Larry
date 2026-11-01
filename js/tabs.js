@@ -1690,11 +1690,19 @@ function renderTradeCenter() {
   var html = '';
   if (S.allPlayers.length) Engines.ensureDURANT(S.allPlayers);
 
-  // Search for specific player trades
+  // Trade Finder: type any rostered player. Yours: offers for him from
+  // every other team. Someone else's: packages from your roster to get him.
   html += '<div class="card"><div class="card-header">Trade Finder</div>';
-  html += '<input type="text" class="filter-search" aria-label="Search for a player to see trade options" placeholder="Search for a player to see trade options..." ';
-  html += 'value="' + esc(_tradeSearchTerm) + '" oninput="handleTradeSearch(this.value)">';
-  html += '<div id="trade-results"></div></div>';
+  html += '<div style="padding:0 12px">';
+  html += '<input type="text" class="filter-search" style="width:100%" aria-label="Search for a player to see trade options" ' +
+    'placeholder="Type any rostered player..." value="' + esc(_tradeSearchTerm) + '" oninput="handleTradeSearch(this.value)">';
+  html += '<div class="filter-chips" style="margin:8px 0" role="group" aria-label="Trade shape">';
+  TRADE_SHAPES.forEach(function(sh) {
+    html += '<button class="chip' + (_tradeShape === sh.id ? ' active' : '') + '" style="min-height:36px" ' +
+      'onclick="setTradeShape(\'' + sh.id + '\')">' + sh.label + '</button>';
+  });
+  html += '</div></div>';
+  html += '<div id="trade-results">' + tradeResultsHtml() + '</div></div>';
 
   // Trade Analyzer: up to three players a side.
   html += '<div class="card"><div class="card-header">Trade Analyzer</div>';
@@ -1706,46 +1714,275 @@ function renderTradeCenter() {
   return html;
 }
 
+// --- TRADE FINDER ---------------------------------------------------------
+//
+// Shapes are from the user's side: "2 for 1" means you give two, get one.
+var TRADE_SHAPES = [
+  { id: '1-1', label: '1 for 1', give: 1, get: 1 },
+  { id: '2-1', label: '2 for 1', give: 2, get: 1 },
+  { id: '2-2', label: '2 for 2', give: 2, get: 2 }
+];
+var _tradeShape = '1-1';
+var _tradeTargetId = null;
+
+function setTradeShape(id) {
+  _tradeShape = id;
+  var el = document.getElementById('trade-results');
+  if (el) el.innerHTML = tradeResultsHtml();
+  // Chips live outside the results; refresh their state without touching
+  // the search input (mobile keyboard).
+  var chips = document.querySelectorAll('[aria-label="Trade shape"] .chip');
+  for (var i = 0; i < chips.length; i++) {
+    chips[i].classList.toggle('active', TRADE_SHAPES[i] && TRADE_SHAPES[i].id === id);
+  }
+}
+
+function pickTradeTarget(id) {
+  _tradeTargetId = id;
+  var el = document.getElementById('trade-results');
+  if (el) el.innerHTML = tradeResultsHtml();
+}
+
 function renderTradeResults() {
   var container = document.getElementById('trade-results');
   if (!container) return;
+  _tradeTargetId = null;
+  container.innerHTML = tradeResultsHtml();
+}
 
-  var trades;
-  if (_tradeSearchTerm && _tradeSearchTerm.length >= 2) {
-    // Search mode: find all trades involving this player name, any acceptance %
-    var allTrades = Engines.findTrades({ minAcceptance: 0 });
-    var term = _tradeSearchTerm.toLowerCase();
-    trades = allTrades.filter(function(t) {
-      return (t.give.name || '').toLowerCase().indexOf(term) >= 0 ||
-             (t.get.name || '').toLowerCase().indexOf(term) >= 0;
+function combos(list, k) {
+  if (k === 1) return list.map(function(x) { return [x]; });
+  var out = [];
+  for (var i = 0; i < list.length; i++) {
+    for (var j = i + 1; j < list.length; j++) out.push([list[i], list[j]]);
+  }
+  return out;
+}
+
+// Pure. Every trade of the chosen shape that involves the target player,
+// scored from both sides the same way the Trade Analyzer scores one trade:
+// category rank movement plus value, with roster spots priced in.
+//   teams: [{ teamId, name, players: [full player, slotId kept] }]
+//   rate(p): per-game category rates; score(p): internal value (never shown)
+//   faBest: values of the best free agents, best first (for a freed spot)
+// Returns { side: 'mine'|'theirs', results: [...] } best first.
+function findTradePackages(teams, myTeamId, targetId, shape, cats, rate, score, faBest) {
+  var byTeam = {};
+  teams.forEach(function(t) { byTeam[t.teamId] = t; });
+  var owner = null;
+  teams.forEach(function(t) {
+    (t.players || []).forEach(function(p) { if (p.id === targetId) owner = t; });
+  });
+  if (!owner) return { side: null, results: [] };
+  var mine = byTeam[myTeamId];
+  if (!mine) return { side: null, results: [] };
+
+  // Rates and totals once.
+  var rates = {};
+  var totals = {};
+  teams.forEach(function(t) {
+    var tot = {};
+    cats.forEach(function(c) { tot[c.abbr] = 0; });
+    (t.players || []).forEach(function(p) {
+      var r = rate(p) || {};
+      rates[p.id] = r;
+      if (p.slotId === 13) return;
+      cats.forEach(function(c) { tot[c.abbr] += r[c.abbr] || 0; });
+    });
+    totals[t.teamId] = tot;
+  });
+  function rankIn(teamId, cat, world) {
+    var v = world[teamId][cat.abbr], r = 1;
+    teams.forEach(function(t) {
+      if (t.teamId === teamId) return;
+      var o = world[t.teamId][cat.abbr];
+      if (cat.isNegative ? o < v : o > v) r++;
+    });
+    return r;
+  }
+  var before = {};
+  teams.forEach(function(t) {
+    before[t.teamId] = {};
+    cats.forEach(function(c) { before[t.teamId][c.abbr] = rankIn(t.teamId, c, totals); });
+  });
+  function moved(tot, out, inn) {
+    var x = {};
+    cats.forEach(function(c) {
+      var v = tot[c.abbr];
+      out.forEach(function(p) { if (p.slotId !== 13) v -= (rates[p.id] || {})[c.abbr] || 0; });
+      inn.forEach(function(p) { v += (rates[p.id] || {})[c.abbr] || 0; });
+      x[c.abbr] = v;
+    });
+    return x;
+  }
+  function sumScore(list) { return list.reduce(function(a, p) { return a + score(p); }, 0); }
+  // Worst players a team would drop when taking back more than it sends.
+  function worst(team, exclude, n) {
+    return (team.players || []).filter(function(p) {
+      return exclude.indexOf(p.id) < 0 && p.slotId !== 13;
+    }).map(score).sort(function(a, b) { return a - b; }).slice(0, n);
+  }
+
+  var giveN = shape.give, getN = shape.get;
+  var targetIsMine = owner.teamId === myTeamId;
+  var out = [];
+
+  function evaluate(partner, give, get) {
+    var worldAfter = {};
+    teams.forEach(function(t) { worldAfter[t.teamId] = totals[t.teamId]; });
+    worldAfter[myTeamId] = moved(totals[myTeamId], give, get);
+    worldAfter[partner.teamId] = moved(totals[partner.teamId], get, give);
+    var myDelta = 0, theirDelta = 0, better = [], worse = [];
+    cats.forEach(function(c) {
+      var d = before[myTeamId][c.abbr] - rankIn(myTeamId, c, worldAfter);
+      myDelta += d;
+      if (d > 0) better.push(c.abbr); else if (d < 0) worse.push(c.abbr);
+      theirDelta += before[partner.teamId][c.abbr] - rankIn(partner.teamId, c, worldAfter);
+    });
+    var giveIds = give.map(function(p) { return p.id; });
+    var getIds = get.map(function(p) { return p.id; });
+    // Roster spots: whoever takes back more players drops their worst; the
+    // other side frees a spot for the best free agent.
+    var spotMine = 0, spotTheirs = 0, extra = get.length - give.length;
+    if (extra > 0) {
+      worst(mine, giveIds, extra).forEach(function(v) { spotMine -= v; });
+      (faBest || []).slice(0, extra).forEach(function(v) { spotTheirs += v; });
+    } else if (extra < 0) {
+      (faBest || []).slice(0, -extra).forEach(function(v) { spotMine += v; });
+      worst(partner, getIds, -extra).forEach(function(v) { spotTheirs -= v; });
+    }
+    var giveV = sumScore(give), getV = sumScore(get);
+    var mineV = tradeVerdict({ rankDelta: myDelta }, getV - giveV + spotMine, giveV);
+    var theirsV = tradeVerdict({ rankDelta: theirDelta }, giveV - getV + spotTheirs, getV);
+    out.push({
+      partnerId: partner.teamId, give: give, get: get,
+      verdict: mineV, theirVerdict: theirsV,
+      myRankDelta: myDelta, theirRankDelta: theirDelta,
+      better: better, worse: worse,
+      mineScore: mineV.catSignal + mineV.valueSignal,
+      theirScore: theirsV.catSignal + theirsV.valueSignal
+    });
+  }
+
+  if (targetIsMine) {
+    var target = (mine.players || []).find(function(p) { return p.id === targetId; });
+    var mates = (mine.players || []).filter(function(p) { return p.id !== targetId; });
+    var gives = giveN === 1 ? [[target]] : mates.map(function(m) { return [target, m]; });
+    teams.forEach(function(t) {
+      if (t.teamId === myTeamId) return;
+      var gets = combos(t.players || [], getN);
+      gives.forEach(function(g) { gets.forEach(function(x) { evaluate(t, g, x); }); });
     });
   } else {
-    // Default: 50%+ acceptance
-    trades = Engines.findTrades({ minAcceptance: 50 });
+    var tgt = (owner.players || []).find(function(p) { return p.id === targetId; });
+    var others = (owner.players || []).filter(function(p) { return p.id !== targetId; });
+    var getsT = getN === 1 ? [[tgt]] : others.map(function(o) { return [tgt, o]; });
+    var givesT = combos(mine.players || [], giveN);
+    getsT.forEach(function(x) { givesT.forEach(function(g) { evaluate(owner, g, x); }); });
   }
 
-  if (!trades.length) {
-    container.innerHTML = '<div class="empty-state"><p>' +
-      (_tradeSearchTerm ? 'No trade matches for "' + esc(_tradeSearchTerm) + '".' : 'No strong trade matches found with 50%+ acceptance likelihood.') +
-      '</p></div>';
-    return;
-  }
-
-  var html = '<div class="text-xs muted" style="margin:8px 0">' + trades.length + ' trade' + (trades.length !== 1 ? 's' : '') + ' found</div>';
-  trades.slice(0, 15).forEach(function(t) {
-    html += '<div class="decision-item" style="cursor:pointer" onclick="openPlayerPopup(' + t.get.id + ')">';
-    html += '<div class="decision-content">';
-    html += '<div class="decision-player">';
-    html += '<span class="stat-negative">Give: ' + esc(t.give.name) + '</span> ';
-    html += '<span class="stat-positive">Get: ' + esc(t.get.name) + '</span>';
-    html += '</div>';
-    html += '<div class="decision-replacement">';
-    html += esc(t.team.name) + ' | Acceptance: ' + t.acceptanceLikelihood + '% | ';
-    html += 'Helps us: ' + (t.helpsUs.length ? t.helpsUs.join(', ') : 'even') + ' | ';
-    html += 'Helps them: ' + (t.helpsThem.length ? t.helpsThem.join(', ') : 'even');
-    html += '</div></div></div>';
+  // Trades the other manager would plausibly accept, best for you first.
+  var plausible = out.filter(function(r) { return r.theirScore >= 0; });
+  var pool = plausible.length >= 3 ? plausible : out;
+  pool.sort(function(a, b) {
+    return (b.mineScore - a.mineScore) || (b.myRankDelta - a.myRankDelta) ||
+      (b.theirScore - a.theirScore) || (b.theirRankDelta - a.theirRankDelta);
   });
-  container.innerHTML = html;
+  return { side: targetIsMine ? 'mine' : 'theirs', results: pool.slice(0, 10), onlyLongShots: pool !== plausible };
+}
+
+function tradeResultsHtml() {
+  var term = (_tradeSearchTerm || '').trim();
+  if (term.length < 2) {
+    return '<div class="text-xs muted" style="padding:0 12px 12px">Type a player on your team to see what he could bring back, ' +
+      'or a player on another team to see what it would take to get him.</div>';
+  }
+  if (typeof Engines !== 'undefined' && Engines.ensureDURANT) Engines.ensureDURANT(S.allPlayers || []);
+  var q = term.toLowerCase();
+  var rostered = (S.allPlayers || []).filter(function(p) {
+    return p.onTeamId > 0 && p.name && p.name.toLowerCase().indexOf(q) >= 0;
+  }).sort(byDurantRank);
+  if (_tradeTargetId && !rostered.some(function(p) { return p.id === _tradeTargetId; })) _tradeTargetId = null;
+  if (!rostered.length) {
+    return '<div class="empty-state"><p>No rostered player matches "' + esc(term) + '". Free agents cannot be traded for.</p></div>';
+  }
+  var exact = rostered.filter(function(p) { return p.name.toLowerCase() === q; });
+  var target = _tradeTargetId ? tradeFindPlayer(_tradeTargetId) :
+    (rostered.length === 1 ? rostered[0] : (exact.length === 1 ? exact[0] : null));
+  if (!target) {
+    var html = '<div class="text-xs muted" style="padding:0 12px 4px">Pick one:</div>';
+    rostered.slice(0, 8).forEach(function(p) {
+      html += '<div class="mini-row" style="cursor:pointer;min-height:44px;padding:8px 12px" onclick="pickTradeTarget(' + p.id + ')">' +
+        '<span style="flex:1">' + esc(p.name) + '</span><span class="text-xs muted">' +
+        (p.onTeamId === S.myTeam.teamId ? 'Your team' : esc(teamNameFor(p.onTeamId))) + '</span></div>';
+    });
+    return html;
+  }
+
+  var shape = TRADE_SHAPES.find(function(x) { return x.id === _tradeShape; }) || TRADE_SHAPES[0];
+  var cats = getOrderedCategories();
+  var teams = (S.teams || []).map(function(t) {
+    return { teamId: t.teamId, name: t.name, players: (t.players || []).map(function(stub) {
+      var f = tradeFindPlayer(stub.id);
+      return f ? Object.assign({}, f, { slotId: stub.slotId }) : stub;
+    }) };
+  });
+  var faBest = (S.allPlayers || []).filter(function(p) {
+    return !(p.onTeamId > 0) && !p.noEvidence && !/^(OUT|SUSPENSION|IR|INJURED_RESERVE)$/i.test(p.injuryStatus || '');
+  }).sort(byDurantRank).slice(0, 2).map(tradeScore);
+  var found = findTradePackages(teams, S.myTeam.teamId, target.id, shape, cats, tradeRate, tradeScore, faBest);
+
+  var mineSide = found.side === 'mine';
+  var html2 = '<div class="text-sm" style="padding:0 12px 6px">' +
+    (mineSide
+      ? 'Offers for <strong>' + esc(target.name) + '</strong> from around the league (' + esc(shape.label) + ': you give ' + shape.give + ', get ' + shape.get + ').'
+      : 'What it takes to get <strong>' + esc(target.name) + '</strong> from ' + esc(teamNameFor(target.onTeamId)) +
+        ' (' + esc(shape.label) + ': you give ' + shape.give + ', get ' + shape.get + ').') +
+    (rostered.length > 1 ? ' <a href="#" onclick="_tradeTargetId=null;pickTradeTarget(null);return false">Change player</a>' : '') +
+    '</div>';
+  if (!found.results.length) {
+    return html2 + '<div class="empty-state"><p>No ' + esc(shape.label) + ' trades to show.</p></div>';
+  }
+  if (!found.results.some(function(r) { return r.mineScore >= 0; })) {
+    html2 += '<div class="text-xs" style="padding:0 12px 6px;color:var(--accent-gold)">None of these ' + esc(shape.label) +
+      ' deals helps you on Larry\'s numbers. Try another shape, or these are the least bad options.</div>';
+  } else if (found.onlyLongShots) {
+    html2 += '<div class="text-xs muted" style="padding:0 12px 6px">None of these clearly helps the other team, so expect a hard sell.</div>';
+  }
+  found.results.forEach(function(r) {
+    var giveIds = r.give.map(function(p) { return p.id; }).join(',');
+    var getIds = r.get.map(function(p) { return p.id; }).join(',');
+    var odds = r.theirScore >= 1 ? 'They should like it' : (r.theirScore === 0 ? 'Fair for them' : 'Tough sell');
+    html2 += '<div class="trade-offer">';
+    html2 += '<div style="display:flex;align-items:center;gap:8px">';
+    html2 += '<span class="trade-offer-verdict" style="color:' + r.verdict.color + '">' + esc(r.verdict.label) + '</span>';
+    html2 += '<span class="text-xs muted" style="flex:1">' + esc(teamNameFor(r.partnerId)) + ' &middot; ' + esc(odds) + '</span>';
+    html2 += '<button class="btn btn-sm btn-secondary" style="min-height:36px" onclick="loadTradeIntoAnalyzer(\'' +
+      giveIds + '\',\'' + getIds + '\')">Analyze</button>';
+    html2 += '</div>';
+    html2 += '<div class="text-sm" style="margin-top:4px"><span class="stat-negative">Give:</span> ' +
+      r.give.map(function(p) { return esc(p.name) + ' <span class="text-xs muted">' + (p.noEvidence || !p.durantRank ? '--' : '#' + p.durantRank) + '</span>'; }).join(', ') + '</div>';
+    html2 += '<div class="text-sm"><span class="stat-positive">Get:</span> ' +
+      r.get.map(function(p) { return esc(p.name) + ' <span class="text-xs muted">' + (p.noEvidence || !p.durantRank ? '--' : '#' + p.durantRank) + '</span>'; }).join(', ') + '</div>';
+    if (r.better.length || r.worse.length) {
+      html2 += '<div class="text-xs muted" style="margin-top:2px">' +
+        (r.better.length ? 'Climbs in ' + r.better.join(', ') : '') +
+        (r.better.length && r.worse.length ? '; ' : '') +
+        (r.worse.length ? 'slips in ' + r.worse.join(', ') : '') + '</div>';
+    }
+    html2 += '</div>';
+  });
+  html2 += '<div class="text-xs muted" style="padding:4px 12px 12px">Numbers next to names are Larry ranks. Analyze opens the full breakdown below.</div>';
+  return html2;
+}
+
+// Open a found trade in the Trade Analyzer below.
+function loadTradeIntoAnalyzer(giveCsv, getCsv) {
+  _tradeGive = String(giveCsv).split(',').map(Number).filter(Boolean);
+  _tradeGet = String(getCsv).split(',').map(Number).filter(Boolean);
+  refreshTradeUI();
+  var el = document.getElementById('trade-builder');
+  if (el && el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 function renderTeamAnalyzer() {
