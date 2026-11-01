@@ -251,8 +251,16 @@ var ESPNSync = (function() {
     if (settings.acquisitionSettings) {
       var acq = settings.acquisitionSettings;
       S.league.acquisitionLimit = acq.acquisitionLimit === undefined ? -1 : acq.acquisitionLimit;
-      S.league.matchupAcquisitionLimit =
-        acq.matchupAcquisitionLimit === undefined ? -1 : acq.matchupAcquisitionLimit;
+      // The per-matchup cap. matchupAcquisitionLimit is the field ESPN uses;
+      // the others are guarded fallbacks, and which one answered goes in
+      // the sync log so a wrong "unlimited" can be traced.
+      var mLimit = -1, mSource = 'none';
+      ['matchupAcquisitionLimit', 'matchupLimitPerPeriod', 'acquisitionLimitPerMatchup', 'matchupLimit'].forEach(function(k) {
+        if (mSource === 'none' && typeof acq[k] === 'number' && acq[k] >= 0) { mLimit = acq[k]; mSource = k; }
+      });
+      S.league.matchupAcquisitionLimit = mLimit;
+      S.league.matchupAcquisitionLimitSource = mSource;
+      if (typeof acq.waiverHours === 'number') S.league.waiverHours = acq.waiverHours;
     }
 
     // Lineup lock type. Was hard-coded to 'daily' on the way to Larry's
@@ -895,6 +903,10 @@ var ESPNSync = (function() {
       var player = parsePlayerDirect(entry);
       if (player) {
         player.onTeamId = 0;
+        // FREEAGENT is addable now; WAIVERS means a claim that only lands
+        // once the player clears (recently dropped players).
+        player.poolStatus = entry.status || 'FREEAGENT';
+        player.waiverClearsAt = typeof entry.waiverProcessDate === 'number' ? entry.waiverProcessDate : null;
         S.freeAgents.push(player);
         if (!S.allPlayers.find(function(p) { return p.id === player.id; })) {
           S.allPlayers.push(player);
@@ -1079,6 +1091,11 @@ var ESPNSync = (function() {
         await loadProjectionData();
         enrichPlayerSchedules();
         if (S.myTeam.teamId > 0) parseMatchup(data);
+        if (S.myTeam.teamId > 0 && typeof pickupAllowance === 'function') {
+          var pa = pickupAllowance();
+          addSyncLog('info', 'Pickups this matchup: ' + pa.used + ' used of ' +
+            (pa.limit >= 0 ? pa.limit : 'unlimited') + ' (limit from ' + pa.limitSource + ')');
+        }
 
         // Fetch free agents to populate allPlayers for search/rankings
         try {

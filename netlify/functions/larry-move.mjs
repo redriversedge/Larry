@@ -187,7 +187,8 @@ function rosterLine(p, cats) {
       (p.gameToday.timeLocal ? ' ' + clean(p.gameToday.timeLocal, 12) : '') + ')';
   }
   line += ' | per game ' + perGameStr(p.perGame, cats);
-  if (p.value !== undefined) line += ' | value ' + num(p.value);
+  if (p.rank) line += ' | Larry rank #' + num(p.rank, 0);
+  if (bool(p.onWaivers)) line += ' | ON WAIVERS (claim only)';
   if (bool(p.irEligible)) line += ' | IR ELIGIBLE';
   return line;
 }
@@ -226,6 +227,60 @@ function buildDataBlock(ctx) {
       : ' (no season limit)'));
   lines.push('IR SLOTS: ' + num(league.irSlots, 0) +
     ' total, ' + num(league.irUsed, 0) + ' filled');
+
+  const tm = c.timing && typeof c.timing === 'object' ? c.timing : null;
+  if (tm) {
+    const phaseText = {
+      pregame: 'today\'s games have not started; pickups made now count TODAY',
+      live: 'today\'s games are IN PROGRESS; pickups made now count from ' + clean(tm.planDay, 12) + ', and tonight\'s results are not final yet',
+      final: 'today\'s games are OVER; pickups made now count from ' + clean(tm.planDay, 12),
+      off: 'no NBA games today; pickups made now count from ' + clean(tm.planDay, 12),
+    }[clean(tm.phase, 10)] || '';
+    lines.push('CLOCK: ' + clean(tm.now, 10) + ' local' +
+      (tm.firstTip ? ' | today\'s first tip ' + clean(tm.firstTip, 10) + ', last tip ' + clean(tm.lastTip, 10) : '') +
+      (phaseText ? ' | ' + phaseText : ''));
+    lines.push('ADVICE IS FOR: ' + clean(tm.planDay, 12) +
+      (bool(tm.planIsNextMatchup) ? ' (the NEXT matchup; this one is effectively over for moves)' : ''));
+  }
+
+  const plan = c.plan && typeof c.plan === 'object' ? c.plan : null;
+  if (plan) {
+    const list = (a, n) => (Array.isArray(a) ? a.slice(0, n || 13).map((x) => clean(x, 60)).filter(Boolean).join('; ') : '');
+    const side = (label, d) => {
+      if (!d || typeof d !== 'object') return;
+      lines.push('  ' + label + ' starters ' + clean(plan.day, 12) + ' (' + (Array.isArray(d.starters) ? d.starters.length : 0) + ' of ' + num(plan.slots, 0) + '): ' + (list(d.starters) || 'none'));
+      if (Array.isArray(d.sitting) && d.sitting.length) lines.push('  ' + label + ' players with a game who will NOT fit in the lineup: ' + list(d.sitting));
+      lines.push('  ' + label + ' open starting slots ' + clean(plan.day, 12) + ': ' + num(d.openSlots, 0));
+      if (Array.isArray(d.injuredWithGame) && d.injuredWithGame.length) lines.push('  ' + label + ' injured with a game that day: ' + list(d.injuredWithGame));
+      if (d.projected && typeof d.projected === 'object') lines.push('  ' + label + ' projected that day: ' + perGameStr(d.projected, cats));
+    };
+    lines.push('');
+    lines.push('PLAN DAY ' + clean(plan.day, 12) + (bool(plan.nextMatchup) ? ' (first day of the next matchup' + (plan.opponent ? ', vs ' + clean(plan.opponent) : '') + ')' : '') +
+      ' | matchup ends ' + clean(plan.matchupEnds, 12) +
+      ' | pickups left ' + (Number(plan.pickupsLeft) >= 0 ? num(plan.pickupsLeft, 0) : 'unlimited'));
+    side('MY', plan.mine);
+    side('OPPONENT', plan.theirs);
+    if (Array.isArray(plan.categoriesInPlay)) lines.push('  CATEGORIES STILL IN PLAY: ' + plan.categoriesInPlay.map((x) => clean(x, 8)).join(', '));
+    if (Array.isArray(plan.pickupCandidates) && plan.pickupCandidates.length) {
+      lines.push('  FREE AGENTS WHO PLAY ' + clean(plan.day, 12) + ' (best fit for the categories in play first):');
+      plan.pickupCandidates.slice(0, 10).forEach((p) => {
+        if (!p || typeof p !== 'object') return;
+        lines.push('  - ' + clean(p.name) + ' | ' + clean(p.team, 8) +
+          (p.rank ? ' | Larry rank #' + num(p.rank, 0) : '') +
+          ' | plays ' + (Array.isArray(p.plays) ? p.plays.slice(0, 7).map((x) => clean(x, 12)).join(', ') : '') +
+          ' | per game ' + perGameStr(p.perGame, cats) +
+          (bool(p.onWaivers) ? ' | ON WAIVERS: a claim, not an instant add' + (p.waiverClears ? ', clears ' + clean(p.waiverClears, 30) : '') : ''));
+      });
+    }
+    if (Array.isArray(plan.dropCandidates) && plan.dropCandidates.length) {
+      lines.push('  DROPPABLE (outside Larry\'s top ' + num(plan.coreRank, 0) + '; worst first):');
+      plan.dropCandidates.slice(0, 6).forEach((p) => {
+        if (!p || typeof p !== 'object') return;
+        lines.push('  - ' + clean(p.name) + (p.rank ? ' | Larry rank #' + num(p.rank, 0) : ' | unranked') + ' | ' + clean(p.status, 20) +
+          ' | plays ' + (Array.isArray(p.plays) && p.plays.length ? p.plays.slice(0, 7).map((x) => clean(x, 12)).join(', ') : 'no games left this matchup'));
+      });
+    }
+  }
 
   const m = c.matchup && typeof c.matchup === 'object' ? c.matchup : {};
   lines.push('');
@@ -341,9 +396,17 @@ function buildSystemPrompt(ctx) {
 
   return `You are Larry, a fantasy basketball analyst helping ONE manager win THIS week's head-to-head category matchup. You are answering a single question: what should they do today?
 
+THE CLOCK DECIDES WHAT "TODAY" MEANS. Read CLOCK and ADVICE IS FOR first.
+- Before the first tip: advise for today.
+- Once games are under way or over, today is done for pickups. The job is the PLAN DAY: set that lineup and make the adds now, because free agents are first come, first served and other managers will take them overnight. "Sit tight" is wrong whenever an open slot, a sitting player or a category in play can be helped on the plan day.
+- While today's games are still IN PROGRESS, tonight's results are not final. Say which moves are safe to make now (an open slot on the plan day, a must-have free agent who could be taken) and which should wait until tonight's games end because the score could change the need. Say what result would change the call.
+- When ADVICE IS FOR the next matchup, plan the first day of the next matchup against the next opponent, with a full set of pickups.
+
 HARD RULES, in priority order. These are not suggestions.
 1. NEVER recommend adding a player whose status is OUT, SUSPENSION or INJURY_RESERVE.
-2. NEVER recommend dropping a player in the top 60% of this roster by value, unless you are replacing them with a clearly better healthy player, and if you do, say why in the reason.
+2. Only drop players listed under DROPPABLE. Never drop anyone ranked inside Larry's top 75: that is the manager's core, and streaming does not justify it.
+2b. Stream hard for categories still in play: fill open starting slots and replace players who do not play on the plan day. Never spend a pickup on a category that is not in play.
+2c. A free agent marked ON WAIVERS is a claim, not an instant add; say so, and do not count his games before he clears.
 3. Respect the pickup limits. ${limitReached
     ? 'THIS MANAGER HAS NO PICKUPS LEFT THIS MATCHUP. Do not suggest any add or drop. Lineup, IR and hold advice only.'
     : 'If a move would spend their last pickup of the matchup, say so explicitly.'}
@@ -509,8 +572,22 @@ function validateMove(rawInput, ctx) {
   // scores nothing from the slot. Oct 30 2026: Move said to start Fox and
   // Daniels over Draymond and Poeltl while its own reason said Fox and
   // Daniels had no game.
-  const idleNames = roster.filter((p) => p && p.gamesToday === false && p.name)
+  // Only meaningful while advice is about TODAY. Once the plan day is
+  // tomorrow, "no game today" says nothing about the lineup being set.
+  const adviceIsToday = !(ctx && ctx.timing && typeof ctx.timing === 'object') || ctx.timing.phase === 'pregame';
+  const idleNames = adviceIsToday ? roster.filter((p) => p && p.gamesToday === false && p.name)
+    .map((p) => String(p.name).toLowerCase()) : [];
+  // Core players (Larry rank 75 or better) are never dropped to stream.
+  // The prompt says so; this makes it true.
+  const coreNames = roster.filter((p) => p && p.name && Number(p.rank) > 0 && Number(p.rank) <= 75)
     .map((p) => String(p.name).toLowerCase());
+  const dropsCorePlayer = (a) => (a.type === 'add_drop' || a.type === 'stream') && a.players && typeof a.players === 'object' &&
+    coreNames.some((n) => String(a.players.out || '').toLowerCase().indexOf(n) >= 0);
+  // No more pickups than the plan day allows (the next matchup gets a fresh
+  // allowance, which the client already put in plan.pickupsLeft).
+  const planCtx = ctx && ctx.plan && typeof ctx.plan === 'object' ? ctx.plan : null;
+  const pickupsLeftForPlan = planCtx && Number(planCtx.pickupsLeft) >= 0 ? Number(planCtx.pickupsLeft) : null;
+  let pickupsSpentHere = 0;
   const startsIdlePlayer = (a) => {
     if (a.type !== 'lineup') return false;
     const into = a.players && typeof a.players === 'object' && a.players.in
@@ -530,6 +607,11 @@ function validateMove(rawInput, ctx) {
     if (noAdds && (type === 'add_drop' || type === 'stream')) continue;
     if (startsOutPlayer({ type: type, players: a.players })) { droppedOut = true; continue; }
     if (startsIdlePlayer({ type: type, players: a.players, action: a.action })) { droppedOut = true; continue; }
+    if (dropsCorePlayer({ type: type, players: a.players })) { droppedOut = true; continue; }
+    if (type === 'add_drop' || type === 'stream') {
+      if (pickupsLeftForPlan !== null && pickupsSpentHere >= pickupsLeftForPlan) { droppedOut = true; continue; }
+      pickupsSpentHere++;
+    }
     const action = clean(a.action, 200);
     const reason = clean(a.reason, 300);
     if (!action) continue;
@@ -690,11 +772,14 @@ function dataUsedFor(body) {
       me: Number(body.matchup && body.matchup.myGamesLeft) || 0,
       opp: Number(body.matchup && body.matchup.oppGamesLeft) || 0,
     },
+    // THIS matchup's pickups. It used to print the season count against the
+    // season limit ("3 of unlimited") in a league capped at 3 per matchup.
     acquisitions: clean(
       body.league
-        ? num(body.league.acquisitionsUsed, 0) + ' of ' +
-          (Number(body.league.acquisitionLimit) >= 0 ? num(body.league.acquisitionLimit, 0) : 'unlimited') + ' used'
-        : '', 40),
+        ? num(body.league.matchupAcquisitionsUsed, 0) + ' of ' +
+          (Number(body.league.matchupAcquisitionLimit) >= 0 ? num(body.league.matchupAcquisitionLimit, 0) : 'unlimited') +
+          ' used this matchup'
+        : '', 60),
   };
 }
 
@@ -890,5 +975,5 @@ export default async (req, context) => {
 export const _internal = {
   clean, buildDataBlock, buildSystemPrompt, validateMove, pickupsSpent,
   REPORT_MOVE_TOOL, frame, sseEvents, toolCollector, MODEL, MAX_TOKENS, STREAM_CAP_MS,
-  MOVE_TOOLS, MAX_MOVE_TOOL_ROUNDS,
+  MOVE_TOOLS, MAX_MOVE_TOOL_ROUNDS, dataUsedFor,
 };

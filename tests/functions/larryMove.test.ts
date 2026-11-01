@@ -510,3 +510,66 @@ describe("larry-move reads a report in the shapes the model actually sends", () 
     expect(validateMove({ risks: ["x"] }, ctx)).toBeNull();
   });
 });
+
+// Oct 31 2026, 10:40 PM: games over, Larry said sit tight. And the card
+// showed "3 of unlimited" in a league capped at 3 per matchup.
+describe("larry-move plans for the day a move can affect", () => {
+  const { buildDataBlock, buildSystemPrompt, validateMove, dataUsedFor } = moveInternal as any;
+  const ctx = {
+    league: { categories: ["REB", "AST", "STL", "BLK", "PTS"], matchupAcquisitionLimit: 3, matchupAcquisitionsUsed: 2, acquisitionsUsed: 3, acquisitionLimit: -1 },
+    timing: { phase: "final", now: "10:40 PM", firstTip: "6:00 PM", lastTip: "9:30 PM", planDay: "Sun 11/1", planIsNextMatchup: false },
+    plan: {
+      day: "Sun 11/1", slots: 10, pickupsLeft: 1, matchupEnds: "Sun 11/1", categoriesInPlay: ["REB", "BLK"], coreRank: 75,
+      mine: { starters: ["A (vs BOS)"], sitting: [], openSlots: 3, injuredWithGame: [], projected: { REB: 30 } },
+      theirs: { starters: ["Z (@ NYK)"], sitting: [], openSlots: 0, projected: { REB: 40 } },
+      pickupCandidates: [{ name: "Big Free", team: "NOP", rank: 140, plays: ["Sun 11/1"], perGame: { REB: 9 }, onWaivers: true, waiverClears: "Mon 3:00 AM" }],
+      dropCandidates: [{ name: "Fringe Guy", rank: 180, status: "ACTIVE", playsPlanDay: false, plays: [] }],
+    },
+    myRoster: [
+      { name: "Core Star", rank: 12, injury: "ACTIVE", gamesToday: false },
+      { name: "Fringe Guy", rank: 180, injury: "ACTIVE", gamesToday: false },
+      { name: "Other Fringe", rank: 200, injury: "ACTIVE", gamesToday: false },
+    ],
+  };
+
+  it("tells the model the clock, the plan day, open slots, waivers and who can be dropped", () => {
+    const block = buildDataBlock(ctx);
+    expect(block).toMatch(/CLOCK: 10:40 PM local .*today's games are OVER; pickups made now count from Sun 11\/1/);
+    expect(block).toContain("ADVICE IS FOR: Sun 11/1");
+    expect(block).toContain("MY open starting slots Sun 11/1: 3");
+    expect(block).toContain("CATEGORIES STILL IN PLAY: REB, BLK");
+    expect(block).toMatch(/Big Free .*ON WAIVERS: a claim, not an instant add, clears Mon 3:00 AM/);
+    expect(block).toMatch(/DROPPABLE .*\n.*Fringe Guy/);
+    expect(block).toContain("pickups left 1");
+  });
+
+  it("says sit tight is wrong once today is done", () => {
+    expect(buildSystemPrompt(ctx)).toMatch(/"Sit tight" is wrong/);
+  });
+
+  it("never drops a core player and never spends more pickups than are left", () => {
+    const out = validateMove({
+      headline: "Stream two bigs",
+      actions: [
+        { type: "add_drop", action: "Add Big Free, drop Core Star", reason: "x", players: { in: "Big Free", out: "Core Star" } },
+        { type: "add_drop", action: "Add Big Free, drop Fringe Guy", reason: "x", players: { in: "Big Free", out: "Fringe Guy" } },
+        { type: "add_drop", action: "Add Other Big, drop Other Fringe", reason: "x", players: { in: "Other Big", out: "Other Fringe" } },
+      ],
+      matchupRead: { summary: "Chase REB." },
+    }, ctx);
+    expect(out.actions.map((a: any) => a.players.out)).toEqual(["Fringe Guy"]);
+  });
+
+  it("does not reject a lineup move for tomorrow just because the player has no game today", () => {
+    const out = validateMove({
+      headline: "Start Fringe Guy Sunday",
+      actions: [{ type: "lineup", action: "Start Fringe Guy Sunday", reason: "He plays Sunday", players: { in: "Fringe Guy" } }],
+      matchupRead: { summary: "x" },
+    }, ctx);
+    expect(out.actions).toHaveLength(1);
+  });
+
+  it("shows this matchup's pickups on the card, not the season's", () => {
+    expect(dataUsedFor(ctx).acquisitions).toBe("2 of 3 used this matchup");
+  });
+});

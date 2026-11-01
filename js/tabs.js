@@ -1694,8 +1694,11 @@ function renderTradeCenter() {
   // every other team. Someone else's: packages from your roster to get him.
   html += '<div class="card"><div class="card-header">Trade Finder</div>';
   html += '<div style="padding:0 12px">';
-  html += '<input type="text" class="filter-search" style="width:100%" aria-label="Search for a player to see trade options" ' +
+  html += '<div style="display:flex;gap:8px;align-items:center">';
+  html += '<input type="text" class="filter-search" style="flex:1;min-width:0" aria-label="Search for a player to see trade options" ' +
     'placeholder="Type any rostered player..." value="' + esc(_tradeSearchTerm) + '" oninput="handleTradeSearch(this.value)">';
+  html += '<button class="btn btn-sm btn-primary" style="min-height:44px;white-space:nowrap" onclick="showBestTrades()">Best trades for me</button>';
+  html += '</div>';
   html += '<div class="filter-chips" style="margin:8px 0" role="group" aria-label="Trade shape">';
   TRADE_SHAPES.forEach(function(sh) {
     html += '<button class="chip' + (_tradeShape === sh.id ? ' active' : '') + '" style="min-height:36px" ' +
@@ -1724,11 +1727,24 @@ var TRADE_SHAPES = [
 ];
 var _tradeShape = '1-1';
 var _tradeTargetId = null;
+// 'search' shows trades for the typed player; 'best' shows the button's
+// whole-roster scan. Nothing is computed until one of them is asked for.
+var _tradeFinderMode = 'search';
+
+function showBestTrades() {
+  _tradeFinderMode = 'best';
+  var el = document.getElementById('trade-results');
+  if (!el) return;
+  el.innerHTML = '<div class="text-xs muted" style="padding:0 12px 12px">Checking every trade...</div>';
+  // Let the "checking" line paint before the scan runs.
+  setTimeout(function() { el.innerHTML = tradeResultsHtml(); }, 30);
+}
 
 function setTradeShape(id) {
   _tradeShape = id;
   var el = document.getElementById('trade-results');
-  if (el) el.innerHTML = tradeResultsHtml();
+  if (el && _tradeFinderMode === 'best') { showBestTrades(); }
+  else if (el) el.innerHTML = tradeResultsHtml();
   // Chips live outside the results; refresh their state without touching
   // the search input (mobile keyboard).
   var chips = document.querySelectorAll('[aria-label="Trade shape"] .chip');
@@ -1747,6 +1763,7 @@ function renderTradeResults() {
   var container = document.getElementById('trade-results');
   if (!container) return;
   _tradeTargetId = null;
+  _tradeFinderMode = 'search';
   container.innerHTML = tradeResultsHtml();
 }
 
@@ -1766,7 +1783,8 @@ function combos(list, k) {
 //   rate(p): per-game category rates; score(p): internal value (never shown)
 //   faBest: values of the best free agents, best first (for a freed spot)
 // Returns { side: 'mine'|'theirs', results: [...] } best first.
-function findTradePackages(teams, myTeamId, targetId, shape, cats, rate, score, faBest) {
+function findTradePackages(teams, myTeamId, targetId, shape, cats, rate, score, faBest, opts) {
+  opts = opts || {};
   var byTeam = {};
   teams.forEach(function(t) { byTeam[t.teamId] = t; });
   var owner = null;
@@ -1870,7 +1888,12 @@ function findTradePackages(teams, myTeamId, targetId, shape, cats, rate, score, 
     var gives = giveN === 1 ? [[target]] : mates.map(function(m) { return [target, m]; });
     teams.forEach(function(t) {
       if (t.teamId === myTeamId) return;
-      var gets = combos(t.players || [], getN);
+      // For the whole-roster scan, only each team's best players are worth
+      // pairing; it keeps 2 for 2 under a second on a phone.
+      var pool = opts.maxGetPerTeam
+        ? (t.players || []).slice().sort(function(a, b) { return score(b) - score(a); }).slice(0, opts.maxGetPerTeam)
+        : (t.players || []);
+      var gets = combos(pool, getN);
       gives.forEach(function(g) { gets.forEach(function(x) { evaluate(t, g, x); }); });
     });
   } else {
@@ -1888,14 +1911,87 @@ function findTradePackages(teams, myTeamId, targetId, shape, cats, rate, score, 
     return (b.mineScore - a.mineScore) || (b.myRankDelta - a.myRankDelta) ||
       (b.theirScore - a.theirScore) || (b.theirRankDelta - a.theirRankDelta);
   });
-  return { side: targetIsMine ? 'mine' : 'theirs', results: pool.slice(0, 10), onlyLongShots: pool !== plausible };
+  return { side: targetIsMine ? 'mine' : 'theirs', results: pool.slice(0, opts.limit || 10), onlyLongShots: pool !== plausible };
+}
+
+// "Best trades for me": every player on the roster offered around the
+// league in the chosen shape, best for you first, each deal once.
+function bestTradesForMe(teams, myTeamId, shape, cats, rate, score, faBest) {
+  var mine = teams.find(function(t) { return t.teamId === myTeamId; });
+  if (!mine) return [];
+  var seen = {};
+  var all = [];
+  (mine.players || []).forEach(function(p) {
+    var r = findTradePackages(teams, myTeamId, p.id, shape, cats, rate, score, faBest, { maxGetPerTeam: 8, limit: 40 });
+    r.results.forEach(function(x) {
+      var key = x.give.map(function(q) { return q.id; }).sort().join(',') + '>' + x.get.map(function(q) { return q.id; }).sort().join(',');
+      if (seen[key]) return;
+      seen[key] = true;
+      all.push(x);
+    });
+  });
+  // Only deals that help you, and that the other side would plausibly take.
+  var good = all.filter(function(r) { return r.mineScore > 0 && r.theirScore >= 0; });
+  good.sort(function(a, b) {
+    return (b.mineScore - a.mineScore) || (b.myRankDelta - a.myRankDelta) || (b.theirScore - a.theirScore);
+  });
+  return good.slice(0, 10);
+}
+
+function tradeContext() {
+  if (typeof Engines !== 'undefined' && Engines.ensureDURANT) Engines.ensureDURANT(S.allPlayers || []);
+  var teams = (S.teams || []).map(function(t) {
+    return { teamId: t.teamId, name: t.name, players: (t.players || []).map(function(stub) {
+      var f = tradeFindPlayer(stub.id);
+      return f ? Object.assign({}, f, { slotId: stub.slotId }) : stub;
+    }) };
+  });
+  var faBest = (S.allPlayers || []).filter(function(p) {
+    return !(p.onTeamId > 0) && !p.noEvidence && !/^(OUT|SUSPENSION|IR|INJURED_RESERVE)$/i.test(p.injuryStatus || '');
+  }).sort(byDurantRank).slice(0, 2).map(tradeScore);
+  var shape = TRADE_SHAPES.find(function(x) { return x.id === _tradeShape; }) || TRADE_SHAPES[0];
+  return { teams: teams, faBest: faBest, shape: shape, cats: getOrderedCategories() };
+}
+
+function tradeOfferHtml(r) {
+  var giveIds = r.give.map(function(p) { return p.id; }).join(',');
+  var getIds = r.get.map(function(p) { return p.id; }).join(',');
+  var odds = r.theirScore >= 1 ? 'They should like it' : (r.theirScore === 0 ? 'Fair for them' : 'Tough sell');
+  var rk = function(p) { return esc(p.name) + ' <span class="text-xs muted">' + (p.noEvidence || !p.durantRank ? '--' : '#' + p.durantRank) + '</span>'; };
+  var h = '<div class="trade-offer">';
+  h += '<div style="display:flex;align-items:center;gap:8px">';
+  h += '<span class="trade-offer-verdict" style="color:' + r.verdict.color + '">' + esc(r.verdict.label) + '</span>';
+  h += '<span class="text-xs muted" style="flex:1">' + esc(teamNameFor(r.partnerId)) + ' &middot; ' + esc(odds) + '</span>';
+  h += '<button class="btn btn-sm btn-secondary" style="min-height:36px" onclick="loadTradeIntoAnalyzer(\'' +
+    giveIds + '\',\'' + getIds + '\')">Analyze</button>';
+  h += '</div>';
+  h += '<div class="text-sm" style="margin-top:4px"><span class="stat-negative">Give:</span> ' + r.give.map(rk).join(', ') + '</div>';
+  h += '<div class="text-sm"><span class="stat-positive">Get:</span> ' + r.get.map(rk).join(', ') + '</div>';
+  if (r.better.length || r.worse.length) {
+    h += '<div class="text-xs muted" style="margin-top:2px">' +
+      (r.better.length ? 'Climbs in ' + r.better.join(', ') : '') +
+      (r.better.length && r.worse.length ? '; ' : '') +
+      (r.worse.length ? 'slips in ' + r.worse.join(', ') : '') + '</div>';
+  }
+  return h + '</div>';
 }
 
 function tradeResultsHtml() {
   var term = (_tradeSearchTerm || '').trim();
+  if (_tradeFinderMode === 'best') {
+    var cx = tradeContext();
+    var best = bestTradesForMe(cx.teams, S.myTeam.teamId, cx.shape, cx.cats, tradeRate, tradeScore, cx.faBest);
+    var hb = '<div class="text-sm" style="padding:0 12px 6px">Best ' + esc(cx.shape.label) + ' trades for your roster ' +
+      '(you give ' + cx.shape.give + ', get ' + cx.shape.get + '), ones the other team should accept.</div>';
+    if (!best.length) {
+      return hb + '<div class="empty-state"><p>No ' + esc(cx.shape.label) + ' trade both helps you and looks fair to the other side. Try another shape.</p></div>';
+    }
+    best.forEach(function(r) { hb += tradeOfferHtml(r); });
+    return hb + '<div class="text-xs muted" style="padding:4px 12px 12px">Numbers next to names are Larry ranks. Analyze opens the full breakdown below.</div>';
+  }
   if (term.length < 2) {
     return '<div class="text-xs muted" style="padding:0 12px 12px">Type a player on your team to see what he could bring back, ' +
-      'or a player on another team to see what it would take to get him.</div>';
+      'or a player on another team to see what it would take to get him. Or tap Best trades for me.</div>';
   }
   if (typeof Engines !== 'undefined' && Engines.ensureDURANT) Engines.ensureDURANT(S.allPlayers || []);
   var q = term.toLowerCase();
@@ -1919,18 +2015,9 @@ function tradeResultsHtml() {
     return html;
   }
 
-  var shape = TRADE_SHAPES.find(function(x) { return x.id === _tradeShape; }) || TRADE_SHAPES[0];
-  var cats = getOrderedCategories();
-  var teams = (S.teams || []).map(function(t) {
-    return { teamId: t.teamId, name: t.name, players: (t.players || []).map(function(stub) {
-      var f = tradeFindPlayer(stub.id);
-      return f ? Object.assign({}, f, { slotId: stub.slotId }) : stub;
-    }) };
-  });
-  var faBest = (S.allPlayers || []).filter(function(p) {
-    return !(p.onTeamId > 0) && !p.noEvidence && !/^(OUT|SUSPENSION|IR|INJURED_RESERVE)$/i.test(p.injuryStatus || '');
-  }).sort(byDurantRank).slice(0, 2).map(tradeScore);
-  var found = findTradePackages(teams, S.myTeam.teamId, target.id, shape, cats, tradeRate, tradeScore, faBest);
+  var cx2 = tradeContext();
+  var shape = cx2.shape;
+  var found = findTradePackages(cx2.teams, S.myTeam.teamId, target.id, shape, cx2.cats, tradeRate, tradeScore, cx2.faBest);
 
   var mineSide = found.side === 'mine';
   var html2 = '<div class="text-sm" style="padding:0 12px 6px">' +
@@ -1949,29 +2036,7 @@ function tradeResultsHtml() {
   } else if (found.onlyLongShots) {
     html2 += '<div class="text-xs muted" style="padding:0 12px 6px">None of these clearly helps the other team, so expect a hard sell.</div>';
   }
-  found.results.forEach(function(r) {
-    var giveIds = r.give.map(function(p) { return p.id; }).join(',');
-    var getIds = r.get.map(function(p) { return p.id; }).join(',');
-    var odds = r.theirScore >= 1 ? 'They should like it' : (r.theirScore === 0 ? 'Fair for them' : 'Tough sell');
-    html2 += '<div class="trade-offer">';
-    html2 += '<div style="display:flex;align-items:center;gap:8px">';
-    html2 += '<span class="trade-offer-verdict" style="color:' + r.verdict.color + '">' + esc(r.verdict.label) + '</span>';
-    html2 += '<span class="text-xs muted" style="flex:1">' + esc(teamNameFor(r.partnerId)) + ' &middot; ' + esc(odds) + '</span>';
-    html2 += '<button class="btn btn-sm btn-secondary" style="min-height:36px" onclick="loadTradeIntoAnalyzer(\'' +
-      giveIds + '\',\'' + getIds + '\')">Analyze</button>';
-    html2 += '</div>';
-    html2 += '<div class="text-sm" style="margin-top:4px"><span class="stat-negative">Give:</span> ' +
-      r.give.map(function(p) { return esc(p.name) + ' <span class="text-xs muted">' + (p.noEvidence || !p.durantRank ? '--' : '#' + p.durantRank) + '</span>'; }).join(', ') + '</div>';
-    html2 += '<div class="text-sm"><span class="stat-positive">Get:</span> ' +
-      r.get.map(function(p) { return esc(p.name) + ' <span class="text-xs muted">' + (p.noEvidence || !p.durantRank ? '--' : '#' + p.durantRank) + '</span>'; }).join(', ') + '</div>';
-    if (r.better.length || r.worse.length) {
-      html2 += '<div class="text-xs muted" style="margin-top:2px">' +
-        (r.better.length ? 'Climbs in ' + r.better.join(', ') : '') +
-        (r.better.length && r.worse.length ? '; ' : '') +
-        (r.worse.length ? 'slips in ' + r.worse.join(', ') : '') + '</div>';
-    }
-    html2 += '</div>';
-  });
+  found.results.forEach(function(r) { html2 += tradeOfferHtml(r); });
   html2 += '<div class="text-xs muted" style="padding:4px 12px 12px">Numbers next to names are Larry ranks. Analyze opens the full breakdown below.</div>';
   return html2;
 }
@@ -2998,6 +3063,15 @@ function toggleLarryProjections(on) {
   });
 }
 
+function setMatchupPickupLimit(value) {
+  S.prefs = S.prefs || {};
+  var n = parseInt(value, 10);
+  if (value === '' || !isFinite(n) || n < 0) delete S.prefs.matchupPickupLimit;
+  else S.prefs.matchupPickupLimit = n;
+  autosave();
+  if (typeof toast === 'function') toast('Pickup limit saved');
+}
+
 function renderSettingsPage() {
   var html = '';
 
@@ -3015,6 +3089,23 @@ function renderSettingsPage() {
   // Phase 2: Disconnect clears cookies and cached league/team/roster data,
   // then drops the user back at the wizard. Theme and prefs survive.
   html += '<button class="btn btn-warning btn-full" style="margin-top:8px" onclick="if(confirm(\'This will sign you out of ESPN and clear your cookies. You will need to reconnect to use Larry.\'))disconnectEspn()">Disconnect ESPN</button>';
+  html += '</div>';
+
+  // Pickups per matchup. ESPN usually reports it; when it does not (or gets
+  // it wrong), the owner sets it here and Larry's Move, chat and the card
+  // all use this number instead.
+  var pa = pickupAllowance();
+  var espnLimit = typeof S.league.matchupAcquisitionLimit === 'number' && S.league.matchupAcquisitionLimit >= 0
+    ? String(S.league.matchupAcquisitionLimit) : 'not reported';
+  html += '<div class="card"><div class="card-header">Pickups</div>';
+  html += '<div class="settings-row"><label>Used this matchup</label><span>' + pa.used + ' of ' +
+    (pa.limit >= 0 ? pa.limit : 'unlimited') + '</span></div>';
+  html += '<div class="settings-row"><label>ESPN limit per matchup</label><span>' + esc(espnLimit) + '</span></div>';
+  html += '<div class="settings-row"><label for="pickup-limit-input">Your league\'s limit per matchup</label>' +
+    '<input id="pickup-limit-input" type="number" min="0" max="50" inputmode="numeric" class="filter-search" style="width:80px" ' +
+    'placeholder="ESPN" value="' + (S.prefs && typeof S.prefs.matchupPickupLimit === 'number' ? S.prefs.matchupPickupLimit : '') + '" ' +
+    'onchange="setMatchupPickupLimit(this.value)"></div>';
+  html += '<div class="text-xs muted" style="padding:0 12px 12px">Leave blank to use ESPN\'s number. Larry never suggests more adds than you have left.</div>';
   html += '</div>';
 
   // Draft Room diagnostics. The same held-out test tools/fit-mock-draft.ts

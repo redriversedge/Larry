@@ -83,6 +83,8 @@ function larryMovePlayer(p, includeOwnership) {
     gp: p.gamesPlayed || 0,
     mpg: p.minutesPerGame || 0,
     value: p.durantScore || 0,
+    rank: (!p.noEvidence && p.durantRank) ? p.durantRank : null,
+    onWaivers: p.poolStatus === 'WAIVERS',
     trend: p.trend || 'stable'
   };
   if (includeOwnership) out.pctOwned = p.percentOwned || 0;
@@ -151,6 +153,151 @@ function larryMoveWindowDays(win) {
   var today = localDateStr(new Date());
   var dayOf = today < win.startStr ? 0 : (today > win.endStr ? total : count(win.startStr, today));
   return { dayOf: dayOf, total: total };
+}
+
+// What time it is in the fantasy day, for the prompt. See matchupPhase in
+// core.js.
+function larryMoveTiming() {
+  var ph = matchupPhase();
+  return {
+    phase: ph.phase,
+    now: ph.nowLabel,
+    firstTip: ph.firstTip,
+    lastTip: ph.lastTip,
+    planDay: shortDayLabel(ph.planDate),
+    planDate: ph.planDate,
+    planIsNextMatchup: ph.nextMatchup,
+    lastDayOfMatchup: ph.lastDayOfMatchup
+  };
+}
+
+var LARRY_CORE_RANK = 75; // never dropped to stream (same cut as DON'T DROP)
+
+// The concrete picture for the day a move can affect: who starts and who
+// sits for both teams, open slots, which categories are still in play, the
+// free agents who play that day, and who on the roster could be dropped.
+// Larry used to see only today; at 10:40 PM after the last game it said to
+// sit tight when the job was to set up tomorrow before the wire is picked
+// over.
+function larryMovePlan() {
+  var ph = matchupPhase();
+  var cats = getOrderedCategories();
+  var planDate = ph.planDate;
+  var mp = (S.league.currentMatchupPeriod || 0) + (ph.nextMatchup ? 1 : 0);
+  var win = ph.nextMatchup && ESPNSync.windowForMatchup ? (ESPNSync.windowForMatchup(mp) || {}) : (getMatchupWindow() || {});
+  var endStr = win.endStr || planDate;
+  var slots = ((S.league && S.league.rosterSlots) || []).reduce(function(n, x) {
+    return n + (x && x.slotId < 12 ? x.count || 0 : 0);
+  }, 0) || 10;
+
+  var game = (S.league.schedule || []).find(function(m) {
+    return m.matchupPeriodId === mp && ((m.home && m.home.teamId === S.myTeam.teamId) || (m.away && m.away.teamId === S.myTeam.teamId));
+  });
+  var oppId = game ? (game.home && game.home.teamId === S.myTeam.teamId ? (game.away && game.away.teamId) : game.home.teamId) : null;
+  var oppTeam = (S.teams || []).find(function(t) { return t.teamId === oppId; }) || null;
+
+  function full(stub) {
+    var f = Engines.enrichPlayer(stub);
+    return f && f !== stub ? Object.assign({}, f, { slotId: stub.slotId }) : stub;
+  }
+  function out(p) { return /^(OUT|SUSPENSION|INJURY_RESERVE|IR)$/i.test(String(p.injuryStatus || '')); }
+  function gameOn(p, d) { return (p.schedule || []).find(function(g) { return g && g.date === d; }) || null; }
+  function label(p) {
+    var g = gameOn(p, planDate);
+    return p.name + (g ? ' (' + (g.isHome ? 'vs ' : '@ ') + (g.opponent || '?') + (g.timeLocal ? ' ' + g.timeLocal : '') + ')' : '');
+  }
+  function day(list) {
+    var players = list.map(full);
+    var playing = players.filter(function(p) { return p.slotId !== 13 && !out(p) && gameOn(p, planDate); })
+      .sort(function(a, b) { return durantKey(b.durantScore) - durantKey(a.durantScore); });
+    var starters = playing.slice(0, slots);
+    var tot = {};
+    cats.forEach(function(c) { tot[c.abbr] = 0; });
+    starters.forEach(function(p) {
+      var r = blendedPerGame(p);
+      cats.forEach(function(c) { tot[c.abbr] += r[c.abbr] || 0; });
+    });
+    Object.keys(tot).forEach(function(k) { tot[k] = Math.round(tot[k] * 10) / 10; });
+    return {
+      starters: starters.map(label),
+      sitting: playing.slice(slots).map(label),
+      openSlots: Math.max(0, slots - playing.length),
+      injuredWithGame: players.filter(function(p) { return out(p) && gameOn(p, planDate); }).map(function(p) { return p.name; }),
+      projected: tot
+    };
+  }
+  var mine = day(S.myTeam.players || []);
+  var theirs = day(oppTeam ? oppTeam.players : []);
+
+  // Categories still worth chasing. Next matchup: everything.
+  var strat = (S.matchup && S.matchup.strategy) || {};
+  var inPlay = cats.map(function(c) { return c.abbr; }).filter(function(abbr) {
+    if (ph.nextMatchup || !strat.winProb || strat.winProb[abbr] === undefined) return true;
+    var wp = strat.winProb[abbr];
+    return wp >= 0.15 && wp <= 0.85;
+  });
+
+  // Free agents who play on the plan day, scored on the categories in play
+  // (each category scaled by a typical top-150 rate so 1 block counts like
+  // ~8 points, not like 1).
+  var top = (S.allPlayers || []).filter(function(p) { return !p.noEvidence && p.durantRank && p.durantRank <= 150; });
+  var scale = {};
+  cats.forEach(function(c) {
+    var sum = 0;
+    top.forEach(function(p) { sum += blendedPerGame(p)[c.abbr] || 0; });
+    scale[c.abbr] = top.length && sum > 0 ? sum / top.length : 1;
+  });
+  function fit(p) {
+    var r = blendedPerGame(p), v = 0;
+    cats.forEach(function(c) { v += (r[c.abbr] || 0) / scale[c.abbr] * (inPlay.indexOf(c.abbr) >= 0 ? 1 : 0.2); });
+    return v;
+  }
+  function daysFrom(p, from) {
+    return (p.schedule || []).filter(function(g) { return g && g.date >= from && g.date <= endStr; })
+      .map(function(g) { return shortDayLabel(g.date); });
+  }
+  var pickups = (S.allPlayers || []).filter(function(p) {
+    return p.onTeamId === 0 && Engines.isValidAddCandidate(p) && gameOn(p, planDate);
+  }).map(function(p) { return { p: p, fit: fit(p) }; })
+    .sort(function(a, b) { return b.fit - a.fit; }).slice(0, 10).map(function(x) {
+      var p = x.p;
+      return {
+        name: p.name, team: p.nbaTeam, rank: (!p.noEvidence && p.durantRank) ? p.durantRank : null,
+        perGame: larryMovePerGame(p),
+        plays: daysFrom(p, planDate),
+        onWaivers: p.poolStatus === 'WAIVERS',
+        waiverClears: p.waiverClearsAt ? new Date(p.waiverClearsAt).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : ''
+      };
+    });
+
+  // Who could go. Never anyone in the core (Larry rank 75 or better).
+  var drops = (S.myTeam.players || []).map(full).filter(function(p) {
+    return p.slotId !== 13 && (p.noEvidence || !p.durantRank || p.durantRank > LARRY_CORE_RANK);
+  }).sort(function(a, b) { return durantKey(a.durantScore) - durantKey(b.durantScore); }).slice(0, 6).map(function(p) {
+    return {
+      name: p.name, rank: (!p.noEvidence && p.durantRank) ? p.durantRank : null,
+      status: Engines.normalizeInjuryStatus(p.injuryStatus),
+      playsPlanDay: !!gameOn(p, planDate),
+      plays: daysFrom(p, planDate)
+    };
+  });
+
+  var allowance = pickupAllowance();
+  return {
+    day: shortDayLabel(planDate),
+    date: planDate,
+    nextMatchup: ph.nextMatchup,
+    opponent: oppTeam ? oppTeam.name : '',
+    matchupEnds: endStr ? shortDayLabel(endStr) : '',
+    slots: slots,
+    mine: mine,
+    theirs: theirs,
+    categoriesInPlay: inPlay,
+    pickupsLeft: ph.nextMatchup ? allowance.limit : allowance.left,
+    pickupCandidates: pickups,
+    dropCandidates: drops,
+    coreRank: LARRY_CORE_RANK
+  };
 }
 
 function buildLarryMovePayload() {
@@ -229,9 +376,10 @@ function buildLarryMovePayload() {
       // looked unlimited to Larry.
       acquisitionLimit: S.league.acquisitionLimit,
       acquisitionsUsed: (S.myTeam && S.myTeam.acquisitionsUsed) || 0,
-      matchupAcquisitionLimit: S.league.matchupAcquisitionLimit === undefined ?
-        -1 : S.league.matchupAcquisitionLimit,
-      matchupAcquisitionsUsed: (S.myTeam && S.myTeam.matchupAcquisitionsUsed) || 0,
+      // pickupAllowance: ESPN's per-matchup cap, or the owner's override
+      // from Settings when ESPN does not report one.
+      matchupAcquisitionLimit: pickupAllowance().limit,
+      matchupAcquisitionsUsed: pickupAllowance().used,
       lineupLock: larryMoveLineupLock()
     },
     matchup: {
@@ -260,6 +408,8 @@ function buildLarryMovePayload() {
         punts: strat.punts || []
       }
     },
+    timing: larryMoveTiming(),
+    plan: larryMovePlan(),
     myRoster: myPlayers.map(function(p) { return larryMovePlayer(p, false); }),
     // Capped to keep the prompt near 6k tokens.
     freeAgents: freeAgents.slice(0, 15).map(function(p) { return larryMovePlayer(p, true); }),
@@ -299,7 +449,11 @@ function requestLarryMove(force) {
     renderLarryMoveCard();
     return;
   }
-  var hash = larryMoveHash(payload);
+  // The clock is in the payload for the prompt, but a new minute is not new
+  // data: hash without it so a re-tap uses the cached answer.
+  var hash = larryMoveHash(Object.assign({}, payload, {
+    timing: Object.assign({}, payload.timing, { now: '' })
+  }));
   payload.payloadHash = hash;
 
   if (!force && larryMoveCacheValid(hash)) {
@@ -540,7 +694,7 @@ function larryMoveCardHtml() {
     }
     var du = m.dataUsed || {};
     if (du.acquisitions) {
-      html += '<p class="text-xs muted">Acquisitions: ' + esc(du.acquisitions) + '</p>';
+      html += '<p class="text-xs muted">Pickups: ' + esc(du.acquisitions) + '</p>';
     }
     html += '<p class="text-xs muted">Confidence: ' + esc(m.confidence || 'medium') + '</p>';
     html += '</div>';

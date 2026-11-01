@@ -264,6 +264,16 @@ function buildDataBlock(ctx) {
     lines.push('TODAY: ' + clean(c.today, 12) +
       (c.matchupEnds ? ' | matchup ends ' + clean(c.matchupEnds, 12) : ''));
   }
+  if (c.clock && typeof c.clock === 'object') {
+    const phase = { pregame: 'games not started yet', live: 'games in progress, results not final', final: 'today\'s games are over', off: 'no NBA games today' }[clean(c.clock.phase, 10)] || '';
+    lines.push('CLOCK: ' + clean(c.clock.now, 10) + ' local, ' + phase +
+      ' | the next day a move can affect: ' + clean(c.clock.planDay, 12) +
+      (c.clock.nextMatchup === true ? ' (first day of the NEXT matchup)' : ''));
+  }
+  if (c.pickups && typeof c.pickups === 'object') {
+    lines.push('PICKUPS THIS MATCHUP: ' + num(c.pickups.used, 0) + ' used of ' +
+      (Number(c.pickups.limit) >= 0 ? num(c.pickups.limit, 0) + ' (' + num(c.pickups.left, 0) + ' left)' : 'unlimited'));
+  }
   if (c.pickupStartsOn) {
     lines.push('PICKUP TIMING: a player added right now first counts on ' + clean(c.pickupStartsOn, 12) +
       (c.pickupStartsToday ? '.' : ', because today\'s first game has tipped and this league does not add players to today\'s lineup after that.'));
@@ -353,6 +363,7 @@ MATCHUP RULES
 - You DO have the schedule: each player line lists the days he plays for the rest of this matchup. Use them. Never say you cannot see the schedule.
 - For a pickup, count only the days in his "plays" list. Those already respect PICKUP TIMING: a free agent whose only game is today after the first tip is worth nothing this matchup and will not appear with that day.
 - When the manager asks for a specific day, recommend only players whose "plays" list includes that day, and name the day.
+- Read CLOCK. Once today's games have started, today is done for pickups: advise for the next day a move can affect, because free agents go first come, first served. Never suggest more adds than PICKUPS THIS MATCHUP has left.
 - Prioritise TARGET categories over raw season value.
 - Advice is about winning THIS week, not general value.
 - When a player helps a target category, say which one.
