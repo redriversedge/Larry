@@ -1291,6 +1291,85 @@ function shortDayLabel(dateStr) {
     (d.getMonth() + 1) + '/' + d.getDate();
 }
 
+// Pickups for the CURRENT matchup: used, limit and what is left. The limit
+// is ESPN's per-matchup cap unless the owner set one in Settings (for a
+// league whose cap ESPN does not report). -1 means unlimited.
+function pickupAllowance() {
+  var used = (S.myTeam && S.myTeam.matchupAcquisitionsUsed) || 0;
+  var override = S.prefs && typeof S.prefs.matchupPickupLimit === 'number' && S.prefs.matchupPickupLimit >= 0
+    ? S.prefs.matchupPickupLimit : null;
+  var espn = S.league && typeof S.league.matchupAcquisitionLimit === 'number' ? S.league.matchupAcquisitionLimit : -1;
+  var limit = override !== null ? override : espn;
+  return {
+    used: used,
+    limit: limit,
+    left: limit >= 0 ? Math.max(0, limit - used) : null,
+    limitSource: override !== null ? 'your Settings' : (espn >= 0 ? 'ESPN' : 'ESPN (none set)')
+  };
+}
+
+// Minutes since midnight for "7:30 PM".
+function tipMinutes(timeLocal) {
+  var m = /^(\d{1,2}):(\d{2})\s*(AM|PM)$/i.exec(String(timeLocal || '').trim());
+  if (!m) return null;
+  return (Number(m[1]) % 12 + (m[3].toUpperCase() === 'PM' ? 12 : 0)) * 60 + Number(m[2]);
+}
+
+// Where the day stands, and which day Larry's advice should be about.
+//   pregame: today's first game has not tipped. Pickups count today.
+//   live:    games under way. Today's lineup is mostly locked and pickups
+//            count tomorrow, but tonight's results can still change what
+//            tomorrow needs, so a plan made now is provisional.
+//   final:   today's games are done (last tip + 3 hours). Plan tomorrow.
+//   off:     no NBA games today.
+// planDate is the next day a move can affect; when it falls after this
+// matchup ends, the plan is for the NEXT matchup.
+var GAME_LENGTH_MINUTES = 180;
+function matchupPhase(now) {
+  now = now || new Date();
+  var todayStr = localDateStr(now);
+  var nowMin = now.getHours() * 60 + now.getMinutes();
+  var first = null, last = null;
+  var lookup = (S && S.scheduleLookup) || {};
+  Object.keys(lookup).forEach(function(tid) {
+    (lookup[tid] || []).forEach(function(g) {
+      if (!g || g.date !== todayStr) return;
+      var t = tipMinutes(g.timeLocal);
+      if (t === null) return;
+      if (first === null || t < first) first = t;
+      if (last === null || t > last) last = t;
+    });
+  });
+  var phase = first === null ? 'off' : (nowMin < first ? 'pregame' : (nowMin < last + GAME_LENGTH_MINUTES ? 'live' : 'final'));
+  var planDate = phase === 'pregame' ? todayStr :
+    localDateStr(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1));
+  // Skip forward to the next day with NBA games.
+  for (var i = 0; i < 7; i++) {
+    var has = Object.keys(lookup).some(function(tid) {
+      return (lookup[tid] || []).some(function(g) { return g && g.date === planDate; });
+    });
+    if (has || !Object.keys(lookup).length) break;
+    var pp = planDate.split('-');
+    planDate = localDateStr(new Date(Number(pp[0]), Number(pp[1]) - 1, Number(pp[2]) + 1));
+  }
+  var win = getMatchupWindow() || {};
+  var fmtMin = function(m) {
+    if (m === null) return '';
+    var h = Math.floor(m / 60), mm = m % 60;
+    return ((h % 12) || 12) + ':' + (mm < 10 ? '0' : '') + mm + (h >= 12 ? ' PM' : ' AM');
+  };
+  return {
+    phase: phase,
+    todayStr: todayStr,
+    nowLabel: fmtMin(nowMin),
+    firstTip: fmtMin(first),
+    lastTip: fmtMin(last),
+    planDate: planDate,
+    nextMatchup: !!(win.endStr && planDate > win.endStr),
+    lastDayOfMatchup: !!(win.endStr && todayStr === win.endStr)
+  };
+}
+
 // Roster tag for a player inside Larry's top 75: "MUST ROSTER" when he is
 // a free agent (grab him), "DON'T DROP" when he is on any team. Players are
 // ranked against the whole league, so these are players every 12-team

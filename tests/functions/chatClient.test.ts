@@ -62,6 +62,8 @@ function loadChat() {
     pickupStartDateStr: () => "2026-11-01",
     gameDatesBetween: () => [],
     shortDayLabel: (d: string) => d,
+    matchupPhase: () => ({ nowLabel: "10:40 PM", phase: "final", planDate: "2026-11-01", nextMatchup: false }),
+    pickupAllowance: () => ({ used: 2, limit: 3, left: 1, limitSource: "ESPN" }),
     ChatTools: {
       label: (n: string) => "Checking " + n,
       run: async (name: string, input: any) => JSON.stringify({ tool: name, input }),

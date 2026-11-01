@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 const src = fs.readFileSync(path.resolve(__dirname, "../../js/tabs.js"), "utf8");
 const verdict = src.slice(src.indexOf("function tradeVerdict"), src.indexOf("function tradeRate"));
 const finder = src.slice(src.indexOf("function combos(list, k)"), src.indexOf("function tradeResultsHtml()"));
-const api = new Function(verdict + finder + "; return { findTradePackages };")();
+const api = new Function(verdict + finder + "; return { findTradePackages, bestTradesForMe };")();
 
 const CATS = ["REB", "AST", "STL", "BLK", "PTS"].map((abbr) => ({ abbr, isNegative: false }));
 function pl(id: number, team: number, r: number[], value: number) {
@@ -61,5 +61,18 @@ describe("findTradePackages", () => {
 
   it("returns nothing for a player no team rosters", () => {
     expect(api.findTradePackages(teams, 1, 999, ONE, CATS, rate, score, []).results).toEqual([]);
+  });
+});
+
+describe("bestTradesForMe", () => {
+  it("only returns deals that help you and look fair to the other side, each once", () => {
+    const best = api.bestTradesForMe(teams, 1, ONE, CATS, rate, score, [8]);
+    const keys = best.map((r: any) => r.give.map((p: any) => p.id).join() + ">" + r.get.map((p: any) => p.id).join());
+    expect(new Set(keys).size).toBe(keys.length);
+    for (const r of best) {
+      expect(r.mineScore).toBeGreaterThan(0);
+      expect(r.theirScore).toBeGreaterThanOrEqual(0);
+      expect(r.give.every((p: any) => p.onTeamId === 1)).toBe(true);
+    }
   });
 });

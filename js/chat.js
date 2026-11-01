@@ -258,6 +258,8 @@ function buildChatContext() {
     today: shortDayLabel(todayStr),
     pickupStartsOn: shortDayLabel(pickupFrom),
     pickupStartsToday: pickupFrom === todayStr,
+    clock: (function() { var ph = matchupPhase(); return { now: ph.nowLabel, phase: ph.phase, planDay: shortDayLabel(ph.planDate), nextMatchup: ph.nextMatchup }; })(),
+    pickups: pickupAllowance(),
     matchupEnds: win.endStr ? shortDayLabel(win.endStr) : '',
     matchup: {
       opponent: S.matchup.opponentName,
