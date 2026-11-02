@@ -1,5 +1,5 @@
 // Larry v3.0 Service Worker
-var CACHE_VERSION = 'larry-v3.35.21';
+var CACHE_VERSION = 'larry-v3.35.22';
 var CACHE_FILES = [
   '/',
   '/index.html',
@@ -14,6 +14,7 @@ var CACHE_FILES = [
   '/js/chat-tools.js',
   '/js/chat.js',
   '/js/larry-move.js',
+  '/js/gameplan.js',
   '/dist/larry-engine.js',
   '/dist/larry-cookies.js',
   // Historical ESPN ADP. Without it the Draft Room's profile cards lose
