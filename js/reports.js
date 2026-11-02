@@ -247,11 +247,13 @@ function reportPlayer(id) {
 }
 
 // Fantasy owner of an NBA player: the team name, "Free agent", or "".
-function reportOwner(id) {
+// neutral: always the team's name, never "Your team". The LM Notes are
+// pasted into the league chat as written, so they speak for nobody.
+function reportOwner(id, neutral) {
   var p = reportPlayer(id);
   if (!p) return 'Free agent';
   if (!(p.onTeamId > 0)) return 'Free agent';
-  if (S.myTeam && p.onTeamId === S.myTeam.teamId) return 'Your team';
+  if (!neutral && S.myTeam && p.onTeamId === S.myTeam.teamId) return 'Your team';
   var t = (S.teams || []).find(function(x) { return x.teamId === p.onTeamId; });
   return t ? t.name : 'Rostered';
 }
@@ -642,11 +644,11 @@ function buildLmNotes(mp, isLive, cats, team, totw, days) {
   var ranked = Reports.scoreLines(weekly, cats);
   if (ranked.length) {
     var pw = ranked[0];
-    L.push('PLAYER OF THE WEEK: ' + pw.n + ' (' + reportOwner(pw.id) + ')');
+    L.push('PLAYER OF THE WEEK: ' + pw.n + ' (' + reportOwner(pw.id, true) + ')');
     L.push('  ' + statLine(pw.s, cats, 2) + ' in ' + pw.g + ' game' + (pw.g === 1 ? '' : 's'));
     if (ranked.length > 1) {
       L.push('  Runners-up: ' + ranked.slice(1, 4).map(function(r) {
-        return r.n + ' (' + reportOwner(r.id) + ')';
+        return r.n + ' (' + reportOwner(r.id, true) + ')';
       }).join(', '));
     }
     L.push('');
@@ -659,7 +661,7 @@ function buildLmNotes(mp, isLive, cats, team, totw, days) {
     if (r && (!bestLine || r.score > bestLine.r.score)) bestLine = { r: r, date: d.date };
   });
   if (bestLine) {
-    L.push('LINE OF THE WEEK: ' + bestLine.r.n + ', ' + prettyDate(bestLine.date) + ' (' + reportOwner(bestLine.r.id) + ')');
+    L.push('LINE OF THE WEEK: ' + bestLine.r.n + ', ' + prettyDate(bestLine.date) + ' (' + reportOwner(bestLine.r.id, true) + ')');
     L.push('  ' + statLine(bestLine.r.s, cats, 1));
     L.push('');
   }
@@ -690,7 +692,7 @@ function buildLmNotes(mp, isLive, cats, team, totw, days) {
   var catLeaders = [];
   cats.forEach(function(cat) {
     var top = Reports.leaders(weekly, cat.abbr, 1, cat.isNegative)[0];
-    if (top) catLeaders.push('- ' + cat.abbr + ': ' + top.n + ' ' + fmt(top.v, 0) + ' (' + reportOwner(top.id) + ')');
+    if (top) catLeaders.push('- ' + cat.abbr + ': ' + top.n + ' ' + fmt(top.v, 0) + ' (' + reportOwner(top.id, true) + ')');
   });
   if (catLeaders.length) {
     L.push('WEEKLY LEADERS');

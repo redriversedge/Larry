@@ -122,3 +122,24 @@ describe("rookie pickup call", () => {
     expect(load(S).rookieCall({ durantRank: 50, injuryStatus: "OUT" }, "up").label).toBe("Hurt");
   });
 });
+
+// Nov 1 2026: the LM Notes are pasted into the league chat as written, so
+// they must name the owner's team like any other, never "Your team".
+describe("LM notes use team names only", () => {
+  it("names the manager's own team by its name", () => {
+    const S: any = {
+      myTeam: { teamId: 1 },
+      teams: [{ teamId: 1, name: "KAT DADDY" }, { teamId: 2, name: "Other Guys" }],
+      allPlayers: [{ id: 101, onTeamId: 1 }, { id: 102, onTeamId: 2 }],
+    };
+    const m = load(S);
+    const players: any = {
+      "101": { n: "Mine Guy", t: "ATL", s: { REB: 20, AST: 10, STL: 3, BLK: 4, PTS: 40, MIN: 36 } },
+      "102": { n: "Their Guy", t: "BOS", s: { REB: 2, AST: 1, STL: 0, BLK: 0, PTS: 4, MIN: 10 } },
+    };
+    const notes = m.buildLmNotes(3, false, CATS, { results: [], blowout: null, closest: null, kings: {} }, null,
+      [{ date: "2026-10-31", players }]);
+    expect(notes).toContain("Mine Guy (KAT DADDY)");
+    expect(notes).not.toMatch(/your team/i);
+  });
+});
