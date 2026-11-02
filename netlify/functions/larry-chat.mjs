@@ -96,6 +96,25 @@ const normalizeToolTurns = (turns) => normalizeAppToolTurns(turns, MAX_TOOL_ROUN
 
 // Rebuilds the model's content blocks from the stream so a tool turn can be
 // sent back verbatim.
+
+// The week's Game Plan (Matchup tab) and the owner's own calls, as data
+// lines. Shared shape with larry-chat.
+function gamePlanLines(gp) {
+  if (!gp || typeof gp !== 'object') return [];
+  const out = [];
+  const intents = Array.isArray(gp.intents) ? gp.intents.slice(0, 6).map((s) => clean(s, 140)).filter(Boolean) : [];
+  if (gp.headline) out.push('GAME PLAN THIS WEEK: ' + clean(gp.headline, 220));
+  if (Array.isArray(gp.steps)) {
+    gp.steps.slice(0, 6).forEach((s) => {
+      if (!s || typeof s !== 'object') return;
+      out.push('  pickup step ' + clean(s.when, 20) + ': ' + clean(s.title, 120) + ' [' + clean(s.status, 10) + ']' +
+        (Array.isArray(s.needCats) && s.needCats.length ? ' for ' + s.needCats.slice(0, 5).map((x) => clean(x, 4)).join('/') : ''));
+    });
+  }
+  if (intents.length) out.push("OWNER'S CALLS THIS MATCHUP (follow them): " + intents.join(' | '));
+  return out;
+}
+
 function blockTracker() {
   const blocks = [];
   let stopReason = '';
@@ -274,6 +293,7 @@ function buildDataBlock(ctx) {
     lines.push('PICKUPS THIS MATCHUP: ' + num(c.pickups.used, 0) + ' used of ' +
       (Number(c.pickups.limit) >= 0 ? num(c.pickups.limit, 0) + ' (' + num(c.pickups.left, 0) + ' left)' : 'unlimited'));
   }
+  gamePlanLines(c.gamePlan).forEach((l) => lines.push(l));
   if (c.pickupStartsOn) {
     lines.push('PICKUP TIMING: a player added right now first counts on ' + clean(c.pickupStartsOn, 12) +
       (c.pickupStartsToday ? '.' : ', because today\'s first game has tipped and this league does not add players to today\'s lineup after that.'));
@@ -364,6 +384,7 @@ MATCHUP RULES
 - For a pickup, count only the days in his "plays" list. Those already respect PICKUP TIMING: a free agent whose only game is today after the first tip is worth nothing this matchup and will not appear with that day.
 - When the manager asks for a specific day, recommend only players whose "plays" list includes that day, and name the day.
 - Read CLOCK. Once today's games have started, today is done for pickups: advise for the next day a move can affect, because free agents go first come, first served. Never suggest more adds than PICKUPS THIS MATCHUP has left.
+- When GAME PLAN THIS WEEK is present, answer in light of it: the owner can see it on the Matchup tab. If you suggest departing from it, say so. Always follow OWNER'S CALLS.
 - Prioritise TARGET categories over raw season value.
 - Advice is about winning THIS week, not general value.
 - When a player helps a target category, say which one.

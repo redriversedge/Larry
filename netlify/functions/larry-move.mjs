@@ -193,6 +193,24 @@ function rosterLine(p, cats) {
   return line;
 }
 
+// The week's Game Plan (Matchup tab) and the owner's own calls, as data
+// lines. Shared shape with larry-chat.
+function gamePlanLines(gp) {
+  if (!gp || typeof gp !== 'object') return [];
+  const out = [];
+  const intents = Array.isArray(gp.intents) ? gp.intents.slice(0, 6).map((s) => clean(s, 140)).filter(Boolean) : [];
+  if (gp.headline) out.push('GAME PLAN THIS WEEK: ' + clean(gp.headline, 220));
+  if (Array.isArray(gp.steps)) {
+    gp.steps.slice(0, 6).forEach((s) => {
+      if (!s || typeof s !== 'object') return;
+      out.push('  pickup step ' + clean(s.when, 20) + ': ' + clean(s.title, 120) + ' [' + clean(s.status, 10) + ']' +
+        (Array.isArray(s.needCats) && s.needCats.length ? ' for ' + s.needCats.slice(0, 5).map((x) => clean(x, 4)).join('/') : ''));
+    });
+  }
+  if (intents.length) out.push("OWNER'S CALLS THIS MATCHUP (follow them): " + intents.join(' | '));
+  return out;
+}
+
 function buildDataBlock(ctx) {
   const c = ctx && typeof ctx === 'object' ? ctx : {};
   const league = c.league && typeof c.league === 'object' ? c.league : {};
@@ -362,6 +380,9 @@ function buildDataBlock(ctx) {
     });
   }
 
+  const gpl = gamePlanLines(c.gamePlan);
+  if (gpl.length) { lines.push(''); gpl.forEach((l) => lines.push(l)); }
+
   return lines.join('\n');
 }
 
@@ -401,6 +422,8 @@ THE CLOCK DECIDES WHAT "TODAY" MEANS. Read CLOCK and ADVICE IS FOR first.
 - Once games are under way or over, today is done for pickups. The job is the PLAN DAY: set that lineup and make the adds now, because free agents are first come, first served and other managers will take them overnight. "Sit tight" is wrong whenever an open slot, a sitting player or a category in play can be helped on the plan day.
 - While today's games are still IN PROGRESS, tonight's results are not final. Say which moves are safe to make now (an open slot on the plan day, a must-have free agent who could be taken) and which should wait until tonight's games end because the score could change the need. Say what result would change the call.
 - When ADVICE IS FOR the next matchup, plan the first day of the next matchup against the next opponent, with a full set of pickups.
+
+THE GAME PLAN. When GAME PLAN THIS WEEK is present, today's move is the next step of that plan: make the pickup it planned for this day if it still makes sense. If you depart from it, say why in one sentence. Always follow OWNER'S CALLS.
 
 HARD RULES, in priority order. These are not suggestions.
 1. NEVER recommend adding a player whose status is OUT, SUSPENSION or INJURY_RESERVE.

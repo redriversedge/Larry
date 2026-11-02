@@ -410,6 +410,8 @@ function buildLarryMovePayload() {
     },
     timing: larryMoveTiming(),
     plan: larryMovePlan(),
+    // The week's Game Plan (Matchup tab), so today's move is its next step.
+    gamePlan: (typeof GamePlan !== 'undefined') ? GamePlan.summary() : null,
     myRoster: myPlayers.map(function(p) { return larryMovePlayer(p, false); }),
     // Capped to keep the prompt near 6k tokens.
     freeAgents: freeAgents.slice(0, 15).map(function(p) { return larryMovePlayer(p, true); }),

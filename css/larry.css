@@ -1422,3 +1422,67 @@ body {
 /* --- TRADE FINDER --- */
 .trade-offer { margin: 0 12px 8px; padding: 10px; background: var(--bg-input); border-radius: 8px; }
 .trade-offer-verdict { font-weight: 800; font-size: 0.85rem; }
+
+/* ===== Game Plan (Matchup tab) and Targets (Players tab) ===== */
+.game-plan { display: flex; flex-direction: column; gap: 12px; padding-bottom: 16px; }
+.gp-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.gp-title { font-size: 1.15rem; font-weight: 800; }
+.gp-sub { font-size: 0.8rem; color: #a0a0bf; margin-top: 2px; }
+.gp-btn { min-height: 44px; padding: 0 14px; border-radius: 10px; border: 1px solid #2a3a66; background: #12122a; color: #a9c9ff; font-weight: 700; font-size: 0.85rem; }
+.gp-btn:disabled { opacity: 0.6; }
+.gp-card { background: #12122a; border: 1px solid #23234a; border-radius: 14px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+.gp-center { align-items: center; text-align: center; }
+.gp-kicker { font-size: 0.72rem; color: #8a8aa8; text-transform: uppercase; letter-spacing: 0.04em; }
+.gp-headline { font-size: 1rem; font-weight: 700; line-height: 1.4; }
+.gp-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.gp-intent { display: inline-flex; align-items: center; gap: 6px; padding: 4px 4px 4px 10px; border-radius: 14px; background: #2a1d10; color: #f5b14b; font-size: 0.78rem; font-weight: 600; }
+.gp-intent button { background: transparent; border: none; color: #f5b14b; min-width: 32px; min-height: 32px; font-size: 0.75rem; }
+.gp-add-intent { min-height: 36px; padding: 0 12px; border-radius: 14px; border: 1px dashed #3b4a7a; background: transparent; color: #a9c9ff; font-size: 0.78rem; }
+.gp-intent-form { display: flex; flex-direction: column; gap: 8px; }
+.gp-since { border-color: #3a2f15; }
+.gp-since-row { display: flex; gap: 10px; font-size: 0.85rem; line-height: 1.4; }
+.gp-since-row span:first-child { min-width: 62px; font-weight: 800; font-size: 0.75rem; padding-top: 2px; }
+.gp-row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.gp-h { font-size: 0.95rem; font-weight: 700; }
+.gp-edge { font-weight: 800; font-size: 0.9rem; }
+.gp-two { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.gp-stat { background: #0f0f24; border-radius: 10px; padding: 10px; }
+.gp-num { font-size: 1.5rem; font-weight: 800; }
+.gp-lbl { font-size: 0.72rem; color: #a0a0bf; }
+.gp-strip { display: grid; gap: 4px; font-size: 0.75rem; text-align: center; align-items: center; }
+.gp-strip > div { padding: 4px 0; border-radius: 6px; }
+.gp-rowlbl { text-align: left !important; color: #a0a0bf; }
+.gp-today { background: #1d2b4a; color: #a9c9ff; font-weight: 800; }
+.gp-past { color: #55557a; }
+.gp-dim { color: #a0a0bf; }
+.gp-win { color: #22c55e; font-weight: 800; }
+.gp-lose { color: #ef4444; font-weight: 800; }
+.gp-add { color: #7fb0ff; font-weight: 800; }
+.gp-note { font-size: 0.85rem; line-height: 1.45; color: #cfcfe6; }
+.gp-collapse { display: flex; justify-content: space-between; align-items: center; background: transparent; border: none; color: #e8e8f4; padding: 0; min-height: 40px; text-align: left; width: 100%; }
+.gp-catrow { display: grid; grid-template-columns: 40px 1fr 40px minmax(0, 1.2fr); gap: 8px; align-items: center; font-size: 0.8rem; }
+.gp-bar { height: 8px; background: #23234a; border-radius: 4px; overflow: hidden; }
+.gp-bar > div { height: 100%; border-radius: 4px; }
+.gp-step { display: flex; gap: 10px; align-items: flex-start; background: #0f0f24; border-radius: 10px; padding: 10px; font-size: 0.85rem; line-height: 1.4; }
+.gp-step-done { opacity: 0.6; }
+.gp-step-next { border: 1px solid #f59e0b; }
+.gp-when { min-width: 54px; max-width: 70px; font-size: 0.75rem; font-weight: 800; }
+.gp-step-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.gp-day { font-size: 0.85rem; line-height: 1.45; }
+.gp-ask { min-height: 48px; border-radius: 12px; border: 1px solid #3b82f6; background: #13203d; color: #a9c9ff; font-weight: 700; font-size: 0.9rem; }
+.gp-foot { font-size: 0.75rem; color: #8a8aa8; line-height: 1.4; }
+.gp-need { display: flex; gap: 6px; flex-wrap: wrap; font-size: 0.78rem; align-items: center; margin-bottom: 8px; }
+.gp-needchip { padding: 3px 9px; border-radius: 10px; background: #1a1a33; font-weight: 700; }
+.gp-target { background: #0f0f24; border: 1px solid #23234a; border-radius: 12px; padding: 4px 12px; margin-bottom: 8px; display: flex; flex-direction: column; gap: 8px; }
+.gp-target-open { border-color: #2a3a66; padding-bottom: 12px; }
+.gp-target-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; background: transparent; border: none; color: #e8e8f4; padding: 6px 0; min-height: 52px; text-align: left; width: 100%; }
+.gp-target-name { font-size: 0.95rem; font-weight: 700; }
+.gp-target-meta { font-size: 0.7rem; color: #a0a0bf; font-weight: 400; }
+.gp-target-sub { font-size: 0.75rem; color: #a0a0bf; }
+.gp-target-stats { font-size: 0.78rem; color: #a0a0bf; }
+.gp-days { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; font-size: 0.7rem; }
+.gp-daychip { padding: 2px 7px; border-radius: 6px; background: #1d2b4a; color: #cfcfe6; }
+.gp-lostday { text-decoration: line-through; color: #6a6a8a; background: #1a1a2e; }
+.gp-fit { align-self: flex-start; font-size: 0.7rem; padding: 3px 8px; border-radius: 8px; background: #1d2b4a; color: #a9c9ff; font-weight: 700; }
+.gp-target-actions { display: flex; gap: 8px; }
+.gp-target-actions > * { flex: 1; min-height: 44px; display: flex; align-items: center; justify-content: center; text-decoration: none; }

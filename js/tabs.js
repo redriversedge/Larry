@@ -29,7 +29,7 @@ var _dayStatsPeriodId = null;  // scoringPeriodId currently loaded in _dayStats
 var _dayNavOffset = 0;         // offset from currentScoringPeriodId (0 = today, -1 = yesterday, etc.)
 
 // --- MATCHUP STATE ---
-var _matchupSubTab = 'score';
+var _matchupSubTab = 'plan';
 
 // --- TRADE STATE ---
 var _tradeSearchTerm = '';
@@ -459,13 +459,16 @@ function renderMatchup(container) {
 
   // Sub-tabs
   html += '<div class="sub-tab-bar">';
-  ['score','projections'].forEach(function(st) {
-    var labels = {score:'Score',projections:'Projections'};
+  ['plan','score','projections'].forEach(function(st) {
+    var labels = {plan:'Game Plan',score:'Score',projections:'Projections'};
     html += '<button class="sub-tab' + (_matchupSubTab === st ? ' active' : '') + '" onclick="_matchupSubTab=\'' + st + '\';render()">' + labels[st] + '</button>';
   });
   html += '</div>';
 
-  if (_matchupSubTab === 'score') {
+  if (_matchupSubTab === 'plan') {
+    try { html += GamePlan.render(); }
+    catch (e) { html += '<div class="card">Game Plan error: ' + esc(e.message) + '</div>'; }
+  } else if (_matchupSubTab === 'score') {
     html += renderMatchupScore(cats);
   } else if (_matchupSubTab === 'projections') {
     html += renderMatchupProjections(cats);
@@ -870,6 +873,12 @@ function renderPlayers(container) {
   var html = '';
 
   html += renderPlayersModeToggle();
+  if (_playersMode === 'targets') {
+    try { html += GamePlan.renderTargetsPage(); }
+    catch (e) { html += '<div class="card">Targets error: ' + esc(e.message) + '</div>'; }
+    container.innerHTML = html;
+    return;
+  }
   if (_playersMode === 'watch') {
     try { html += renderWatchlistPage(); }
     catch (e) { html += '<div class="card">Watchlist error: ' + esc(e.message) + '</div>'; }
@@ -1539,7 +1548,7 @@ function ackWatchStatus(playerId) {
 // Players tab: Players / Watchlist toggle.
 var _playersMode = 'all';
 function setPlayersMode(mode) {
-  _playersMode = mode === 'watch' ? 'watch' : 'all';
+  _playersMode = (mode === 'watch' || mode === 'targets') ? mode : 'all';
   render();
 }
 function renderPlayersModeToggle() {
@@ -1548,6 +1557,8 @@ function renderPlayersModeToggle() {
   return '<div class="filter-chips players-mode">' +
     '<button class="chip' + (_playersMode === 'all' ? ' active' : '') +
     '" onclick="setPlayersMode(\'all\')">Players</button>' +
+    '<button class="chip' + (_playersMode === 'targets' ? ' active' : '') +
+    '" onclick="setPlayersMode(\'targets\')">Targets</button>' +
     '<button class="chip' + (_playersMode === 'watch' ? ' active' : '') +
     '" onclick="setPlayersMode(\'watch\')">\u2B50 Watchlist' + (n ? ' (' + n + ')' : '') +
     (alerts ? ' <span class="watch-dot">' + alerts + '</span>' : '') + '</button></div>';
