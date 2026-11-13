@@ -1,0 +1,62 @@
+name: CI
+
+# Runs on every pull request and every push to main or dev. Branch
+# protection on main requires the "checks" job to pass before a merge.
+on:
+  pull_request:
+  push:
+    branches: [main, dev]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      # Legacy js/ ships to the browser with no build step, so a syntax
+      # error here is a blank app. Functions are checked the same way.
+      - name: Syntax check (legacy JS and functions)
+        run: |
+          for f in js/*.js netlify/functions/*.js netlify/functions/*.mjs netlify/shared/*.mjs; do
+            node --check "$f"
+          done
+
+      - name: ASCII only in js/ and netlify/
+        run: |
+          if grep -rnP '[\x80-\xFF]' js/ netlify/; then
+            echo "::error::Non-ASCII characters found above. Use escape sequences instead."
+            exit 1
+          fi
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Tests
+        run: npm test
+
+      # dist/ is committed so Netlify can publish without a build step. This
+      # fails if someone changed src/ and forgot to rebuild. Source maps are
+      # left out: they embed the builder's line endings.
+      - name: Committed bundles match source
+        run: |
+          npm run build
+          git diff --exit-code -- dist/larry-engine.js dist/larry-cookies.js || {
+            echo "::error::dist/ is stale. Run npm run build and commit the result."
+            exit 1
+          }
