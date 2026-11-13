@@ -139,3 +139,29 @@ export function normalizeAppToolTurns(turns, maxRounds, allowedNames) {
   return out;
 }
 
+// Caps the total size of the app's answers across every tool round of one
+// question, trimming the OLDEST rounds first so the newest lookup (the one
+// Larry is about to read) stays whole for as long as possible. Every round's
+// assistant blocks are left alone: thinking blocks carry signatures and must
+// go back exactly as they came. This is what keeps a five-lookup question
+// from sending Claude hundreds of KB of tool output, which used to be the
+// single biggest cost per request.
+export function trimToolResults(turns, budgetChars) {
+  if (!Array.isArray(turns) || !turns.length) return turns;
+  let total = 0;
+  for (const t of turns) for (const r of t.results) total += r.content.length;
+  if (total <= budgetChars) return turns;
+  let over = total - budgetChars;
+  const note = '...(trimmed to fit)';
+  for (const t of turns) {
+    for (const r of t.results) {
+      if (over <= 0) return turns;
+      const keep = Math.max(0, r.content.length - over);
+      if (keep >= r.content.length) continue;
+      over -= r.content.length - keep;
+      r.content = keep > 200 ? r.content.slice(0, keep) + note : '{"note":"Earlier lookup dropped to fit the request."}';
+    }
+  }
+  return turns;
+}
+

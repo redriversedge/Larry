@@ -46,7 +46,8 @@
 // lines of a 30-second probe unbuffered, first byte at ~350ms. The 10-second
 // kill applies to buffered responses only.
 
-import { CHAT_TOOLS, TOOL_NAMES, normalizeAppToolTurns } from '../shared/app-tools.mjs';
+import { CHAT_TOOLS, TOOL_NAMES, normalizeAppToolTurns, trimToolResults } from '../shared/app-tools.mjs';
+import { checkDailyCap, DAILY_CAP_MESSAGE } from '../shared/daily-cap.mjs';
 
 const MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-5';
 
@@ -79,8 +80,16 @@ const FIRST_EVENT_TIMEOUT_MS = 20000;
 const MAX_MESSAGES = 20;
 const MAX_CONTENT_CHARS = 4000;
 // Larger than a plain question needs: a tool round carries the earlier
-// rounds' tool calls and the app's answers to them.
-const MAX_BODY_BYTES = 320 * 1024;
+// rounds' tool calls and the app's answers to them. Nov 2026: down from
+// 320 KB. What actually reaches Claude is bounded further by
+// TOOL_RESULTS_BUDGET_CHARS below.
+const MAX_BODY_BYTES = 160 * 1024;
+// Total characters of the app's answers, across every tool round of one
+// question, that go to Claude. Each answer is already capped at
+// MAX_TOOL_RESULT_CHARS; five rounds of several lookups each could still add
+// up to well over 300 KB, all of it billed as input on every later round.
+// Oldest rounds are trimmed first (trimToolResults in app-tools.mjs).
+const TOOL_RESULTS_BUDGET_CHARS = 64 * 1024;
 const MAX_FIELD_CHARS = 60;
 const MAX_LIST_ITEMS = 25;
 
@@ -179,6 +188,10 @@ const ALLOWED_ORIGINS = [
 // Per-IP token bucket. In-memory, so it only covers the lifetime of a warm
 // container; it is a speed bump against a loop, not a security boundary.
 // Netlify Blobs would make it durable if that ever matters.
+// Netlify deploy previews (deploy-preview-12--larrybball.netlify.app) and
+// branch deploys, so a pull request can be tried on a phone before merge.
+const PREVIEW_ORIGIN = /^https:\/\/[a-z0-9-]+--larrybball\.netlify\.app$/;
+
 const RATE_LIMIT_MAX = 20;
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const rateBuckets = new Map();
@@ -201,7 +214,7 @@ function rateLimited(ip) {
 }
 
 function corsHeaders(origin) {
-  const allowed = ALLOWED_ORIGINS.indexOf(origin) >= 0;
+  const allowed = ALLOWED_ORIGINS.indexOf(origin) >= 0 || PREVIEW_ORIGIN.test(origin);
   const headers = {
     'Content-Type': 'application/json',
     'Vary': 'Origin',
@@ -545,7 +558,7 @@ export default async (req, context) => {
   if (!messages.length) {
     return json(400, { error: 'No usable messages' });
   }
-  const toolTurns = normalizeToolTurns(body.toolTurns);
+  const toolTurns = trimToolResults(normalizeToolTurns(body.toolTurns), TOOL_RESULTS_BUDGET_CHARS);
   if (toolTurns === null) {
     return json(400, { error: 'Unusable tool turns' });
   }
@@ -562,6 +575,13 @@ export default async (req, context) => {
     return json(500, {
       error: 'ANTHROPIC_API_KEY not configured. Add it in Netlify site settings > Environment variables.',
     });
+  }
+
+  // Counted only once the request is valid and about to be billed.
+  const daily = await checkDailyCap('larry-chat', ip);
+  if (daily.limited) {
+    return new Response(JSON.stringify({ error: DAILY_CAP_MESSAGE }),
+      { status: 429, headers: Object.assign({ 'Retry-After': '3600' }, headers) });
   }
 
   // body.system is deliberately ignored.

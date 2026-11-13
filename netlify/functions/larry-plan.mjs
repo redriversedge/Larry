@@ -19,6 +19,8 @@
 //   {"done":true}
 //   {"error":"..."}
 
+import { checkDailyCap, DAILY_CAP_MESSAGE } from '../shared/daily-cap.mjs';
+
 const MODEL = process.env.ANTHROPIC_PLAN_MODEL || process.env.ANTHROPIC_MODEL || 'claude-sonnet-5';
 const MAX_TOKENS = Number(process.env.ANTHROPIC_PLAN_MAX_TOKENS) || 2200;
 const STREAM_CAP_MS = Number(process.env.ANTHROPIC_STREAM_CAP_MS) || 25000;
@@ -42,6 +44,10 @@ const ALLOWED_ORIGINS = [
   'http://127.0.0.1:5000',
 ];
 
+// Netlify deploy previews (deploy-preview-12--larrybball.netlify.app) and
+// branch deploys, so a pull request can be tried on a phone before merge.
+const PREVIEW_ORIGIN = /^https:\/\/[a-z0-9-]+--larrybball\.netlify\.app$/;
+
 const RATE_LIMIT_MAX = 6;
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const rateBuckets = new Map();
@@ -61,7 +67,7 @@ function rateLimited(ip) {
 }
 
 function corsHeaders(origin) {
-  const allowed = ALLOWED_ORIGINS.indexOf(origin) >= 0;
+  const allowed = ALLOWED_ORIGINS.indexOf(origin) >= 0 || PREVIEW_ORIGIN.test(origin);
   const headers = {
     'Content-Type': 'application/json',
     'Vary': 'Origin',
@@ -386,6 +392,9 @@ export default async (req, context) => {
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return json(500, { error: 'ANTHROPIC_API_KEY not configured.' });
+
+  const daily = await checkDailyCap('larry-plan', ip);
+  if (daily.limited) return json(429, { error: DAILY_CAP_MESSAGE }, { 'Retry-After': '3600' });
 
   const payloadFor = (model) => JSON.stringify({
     model: model,
