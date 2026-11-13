@@ -40,6 +40,7 @@ const MODEL = process.env.ANTHROPIC_MOVE_MODEL || process.env.ANTHROPIC_MODEL ||
 // disabled, so all of this goes to the answer; 1800 still finishes well
 // inside the 25s cap at the measured rate.
 import { CHAT_TOOLS, normalizeAppToolTurns } from '../shared/app-tools.mjs';
+import { checkDailyCap, DAILY_CAP_MESSAGE } from '../shared/daily-cap.mjs';
 
 // Larry's Move can ask the app for more than the payload holds, the same way
 // chat does (netlify/shared/app-tools.mjs, run by js/chat-tools.js in the
@@ -73,6 +74,10 @@ const ALLOWED_ORIGINS = [
   'http://127.0.0.1:3000',
   'http://127.0.0.1:5000',
 ];
+
+// Netlify deploy previews (deploy-preview-12--larrybball.netlify.app) and
+// branch deploys, so a pull request can be tried on a phone before merge.
+const PREVIEW_ORIGIN = /^https:\/\/[a-z0-9-]+--larrybball\.netlify\.app$/;
 
 const RATE_LIMIT_MAX = 10;
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
@@ -122,7 +127,7 @@ function cacheSet(hash, result) {
 }
 
 function corsHeaders(origin) {
-  const allowed = ALLOWED_ORIGINS.indexOf(origin) >= 0;
+  const allowed = ALLOWED_ORIGINS.indexOf(origin) >= 0 || PREVIEW_ORIGIN.test(origin);
   const headers = {
     'Content-Type': 'application/json',
     'Vary': 'Origin',
@@ -874,6 +879,10 @@ export default async (req, context) => {
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return json(500, { error: 'ANTHROPIC_API_KEY not configured.' });
+
+  // After the cache: a cached Move costs nothing and does not count.
+  const daily = await checkDailyCap('larry-move', ip);
+  if (daily.limited) return json(429, { error: DAILY_CAP_MESSAGE }, { 'Retry-After': '3600' });
 
   const payloadFor = (model) => JSON.stringify({
     model: model,
