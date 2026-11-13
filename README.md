@@ -6,4 +6,4 @@ Larry: Fantasy Basketball Command Center.
 
 Deployed at <https://larrybball.netlify.app> via GitHub auto-deploy from `main`.
 
-See [`CLAUDE.md`](./CLAUDE.md) for project conventions and [`LARRY_PLAN.md`](./LARRY_PLAN.md) for the active improvement roadmap.
+See [`CLAUDE.md`](./CLAUDE.md) for project conventions, and `docs/` for the detail behind them. Every change goes through a pull request into `main`; CI must pass before it merges.
